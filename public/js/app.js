@@ -4,7 +4,7 @@ import { addDays, currencies, fmtDest, fmtHome, fmtRate, parseAmount, toHome, to
 import { CURRENCIES, DEFAULT_SETTINGS } from './currencies.mjs';
 import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, detectNetwork, isHexColor, suggestColor } from './cards.mjs';
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
-import { formatCoords, hasLocation, placesFrom } from './places.mjs';
+import { formatCoords, hasLocation, routeFrom } from './places.mjs';
 import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 
@@ -188,6 +188,7 @@ function viewHome() {
   const totalBrl = c.expenses.reduce((a, e) => a + e.amount_cents, 0);
   const rate = store.localRate(todayStr());
   const waiting = c.expenses.filter((e) => e.amount_home == null).length;
+  const placed = c.expenses.filter(hasLocation).length;
   const unsent = store.pendingCount();
   return `
     ${unsent ? `<div class="banner">${unsent} gasto(s) sin enviar. Se envían solos cuando haya internet.</div>` : ''}
@@ -196,6 +197,7 @@ function viewHome() {
       <div class="big">${fmtHome(totalCop)}</div>
       <div class="sub">${fmtDest(totalBrl)} · ${c.expenses.length} gasto(s)</div>
       <div class="sub">${rate ? `Hoy: ${fmtRate(rate.rate)}${rate.estimated ? ' (última conocida)' : ''}` : 'Tasa de hoy: sin datos todavía'}</div>
+      <a class="hero-link" href="#/mapa">🗺 Ver mapa${placed ? ` · ${placed} con ubicación` : ''}</a>
     </div>
     <div class="card"><h2>Saldo por persona</h2>
       ${s.balances.map((b) => `<div class="pay row"><span><b>${esc(personName(c, b.person_id))}</b><div class="muted">Le tocan ${fmtHome(b.consumed)}</div></span>
@@ -233,7 +235,8 @@ function viewList() {
         ${c.people.map((p) => `<option value="${esc(p.id)}" ${filters.person === p.id ? 'selected' : ''}>${esc(personName(c, p.id))}</option>`).join('')}</select>
       ${approxCount ? `<button type="button" class="chip ${filters.approx ? 'on' : ''}" data-action="f-approx" aria-pressed="${filters.approx}">Aproximados (${approxCount})</button>` : ''}
     </div>
-    <div class="muted" style="margin:0 4px 4px">${list.length} gasto(s) · ${fmtHome(total)}</div>
+    <div class="row" style="margin:0 4px 4px"><span class="muted">${list.length} gasto(s) · ${fmtHome(total)}</span>
+      <a class="map-link" href="#/mapa">🗺 Ver mapa</a></div>
     ${days.length ? days.map((d) => `<div class="day">${esc(dayLabel(d.date))}</div>
       <div class="card" style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e)).join('')}</div>`).join('')
       : '<div class="empty">No hay gastos con ese filtro.</div>'}`;
@@ -703,17 +706,19 @@ function viewMap() {
   const n = c.expenses.filter(hasLocation).length;
   if (!n) {
     return `<div class="card"><h2>Mapa de lugares</h2>
-      <div class="empty">Aún no hay gastos con ubicación. Al agregar un gasto, toca “Guardar ubicación”.</div>
-      <a class="btn secondary" href="#/ajustes">Volver</a></div>`;
+      <div class="empty">Aún no hay gastos con ubicación. Al agregar o editar un gasto, usa “Usar mi ubicación” o “Buscar o elegir en el mapa”.</div>
+      <a class="btn secondary" href="#/gastos">Ir a Gastos</a></div>`;
   }
-  return `<div class="muted" style="margin:0 4px 6px">${n} gasto(s) con ubicación en ${esc(c.trip.name)}</div>
+  return `<div class="muted" style="margin:0 4px 6px">${n} gasto(s) con ubicación en ${esc(c.trip.name)} · el número es el orden en que llegaste a cada lugar</div>
     <div id="map" class="map" role="region" aria-label="Mapa de lugares"><div class="empty">Cargando mapa…</div></div>
-    <a class="btn secondary" href="#/ajustes">Volver a Ajustes</a>`;
+    <a class="btn secondary" href="#/">Volver</a>`;
 }
 
 async function initMap() {
   const el = document.getElementById('map');
   if (!el) return;
+  // Si el mapa ya estaba abierto y se redibuja por datos nuevos, conserva el zoom y el lugar donde estabas.
+  const prev = leafletMap ? { center: leafletMap.getCenter(), zoom: leafletMap.getZoom() } : null;
   leafletMap?.remove();
   leafletMap = null;
   let L;
@@ -724,24 +729,35 @@ async function initMap() {
   if (document.getElementById('map') !== el) return; // se cambió de pantalla mientras cargaba
   const c = ctx();
   const byId = Object.fromEntries(c.expenses.map((e) => [e.id, e]));
-  const places = placesFrom(c.expenses);
+  const { places, path } = routeFrom(c.expenses);
   el.innerHTML = '';
   const map = L.map(el);
   leafletMap = map;
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
-  const pts = places.map((p) => {
+  // El recorrido (línea punteada) va debajo; encima, cada parada numerada por orden de primera visita.
+  if (path.length > 1) L.polyline(path, { weight: 3, opacity: 0.6, dashArray: '6 8', interactive: false }).addTo(map);
+  for (const p of places) {
     const lines = p.ids.slice(0, 5).map((id) => esc(byId[id]?.description || 'Gasto'));
     const more = p.ids.length > 5 ? `<br>y ${p.ids.length - 5} más` : '';
-    const html = `<b>${esc(p.place || formatCoords(p.lat, p.lng))}</b><br>${esc(dayLabel(byId[p.ids[0]].date))}${p.count > 1 ? ` y otros` : ''}<br>
+    const when = p.first_date === p.last_date ? dayLabel(p.first_date) : `${dayLabel(p.first_date)} a ${dayLabel(p.last_date)}`;
+    const html = `<b>Parada ${p.n}: ${esc(p.place || formatCoords(p.lat, p.lng))}</b><br>${esc(when)}<br>
       ${lines.join('<br>')}${more}<br><b>${fmtHome(p.total_home)}</b> · ${fmtDest(p.total_dest)}`;
-    L.circleMarker([p.lat, p.lng], { radius: 6 + Math.min(p.count, 6), weight: 2, fillOpacity: 0.7 }).addTo(map).bindPopup(html);
-    return [p.lat, p.lng];
-  });
-  if (pts.length === 1) map.setView(pts[0], 15);
+    const icon = L.divIcon({ className: 'stop', html: `<span>${p.n}</span>`, iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -15] });
+    L.marker([p.lat, p.lng], { icon, title: `Parada ${p.n}`, alt: `Parada ${p.n}` }).addTo(map).bindPopup(html);
+  }
+  const pts = places.map((p) => [p.lat, p.lng]);
+  if (prev) map.setView(prev.center, prev.zoom);
+  else if (pts.length === 1) map.setView(pts[0], 15);
   else map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
+  lastMapSig = mapSig();
 }
+
+// La app se sincroniza sola cada 30 s y al volver a ella. Para que el mapa no se reinicie (zoom, popup abierto)
+// con cada sincronización, solo se redibuja si cambió algo de lo que muestra.
+let lastMapSig = '';
+const mapSig = () => JSON.stringify(routeFrom(ctx().expenses));
 
 // --- elegir el lugar en el mapa o buscándolo por nombre (para gastos de antes, o si ya no estás ahí) ---
 
@@ -936,6 +952,7 @@ function render() {
   const trip = store.activeTrip();
   $tripBtn.textContent = `✈ ${trip.name} · ${trip.dest}→${trip.home} ▾`;
   const { r, m } = currentRoute();
+  if (r.map && leafletMap && document.querySelector('#map.leaflet-container') && mapSig() === lastMapSig) return;
   if (!isFormRoute()) draft = null;
   if (r.tab !== 'ajustes') { methodOpen = false; tripOpen = false; personOpen = false; }
   $title.textContent = r.title;

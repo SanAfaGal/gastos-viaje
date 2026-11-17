@@ -37,3 +37,30 @@ test('placesFrom: gasto sin tasa suma 0 al total en moneda de casa', () => {
 test('formatCoords: 5 decimales', () => {
   assert.equal(formatCoords(4.609712, -74.081749), '4.60971, -74.08175');
 });
+
+test('routeFrom: paradas numeradas por primera visita y recorrido en orden de fecha', async () => {
+  const { routeFrom } = await import('../public/js/places.mjs');
+  const A = { lat: 4.6097, lng: -74.0817 };
+  const B = { lat: 6.2442, lng: -75.5812 };
+  const list = [
+    // desordenados a propósito
+    { id: '3', date: '2026-11-12', created_at: '1', ...A, amount_cents: 30, amount_home: 300 },
+    { id: '1', date: '2026-11-10', created_at: '1', ...A, amount_cents: 10, amount_home: 100, place: 'Hotel' },
+    { id: '2', date: '2026-11-10', created_at: '2', ...A, amount_cents: 20, amount_home: 200 },
+    { id: '4', date: '2026-11-11', created_at: '1', ...B, amount_cents: 40, amount_home: 400 },
+    { id: '5', date: '2026-11-11', created_at: '2', lat: null, lng: null, amount_cents: 1, amount_home: 1 },
+  ];
+  const { places, path } = routeFrom(list);
+  assert.deepEqual(places.map((p) => [p.n, p.count, p.first_date, p.last_date]), [[1, 3, '2026-11-10', '2026-11-12'], [2, 1, '2026-11-11', '2026-11-11']]);
+  assert.equal(places[0].place, 'Hotel');
+  assert.deepEqual(places[0].ids, ['1', '2', '3']);
+  // A (dos gastos seguidos = un punto), B, y la vuelta a A
+  assert.equal(path.length, 3);
+  assert.ok(Math.abs(path[0][0] - path[2][0]) < 1e-9);
+  assert.ok(Math.abs(path[1][0] - 6.2442) < 1e-9);
+});
+
+test('routeFrom: sin ubicaciones no hay paradas ni recorrido', async () => {
+  const { routeFrom } = await import('../public/js/places.mjs');
+  assert.deepEqual(routeFrom([{ id: 'x', date: '2026-11-10' }]), { places: [], path: [] });
+});

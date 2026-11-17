@@ -7,33 +7,47 @@ export function hasLocation(e) {
     && Math.abs(e.lat) <= 90 && Math.abs(e.lng) <= 180;
 }
 
-// Agrupa los gastos con ubicación que están muy cerca (con 3 decimales, unos 100 m) en un solo lugar.
-// Devuelve [{ lat, lng, place, count, total_home, total_dest, ids }] con el punto promedio del grupo.
-export function placesFrom(expenses, decimals = 3) {
+const keyOf = (e, decimals) => `${Number(e.lat).toFixed(decimals)},${Number(e.lng).toFixed(decimals)}`;
+
+// Gastos con ubicación, del más antiguo al más reciente (a igual día, por hora de creación).
+function byTime(expenses) {
+  return expenses.filter(hasLocation)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+}
+
+// Agrupa los gastos que están muy cerca (con 3 decimales, unos 100 m) en un solo lugar y recorre el viaje en orden:
+//   places: paradas numeradas por su primera visita [{ n, lat, lng, place, count, total_home, total_dest, ids, first_date, last_date }]
+//   path:   puntos [lat, lng] del recorrido; una vuelta a un lugar ya visitado cuenta, dos gastos seguidos en el mismo no.
+export function routeFrom(expenses, decimals = 3) {
   const groups = new Map();
-  for (const e of expenses) {
-    if (!hasLocation(e)) continue;
-    const key = `${Number(e.lat).toFixed(decimals)},${Number(e.lng).toFixed(decimals)}`;
+  const seq = [];
+  for (const e of byTime(expenses)) {
+    const key = keyOf(e, decimals);
     let g = groups.get(key);
-    if (!g) groups.set(key, (g = { sumLat: 0, sumLng: 0, place: '', count: 0, total_home: 0, total_dest: 0, ids: [] }));
+    if (!g) {
+      g = { n: groups.size + 1, sumLat: 0, sumLng: 0, place: '', count: 0, total_home: 0, total_dest: 0, ids: [], first_date: e.date, last_date: e.date };
+      groups.set(key, g);
+    }
     g.sumLat += Number(e.lat);
     g.sumLng += Number(e.lng);
     g.count += 1;
     g.total_home += e.amount_home ?? 0;
     g.total_dest += e.amount_cents ?? 0;
     g.ids.push(e.id);
+    g.last_date = e.date;
     if (!g.place && e.place) g.place = e.place;
+    if (seq.at(-1) !== g) seq.push(g);
   }
-  return [...groups.values()].map((g) => ({
-    lat: g.sumLat / g.count,
-    lng: g.sumLng / g.count,
-    place: g.place,
-    count: g.count,
-    total_home: g.total_home,
-    total_dest: g.total_dest,
-    ids: g.ids,
-  }));
+  const point = (g) => [g.sumLat / g.count, g.sumLng / g.count];
+  const places = [...groups.values()].map((g) => {
+    const [lat, lng] = point(g);
+    return { n: g.n, lat, lng, place: g.place, count: g.count, total_home: g.total_home, total_dest: g.total_dest, ids: g.ids, first_date: g.first_date, last_date: g.last_date };
+  });
+  return { places, path: seq.map(point) };
 }
+
+// Solo los lugares (sin el recorrido).
+export const placesFrom = (expenses, decimals = 3) => routeFrom(expenses, decimals).places;
 
 // "4.60971, -74.08175" (5 decimales bastan: ~1 m).
 export function formatCoords(lat, lng) {

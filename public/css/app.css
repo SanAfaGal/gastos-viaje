@@ -175,6 +175,10 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .loc-set { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .map { height: calc(100dvh - 240px); min-height: 320px; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 4px; }
 .map .empty { padding: 24px; }
+.stop { background: none; border: 0; }
+.stop span { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); border: 2px solid #fff; box-shadow: 0 1px 4px rgb(0 0 0 / .45); font: 700 .85rem/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
+.hero-link { display: inline-block; margin-top: 10px; padding: 7px 12px; border-radius: 99px; background: rgb(255 255 255 / .2); color: inherit; font-size: .9rem; font-weight: 600; text-decoration: none; }
+.map-link { font-size: .9rem; font-weight: 600; color: var(--brand); text-decoration: none; white-space: nowrap; }
 .map.pick { height: 48dvh; min-height: 260px; }
 .pick-search { display: flex; gap: 8px; margin: 4px 0 8px; }
 .pick-search input { flex: 1; min-width: 0; padding: 10px 12px; }
