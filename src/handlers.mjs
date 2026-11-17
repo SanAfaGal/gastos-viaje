@@ -1,0 +1,326 @@
+// API sin dependencias de servidor: recibe una petición simple y devuelve { status, body }.
+// La usan server.mjs (local) y netlify/functions/api.mjs (en línea).
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { isValidDate, toHome, todayStr } from '../public/js/money.mjs';
+import { currencyByCode, DEFAULT_SETTINGS } from '../public/js/currencies.mjs';
+import { rateHistory, resolveRate } from './rates.mjs';
+
+class HttpError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+const fail = (status, message) => {
+  throw new HttpError(status, message);
+};
+
+const sha = (s) => createHash('sha256').update(String(s)).digest();
+
+// Topes para que un dato absurdo no desborde los cálculos (cents * rate debe quedar bajo 2^53).
+const MAX_CENTS = 5e9;
+const MAX_RATE = 1e6;
+const MAX_FAILS = 10;
+const MAX_GLOBAL = 300;
+const LOCK_MS = 15 * 60 * 1000;
+
+export function isAuthorized(passcode) {
+  const expected = process.env.APP_PASSCODE;
+  if (!expected) return true;
+  return timingSafeEqual(sha(passcode ?? ''), sha(expected));
+}
+
+// Agrupa las IPv6 por su prefijo /64 (un atacante suele controlar una red completa) y deja las IPv4 igual.
+function ipKey(ip) {
+  if (!ip) return 'desconocida';
+  let v = String(ip).toLowerCase();
+  const mapped = v.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mapped) return mapped[1];
+  if (!v.includes(':')) return v;
+  const [head, tail = ''] = v.split('::');
+  const h = head ? head.split(':') : [];
+  const t = tail ? tail.split(':') : [];
+  const groups = v.includes('::') ? [...h, ...Array(Math.max(0, 8 - h.length - t.length)).fill('0'), ...t] : h;
+  return `${groups.slice(0, 4).map((g) => g || '0').join(':')}::/64`;
+}
+
+// Suma un intento de forma atómica (una sola sentencia, sin leer y luego escribir) y devuelve el total
+// dentro de la ventana de bloqueo. Si la ventana venció, empieza de cero.
+async function countAttempt(db, key, now) {
+  const rows = await db.all(
+    `INSERT INTO auth_failures (ip, fails, since) VALUES (?, 1, ?)
+     ON CONFLICT(ip) DO UPDATE SET
+       fails = CASE WHEN ? - since >= ? THEN 1 ELSE fails + 1 END,
+       since = CASE WHEN ? - since >= ? THEN ? ELSE since END
+     RETURNING fails`,
+    [key, now, now, LOCK_MS, now, LOCK_MS, now],
+  );
+  return Number(rows[0].fails);
+}
+
+// Verifica el código con límite de intentos: por red (10 cada 15 min) y global (300 cada 15 min).
+// Cada intento con código se cuenta ANTES de compararlo, así que aunque lleguen en paralelo solo
+// se evalúan los primeros. Entrar sin código (primera visita) no cuenta.
+// Compromiso: el límite global también permite que alguien bloquee a propósito por 15 minutos.
+async function checkAuth(db, passcode, ip) {
+  if (!process.env.APP_PASSCODE) return;
+  if (!passcode) fail(401, 'Código incorrecto');
+  const now = Date.now();
+  const key = ipKey(ip);
+  const [mine, all] = [await countAttempt(db, key, now), await countAttempt(db, 'global', now)];
+  if (mine > MAX_FAILS || all > MAX_GLOBAL) fail(429, 'Demasiados intentos. Espera 15 minutos.');
+  if (isAuthorized(passcode)) {
+    // acierto: este intento no cuenta contra nadie
+    await db.run('DELETE FROM auth_failures WHERE ip = ?', [key]);
+    await db.run('UPDATE auth_failures SET fails = MAX(fails - 1, 0) WHERE ip = ?', ['global']);
+    return;
+  }
+  await db.run('DELETE FROM auth_failures WHERE since < ? AND ip != ?', [now - LOCK_MS, 'global']); // limpieza
+  fail(401, 'Código incorrecto');
+}
+
+function text(value, label, { max = 80, required = true } = {}) {
+  const s = String(value ?? '').trim();
+  if (required && !s) fail(400, `${label} es obligatorio`);
+  if (s.length > max) fail(400, `${label} es muy largo`);
+  return s;
+}
+
+// ---------- ajustes del viaje (monedas) ----------
+
+async function getSettings(db) {
+  const rows = await db.all('SELECT key, value FROM settings');
+  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+  const dest = currencyByCode(map.dest_currency) ? map.dest_currency : DEFAULT_SETTINGS.dest;
+  const home = currencyByCode(map.home_currency) ? map.home_currency : DEFAULT_SETTINGS.home;
+  return { dest, home };
+}
+
+async function saveSettings(db, body) {
+  if (!currencyByCode(body.dest) || !currencyByCode(body.home)) fail(400, 'Moneda no válida');
+  if (body.dest === body.home) fail(400, 'El país del viaje y tu moneda deben ser distintos');
+  const current = await getSettings(db);
+  if (current.dest !== body.dest || current.home !== body.home) {
+    const used = await db.all('SELECT COUNT(*) AS n FROM expenses');
+    if (used[0].n > 0) fail(409, 'Ya hay gastos registrados: borra todos los gastos para cambiar el país o la moneda');
+  }
+  await db.batch([
+    { sql: 'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', args: ['dest_currency', body.dest] },
+    { sql: 'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', args: ['home_currency', body.home] },
+  ]);
+  return { dest: body.dest, home: body.home };
+}
+
+// ---------- personas ----------
+
+async function savePerson(db, id, body) {
+  const name = text(body.name, 'El nombre');
+  await db.run(
+    'INSERT INTO people (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name',
+    [id, name],
+  );
+  return { id, name };
+}
+
+async function deletePerson(db, id) {
+  const used = await db.all(
+    `SELECT (SELECT COUNT(*) FROM payment_methods WHERE owner_person_id = ?) AS m,
+            (SELECT COUNT(*) FROM expense_beneficiaries WHERE person_id = ?) AS b`,
+    [id, id],
+  );
+  if (used[0].m > 0 || used[0].b > 0) {
+    fail(409, 'No se puede borrar: tiene medios de pago o gastos asociados');
+  }
+  await db.run('DELETE FROM people WHERE id = ?', [id]);
+}
+
+// ---------- medios de pago ----------
+
+async function saveMethod(db, id, body) {
+  const kind = body.kind;
+  if (!['card', 'pix', 'cash'].includes(kind)) fail(400, 'Tipo de medio de pago inválido');
+  const name = text(body.name, 'El nombre');
+  let last4 = null;
+  let cardType = null;
+  if (kind === 'card') {
+    last4 = text(body.last4, 'Los últimos 4 dígitos', { max: 4 });
+    if (!/^\d{4}$/.test(last4)) fail(400, 'Los últimos dígitos deben ser 4 números');
+    cardType = body.card_type;
+    if (!['debit', 'credit'].includes(cardType)) fail(400, 'Indica si es débito o crédito');
+  }
+  const owner = await db.all('SELECT id FROM people WHERE id = ?', [body.owner_person_id]);
+  if (!owner.length) fail(400, 'El dueño no existe');
+  await db.run(
+    `INSERT INTO payment_methods (id, kind, name, last4, card_type, owner_person_id)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, name = excluded.name,
+       last4 = excluded.last4, card_type = excluded.card_type,
+       owner_person_id = excluded.owner_person_id`,
+    [id, kind, name, last4, cardType, body.owner_person_id],
+  );
+  return { id, kind, name, last4, card_type: cardType, owner_person_id: body.owner_person_id };
+}
+
+async function deleteMethod(db, id) {
+  const used = await db.all('SELECT COUNT(*) AS n FROM expenses WHERE payment_method_id = ?', [id]);
+  if (used[0].n > 0) fail(409, 'No se puede borrar: tiene gastos asociados');
+  await db.run('DELETE FROM payment_methods WHERE id = ?', [id]);
+}
+
+// ---------- gastos ----------
+
+async function saveExpense(db, id, body) {
+  if (!isValidDate(body.date)) fail(400, 'Fecha inválida');
+  const cents = Number(body.amount_cents);
+  if (!Number.isInteger(cents) || cents <= 0) fail(400, 'El monto debe ser mayor a cero');
+  if (cents > MAX_CENTS) fail(400, 'El monto es demasiado grande');
+  const description = text(body.description, 'La descripción', { max: 120, required: false });
+
+  const method = await db.all('SELECT id FROM payment_methods WHERE id = ?', [body.payment_method_id]);
+  if (!method.length) fail(400, 'El medio de pago no existe');
+
+  const ids = [...new Set(body.beneficiary_ids ?? [])];
+  if (!ids.length) fail(400, 'Indica para quién es el gasto');
+  const marks = ids.map(() => '?').join(',');
+  const found = await db.all(`SELECT id FROM people WHERE id IN (${marks})`, ids);
+  if (found.length !== ids.length) fail(400, 'Alguna persona no existe');
+
+  const settings = await getSettings(db);
+  const homeDigits = currencyByCode(settings.home).digits;
+  let rate = null;
+  let rateDate = null;
+  let estimated = 0;
+  let manual = 0;
+  const manualRate = Number(body.rate_manual);
+  if (body.rate_manual != null && manualRate > 0) {
+    if (!Number.isFinite(manualRate) || manualRate > MAX_RATE) fail(400, 'La tasa manual no es válida');
+    rate = manualRate;
+    rateDate = body.date;
+    manual = 1;
+  } else {
+    const r = await resolveRate(db, body.date, settings);
+    if (r) {
+      rate = r.rate;
+      rateDate = r.rate_date;
+      estimated = r.estimated ? 1 : 0;
+    }
+  }
+  const amountHome = rate == null ? null : toHome(cents, rate, homeDigits);
+
+  await db.batch([
+    {
+      sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
+              rate, rate_date, rate_estimated, rate_manual, amount_home, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET date = excluded.date,
+              amount_cents = excluded.amount_cents, description = excluded.description,
+              payment_method_id = excluded.payment_method_id,
+              rate = excluded.rate, rate_date = excluded.rate_date,
+              rate_estimated = excluded.rate_estimated, rate_manual = excluded.rate_manual,
+              amount_home = excluded.amount_home`,
+      args: [id, body.date, cents, description, body.payment_method_id, rate, rateDate,
+        estimated, manual, amountHome, new Date().toISOString()],
+    },
+    { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
+    ...ids.map((p) => ({
+      sql: 'INSERT INTO expense_beneficiaries (expense_id, person_id) VALUES (?, ?)',
+      args: [id, p],
+    })),
+  ]);
+  return { id };
+}
+
+async function deleteExpense(db, id) {
+  await db.batch([
+    { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
+    { sql: 'DELETE FROM expenses WHERE id = ?', args: [id] },
+  ]);
+}
+
+// Gastos sin tasa (se guardaron sin internet) o con tasa estimada: reintenta conseguirla.
+async function fillPendingRates(db, settings) {
+  const homeDigits = currencyByCode(settings.home).digits;
+  const rows = await db.all(
+    `SELECT id, date, amount_cents, amount_home, rate_estimated, rate_date FROM expenses
+     WHERE rate_manual = 0 AND (amount_home IS NULL OR rate_estimated = 1)
+     ORDER BY date DESC LIMIT 8`,
+  );
+  for (const e of rows) {
+    const r = await resolveRate(db, e.date, settings);
+    if (!r) continue;
+    const same = e.amount_home != null && r.estimated === Boolean(e.rate_estimated) && r.rate_date === e.rate_date;
+    if (same) continue;
+    await db.run(
+      `UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = ?, amount_home = ?
+       WHERE id = ?`,
+      [r.rate, r.rate_date, r.estimated ? 1 : 0, toHome(e.amount_cents, r.rate, homeDigits), e.id],
+    );
+  }
+}
+
+async function getState(db) {
+  const settings = await getSettings(db);
+  await fillPendingRates(db, settings);
+  const [people, methods, expenses, links] = await Promise.all([
+    db.all('SELECT id, name FROM people ORDER BY name COLLATE NOCASE'),
+    db.all('SELECT id, kind, name, last4, card_type, owner_person_id FROM payment_methods ORDER BY name COLLATE NOCASE'),
+    db.all('SELECT * FROM expenses ORDER BY date DESC, created_at DESC'),
+    db.all('SELECT expense_id, person_id FROM expense_beneficiaries'),
+  ]);
+  const byExpense = new Map();
+  for (const l of links) {
+    if (!byExpense.has(l.expense_id)) byExpense.set(l.expense_id, []);
+    byExpense.get(l.expense_id).push(l.person_id);
+  }
+  return {
+    today: todayStr(),
+    settings,
+    people,
+    payment_methods: methods,
+    expenses: expenses.map((e) => ({ ...e, beneficiary_ids: byExpense.get(e.id) ?? [] })),
+  };
+}
+
+// ---------- enrutador ----------
+
+export async function handle({ method, path, query = new URLSearchParams(), body, passcode, ip, db }) {
+  try {
+    await checkAuth(db, passcode, ip);
+    const parts = path.replace(/^\/api\/?/, '').split('/').filter(Boolean);
+    const [resource, id] = parts;
+    const put = (fn) => fn(db, id ?? body?.id ?? randomUUID(), body ?? {});
+    const ok = (data, status = 200) => ({ status, body: data });
+
+    if (resource === 'ping' && method === 'GET') return ok({ ok: true });
+    if (resource === 'state' && method === 'GET') return ok(await getState(db));
+    if (resource === 'settings' && method === 'PUT') return ok(await saveSettings(db, body ?? {}));
+
+    if (resource === 'rates' && id === 'history' && method === 'GET') {
+      return ok(await rateHistory(db, await getSettings(db), Number(query.get('days'))));
+    }
+
+    if (resource === 'rate' && method === 'GET') {
+      const date = query.get('date') ?? todayStr();
+      if (!isValidDate(date)) fail(400, 'Fecha inválida');
+      const r = await resolveRate(db, date, await getSettings(db));
+      return ok(r ?? { rate: null });
+    }
+
+    const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense] };
+    if (writers[resource]) {
+      const [saver, deleter] = writers[resource];
+      if (method === 'POST' && !id) return ok(await put(saver), 201);
+      if (method === 'PUT' && id) return ok(await put(saver));
+      if (method === 'DELETE' && id) {
+        await deleter(db, id);
+        return ok({ ok: true });
+      }
+    }
+    return fail(404, 'Ruta no encontrada');
+  } catch (err) {
+    if (err instanceof HttpError) return { status: err.status, body: { error: err.message } };
+    console.error(err);
+    return { status: 500, body: { error: 'Error interno' } };
+  }
+}

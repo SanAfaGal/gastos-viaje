@@ -1,0 +1,23 @@
+# Cada push a la rama principal: Netlify corre las pruebas y, si pasan, publica.
+# La base de datos (Turso) se actualiza sola: el esquema y las migraciones se aplican
+# la primera vez que la función abre la base (src/db.mjs).
+[build]
+  command = "npm test"
+  publish = "public"
+  functions = "netlify/functions"
+
+[build.environment]
+  NODE_VERSION = "24"
+
+[functions]
+  node_bundler = "esbuild"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"
+
+[[headers]]
+  for = "/js/*"
+  [headers.values]
+    Cache-Control = "no-cache"

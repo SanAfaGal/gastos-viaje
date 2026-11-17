@@ -1,0 +1,15 @@
+{
+  "name": "gastos-viaje",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Registro de gastos de viaje con conversión de moneda y cuentas finales.",
+  "engines": { "node": ">=22.9" },
+  "scripts": {
+    "dev": "node --env-file-if-exists=.env server.mjs",
+    "test": "node --test --disable-warning=ExperimentalWarning"
+  },
+  "dependencies": {
+    "@libsql/client": "0.18.0"
+  }
+}
