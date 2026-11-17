@@ -353,6 +353,7 @@ function updateConv(loaded = false) {
 }
 
 async function submitForm(then) {
+  if (!draft) return;
   const cents = parseAmount(draft.amountText);
   if (!cents) return toast('Escribe un monto válido', 'error');
   if (!draft.method) return toast('Elige con qué se pagó', 'error');
@@ -574,9 +575,49 @@ store.listeners.add(() => {
 });
 window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
 
+// Acción en curso: mientras una acción que tarda (red) no termina se ignoran los demás toques, y el botón
+// muestra un giro y su texto de "trabajando". Así no se ejecuta nada dos veces.
+let working = false;
+let cooldownUntil = 0; // pausa corta tras guardar o borrar un gasto, contra el doble toque
+async function busy(btn, fn, label) {
+  if (working) return undefined;
+  working = true;
+  $view.setAttribute('aria-busy', 'true');
+  const original = btn?.innerHTML;
+  if (btn) {
+    btn.classList.add('busy');
+    btn.disabled = true;
+    if (label) btn.textContent = label;
+  }
+  try {
+    return await fn();
+  } finally {
+    working = false;
+    $view.removeAttribute('aria-busy');
+    if (btn?.isConnected) {
+      btn.classList.remove('busy');
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  }
+}
+function coolingDown() {
+  if (Date.now() < cooldownUntil) return true;
+  cooldownUntil = Date.now() + 700;
+  return false;
+}
+
+// Animación de "presionado": se ve al menos 180 ms aunque el toque sea muy rápido.
+document.addEventListener('pointerdown', (ev) => {
+  const el = ev.target.closest?.('button, .item, .tabbar a, a.btn');
+  if (!el || el.disabled) return;
+  el.classList.add('pressed');
+  setTimeout(() => el.classList.remove('pressed'), 180);
+}, { passive: true });
+
 $view.addEventListener('click', async (ev) => {
   const t = ev.target.closest('[data-action]');
-  if (!t) return;
+  if (!t || working) return;
   const { action, id } = t.dataset;
   const c = ctx();
   const guard = async (fn) => {
@@ -592,7 +633,7 @@ $view.addEventListener('click', async (ev) => {
     document.querySelectorAll('#benes .chip[data-id]').forEach((b) => b.classList.add('on'));
     updateConv();
   } else if (action === 'del') {
-    if (confirm('¿Borrar este gasto?')) {
+    if (draft && !coolingDown() && confirm('¿Borrar este gasto?')) {
       store.deleteExpense(draft.id);
       draft = null;
       toast('Gasto borrado');
@@ -609,9 +650,9 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'edit-method') { editMethod = id; render(); }
   else if (action === 'cancel-method') { editMethod = null; render(); }
   else if (action === 'del-person') {
-    if (confirm('¿Borrar esta persona?')) await guard(async () => { await store.deletePerson(id); toast('Persona borrada'); render(); });
+    if (confirm('¿Borrar esta persona?')) await busy(t, () => guard(async () => { await store.deletePerson(id); toast('Persona borrada'); render(); }), 'Borrando…');
   } else if (action === 'del-method') {
-    if (confirm('¿Borrar este medio de pago?')) await guard(async () => { await store.deleteMethod(id); toast('Medio borrado'); render(); });
+    if (confirm('¿Borrar este medio de pago?')) await busy(t, () => guard(async () => { await store.deleteMethod(id); toast('Medio borrado'); render(); }), 'Borrando…');
   } else if (action === 'csv') downloadCsv();
   else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
 });
@@ -662,26 +703,29 @@ $view.addEventListener('click', (ev) => { lastSubmitter = ev.target.closest('but
 
 $view.addEventListener('submit', async (ev) => {
   ev.preventDefault();
+  if (working) return;
   const f = ev.target.id;
+  const btn = ev.submitter ?? lastSubmitter;
   const guard = async (fn) => {
     try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error'); }
   };
-  if (f === 'exp-form') submitForm(lastSubmitter?.dataset.then ?? 'list');
-  else if (f === 'trip-form') {
-    await guard(async () => {
+  if (f === 'exp-form') {
+    if (!coolingDown()) submitForm(lastSubmitter?.dataset.then ?? 'list');
+  } else if (f === 'trip-form') {
+    await busy(btn, () => guard(async () => {
       await store.saveSettings({ dest: document.getElementById('t-dest').value, home: document.getElementById('t-home').value });
       toast('Viaje guardado');
       render();
-    });
+    }), 'Guardando…');
   } else if (f === 'person-form') {
-    await guard(async () => {
+    await busy(btn, () => guard(async () => {
       await store.savePerson({ id: editPerson ?? undefined, name: document.getElementById('p-name').value });
       editPerson = null;
       toast('Persona guardada');
       render();
-    });
+    }), 'Guardando…');
   } else if (f === 'method-form') {
-    await guard(async () => {
+    await busy(btn, () => guard(async () => {
       const kind = document.getElementById('m-kind').value;
       await store.saveMethod({
         id: editMethod ?? undefined, kind, name: document.getElementById('m-name').value,
@@ -692,16 +736,18 @@ $view.addEventListener('submit', async (ev) => {
       editMethod = null;
       toast('Medio de pago guardado');
       render();
-    });
+    }), 'Guardando…');
   } else if (f === 'login') {
-    store.setPass(document.getElementById('code').value);
-    await guard(async () => {
-      await store.ping();
-      await store.refresh();
-      await store.flush();
-      render();
-    });
-    if (store.net.needsLogin) toast('Código incorrecto', 'error');
+    await busy(btn, async () => {
+      store.setPass(document.getElementById('code').value);
+      await guard(async () => {
+        await store.ping();
+        await store.refresh();
+        await store.flush();
+        render();
+      });
+      if (store.net.needsLogin) toast('Código incorrecto', 'error');
+    }, 'Entrando…');
   }
 });
 
