@@ -1,7 +1,7 @@
 // Interfaz: router por hash y 5 pantallas, sin framework.
 import { computeSettlement, splitEqual } from './settlement.mjs';
 import { addDays, currencies, fmtDest, fmtHome, fmtRate, parseAmount, toHome, todayStr } from './money.mjs';
-import { CURRENCIES } from './currencies.mjs';
+import { CURRENCIES, DEFAULT_SETTINGS } from './currencies.mjs';
 import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, detectNetwork, isHexColor, suggestColor } from './cards.mjs';
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
 import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
@@ -11,6 +11,8 @@ const $view = document.getElementById('view');
 const $title = document.getElementById('title');
 const $status = document.getElementById('status');
 const $toast = document.getElementById('toast');
+const $tripBtn = document.getElementById('trip-btn');
+const $tripSwitch = document.getElementById('trip-switch');
 
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -38,10 +40,18 @@ $toast.addEventListener('click', () => $toast.classList.remove('show'));
 
 function ctx() {
   const state = store.getState();
-  const people = state.people;
-  const peopleById = Object.fromEntries(people.map((p) => [p.id, p]));
+  // `people` son quienes van en el viaje activo; `allPeople` toda la lista (Ajustes). Los medios de pago son
+  // de todos los viajes (`methods`), pero en un viaje solo se usan los de dueños que van en él (`payMethods`).
+  const people = state.participants;
+  const allPeople = state.people;
+  const peopleById = Object.fromEntries(allPeople.map((p) => [p.id, p]));
   const methodsById = Object.fromEntries(state.payment_methods.map((m) => [m.id, m]));
-  return { state, people, peopleById, methodsById, methods: state.payment_methods, expenses: state.expenses };
+  const going = new Set(people.map((p) => p.id));
+  const payMethods = state.payment_methods.filter((m) => going.has(m.owner_person_id));
+  return {
+    state, trip: state.trip, trips: state.trips, counts: state.counts,
+    people, allPeople, peopleById, methodsById, methods: state.payment_methods, payMethods, expenses: state.expenses,
+  };
 }
 
 const personName = (c, id) => c.peopleById[id]?.name ?? '¿?';
@@ -141,11 +151,14 @@ function dayLabel(date) {
   return new Date(`${date}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' });
 }
 
-const needsSetup = (c) => !c.people.length || !c.methods.length;
-const setupCard = () => `
-  <div class="card"><h2>Primero lo primero</h2>
-    <p>Elige el país del viaje y tu moneda, agrega las personas del paseo y los medios de pago (tarjetas, transferencias, efectivo) para poder registrar gastos.</p>
-    <a class="btn small" href="#/ajustes">Ir a Ajustes</a></div>`;
+const needsSetup = (c) => !c.people.length || !c.payMethods.length;
+const setupCard = () => {
+  const c = ctx();
+  const text = c.allPeople.length && c.methods.length
+    ? `En "${esc(c.trip.name)}" hace falta marcar quiénes van (Ajustes → Viajes → Editar) y que alguno de ellos tenga un medio de pago.`
+    : 'Agrega las personas del paseo y los medios de pago (tarjetas, transferencias, efectivo) para poder registrar gastos. El país y la moneda del viaje se eligen en Viajes.';
+  return `<div class="card"><h2>Primero lo primero</h2><p>${text}</p><a class="btn small" href="#/ajustes">Ir a Ajustes</a></div>`;
+};
 
 function expenseItem(c, e) {
   const m = c.methodsById[e.payment_method_id];
@@ -210,7 +223,7 @@ function viewList() {
     <div class="filters">
       <input id="f-q" type="search" placeholder="Buscar descripción" value="${esc(filters.q)}">
       <select id="f-method"><option value="">Todos los medios</option>
-        ${c.methods.map((m) => `<option value="${esc(m.id)}" ${filters.method === m.id ? 'selected' : ''}>${esc(methodLabel(m))}</option>`).join('')}</select>
+        ${c.payMethods.map((m) => `<option value="${esc(m.id)}" ${filters.method === m.id ? 'selected' : ''}>${esc(methodLabel(m))}</option>`).join('')}</select>
       <select id="f-person"><option value="">Para cualquiera</option>
         ${c.people.map((p) => `<option value="${esc(p.id)}" ${filters.person === p.id ? 'selected' : ''}>${esc(personName(c, p.id))}</option>`).join('')}</select>
     </div>
@@ -228,8 +241,9 @@ let lastMethod = localStorage.getItem('bg_lastMethod') ?? '';
 let lastBenes = JSON.parse(localStorage.getItem('bg_lastBenes') ?? '[]');
 
 function newDraft(c, date = todayStr()) {
-  const method = c.methodsById[lastMethod] ? lastMethod : (c.methods[0]?.id ?? '');
-  const benes = lastBenes.filter((id) => c.peopleById[id]);
+  const method = c.payMethods.some((m) => m.id === lastMethod) ? lastMethod : (c.payMethods[0]?.id ?? '');
+  const going = new Set(c.people.map((p) => p.id));
+  const benes = lastBenes.filter((id) => going.has(id));
   return { id: null, date, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), manual: '', created_at: null };
 }
 
@@ -265,7 +279,7 @@ function viewForm(editId) {
 
       <label id="cards-l">Pagado con</label>
       <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">
-        ${c.methods.map((m) => cardHtml(m, { owner: personName(c, m.owner_person_id), pick: true, on: m.id === draft.method })).join('')}
+        ${c.payMethods.map((m) => cardHtml(m, { owner: personName(c, m.owner_person_id), pick: true, on: m.id === draft.method })).join('')}
       </div>
 
       <label>¿Para quién es? (se divide en partes iguales)</label>
@@ -474,7 +488,7 @@ function viewAccounts() {
         <div class="muted">Puso ${fmtHome(b.paid)} · Le tocan ${fmtHome(b.consumed)}</div></div>`).join('')}
     </div>
     <div class="card"><h2>Gastado por medio de pago</h2>
-      ${c.methods.map((m) => `<div class="pay row"><span>${esc(methodLabel(m))}<div class="muted">de ${esc(personName(c, m.owner_person_id))}</div></span><span class="num">${fmtHome(byMethod[m.id] ?? 0)}</span></div>`).join('')}
+      ${c.payMethods.map((m) => `<div class="pay row"><span>${esc(methodLabel(m))}<div class="muted">de ${esc(personName(c, m.owner_person_id))}</div></span><span class="num">${fmtHome(byMethod[m.id] ?? 0)}</span></div>`).join('')}
     </div>`;
 }
 
@@ -483,29 +497,52 @@ function viewAccounts() {
 let editPerson = null;
 let editMethod = null; // id del medio que se edita; null = uno nuevo
 let methodOpen = false; // diálogo de medio de pago abierto
+let personOpen = false; // diálogo de persona abierto (editPerson = a quién; null = una nueva)
+let editTrip = null; // id del viaje que se edita; null = uno nuevo
+let tripOpen = false; // diálogo de viaje abierto
 
 function viewSettings() {
   const c = ctx();
   const p = editPerson ? (c.peopleById[editPerson] ?? {}) : {};
   const m = editMethod ? (c.methodsById[editMethod] ?? {}) : {};
   const kind = m.kind ?? 'card';
-  const cur = currencies();
   const theme = getTheme();
-  const locked = c.expenses.length > 0;
+  const t = editTrip ? (c.trips.find((x) => x.id === editTrip) ?? {}) : {};
+  const tripLocked = Boolean(t.id) && (c.counts[t.id] ?? 0) > 0;
+  const going = new Set(t.id ? t.people_ids : c.allPeople.map((x) => x.id)); // viaje nuevo: todos marcados
   const option = (code, sel) => {
     const x = CURRENCIES.find((k) => k.code === code);
     return `<option value="${esc(code)}" ${code === sel ? 'selected' : ''}>${esc(x.country)} · ${esc(x.code)} (${esc(x.name)})</option>`;
   };
   return `
-    <div class="card"><h2>Viaje</h2>
+    <div class="card"><h2>Viajes</h2>
+      ${c.trips.map((x) => `<div class="pay row"><span><b>${esc(x.name)}</b>${x.id === c.trip.id ? ' <span class="tag">Activo</span>' : ''}
+        <div class="muted">${esc(x.dest)} → ${esc(x.home)} · ${c.counts[x.id] ?? 0} gasto(s) · ${x.people_ids.length} persona(s)</div></span>
+        <span><button class="btn secondary small" data-action="edit-trip" data-id="${esc(x.id)}">Editar</button>
+        ${c.trips.length > 1 ? `<button class="btn danger small" data-action="del-trip" data-id="${esc(x.id)}">Borrar</button>` : ''}</span></div>`).join('')}
+      <button class="btn" type="button" data-action="new-trip">+ Nuevo viaje</button>
+      ${tripOpen ? `<dialog id="trip-dialog" class="sheet" aria-labelledby="td-title">
       <form id="trip-form" autocomplete="off">
-        <label for="t-dest">País donde gastas</label>
-        <select id="t-dest" ${locked ? 'disabled' : ''}>${CURRENCIES.map((x) => option(x.code, cur.dest.code)).join('')}</select>
-        <label for="t-home">Tu moneda (la que usas para pagar al final)</label>
-        <select id="t-home" ${locked ? 'disabled' : ''}>${CURRENCIES.map((x) => option(x.code, cur.home.code)).join('')}</select>
-        ${locked ? '<p class="muted">Ya hay gastos registrados, por eso no se puede cambiar. Para cambiarlo, borra todos los gastos.</p>'
-          : '<button class="btn" type="submit">Guardar</button>'}
-      </form></div>
+        <header class="sheet-head"><h2 id="td-title">${t.id ? 'Editar viaje' : 'Nuevo viaje'}</h2>
+          <button type="button" class="sheet-x" data-action="cancel-trip" aria-label="Cerrar">×</button></header>
+        <div class="sheet-body">
+          <label for="t-name">Nombre del viaje</label>
+          <input id="t-name" maxlength="40" placeholder="Ej: Brasil 2026" value="${esc(t.name ?? '')}" required>
+          <label for="t-dest">País donde gastas</label>
+          <select id="t-dest" ${tripLocked ? 'disabled' : ''}>${CURRENCIES.map((x) => option(x.code, t.dest ?? DEFAULT_SETTINGS.dest)).join('')}</select>
+          <label for="t-home">Tu moneda (la que usas para pagar al final)</label>
+          <select id="t-home" ${tripLocked ? 'disabled' : ''}>${CURRENCIES.map((x) => option(x.code, t.home ?? DEFAULT_SETTINGS.home)).join('')}</select>
+          ${tripLocked ? '<p class="muted">Este viaje ya tiene gastos, por eso no se puede cambiar el país ni la moneda.</p>' : ''}
+          <label>Quiénes van</label>
+          <div class="chips" id="t-people">
+            ${c.allPeople.map((x) => `<button type="button" class="chip ${going.has(x.id) ? 'on' : ''}" aria-pressed="${going.has(x.id)}" data-action="trip-person" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('') || '<span class="muted">Primero agrega personas (más abajo).</span>'}
+          </div>
+        </div>
+        <footer class="sheet-foot"><p id="t-error" class="form-error" role="alert" hidden></p>
+          <button class="btn secondary" type="button" data-action="cancel-trip">Cancelar</button>
+          <button class="btn" type="submit">${t.id ? 'Guardar' : 'Crear viaje'}</button></footer>
+      </form></dialog>` : ''}
+    </div>
 
     <div class="card"><h2>Apariencia</h2>
       <label>Modo</label>
@@ -515,21 +552,30 @@ function viewSettings() {
     </div>
 
     <div class="card"><h2>Personas</h2>
-      ${c.people.map((x) => `<div class="pay row"><span><b>${esc(x.name)}</b></span>
+      ${c.allPeople.map((x) => `<div class="pay row"><span><b>${esc(x.name)}</b></span>
         <span><button class="btn secondary small" data-action="edit-person" data-id="${esc(x.id)}">Editar</button>
         <button class="btn danger small" data-action="del-person" data-id="${esc(x.id)}">Borrar</button></span></div>`).join('') || '<div class="empty">Aún no hay personas.</div>'}
+      <button class="btn" type="button" data-action="new-person">+ Agregar persona</button>
+      ${personOpen ? `<dialog id="person-dialog" class="sheet" aria-labelledby="pd-title">
       <form id="person-form" autocomplete="off">
-        <label for="p-name">${editPerson ? 'Editar persona' : 'Agregar persona'}</label>
-        <input id="p-name" maxlength="40" placeholder="Nombre" value="${esc(p.name ?? '')}" required>
-        <button class="btn" type="submit">${editPerson ? 'Guardar' : 'Agregar'}</button>
-        ${editPerson ? '<button class="btn secondary" type="button" data-action="cancel-person">Cancelar</button>' : ''}
-      </form></div>
+        <header class="sheet-head"><h2 id="pd-title">${editPerson ? 'Editar persona' : 'Nueva persona'}</h2>
+          <button type="button" class="sheet-x" data-action="cancel-person" aria-label="Cerrar">×</button></header>
+        <div class="sheet-body">
+          <label for="p-name">Nombre</label>
+          <input id="p-name" maxlength="40" placeholder="Nombre" value="${esc(p.name ?? '')}" required>
+          <p class="muted">${editPerson ? 'Los viajes en los que va se cambian en Viajes → Editar.' : `Se agregará al viaje "${esc(c.trip.name)}". Los demás viajes se cambian en Viajes → Editar.`}</p>
+        </div>
+        <footer class="sheet-foot"><p id="p-error" class="form-error" role="alert" hidden></p>
+          <button class="btn secondary" type="button" data-action="cancel-person">Cancelar</button>
+          <button class="btn" type="submit">${editPerson ? 'Guardar' : 'Agregar'}</button></footer>
+      </form></dialog>` : ''}
+    </div>
 
     <div class="card"><h2>Medios de pago</h2>
       ${c.methods.map((x) => `<div class="pay row"><span><b>${esc(methodLabel(x))}</b><div class="muted">de ${esc(personName(c, x.owner_person_id))}</div></span>
         <span><button class="btn secondary small" data-action="edit-method" data-id="${esc(x.id)}">Editar</button>
         <button class="btn danger small" data-action="del-method" data-id="${esc(x.id)}">Borrar</button></span></div>`).join('') || '<div class="empty">Aún no hay medios de pago.</div>'}
-      ${c.people.length ? `<button class="btn" type="button" data-action="new-method">+ Agregar medio de pago</button>
+      ${c.allPeople.length ? `<button class="btn" type="button" data-action="new-method">+ Agregar medio de pago</button>
       ${methodOpen ? `<dialog id="method-dialog" class="sheet" aria-labelledby="md-title">
       <form id="method-form" autocomplete="off">
         <header class="sheet-head"><h2 id="md-title">${editMethod ? 'Editar medio de pago' : 'Nuevo medio de pago'}</h2>
@@ -559,7 +605,7 @@ function viewSettings() {
         <label for="m-owner">De quién es (obligatorio)</label>
         <select id="m-owner" required>
           <option value="" disabled ${m.owner_person_id ? '' : 'selected'}>Elige una persona</option>
-          ${c.people.map((x) => `<option value="${esc(x.id)}" ${m.owner_person_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+          ${c.allPeople.map((x) => `<option value="${esc(x.id)}" ${m.owner_person_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
         </select>
         </div>
         <footer class="sheet-foot"><p id="m-error" class="form-error" role="alert" hidden></p>
@@ -601,7 +647,8 @@ function downloadCsv() {
   const csv = rows.map((r) => r.map(cell).join(',')).join('\r\n');
   const a = document.createElement('a');
   a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv' }));
-  a.download = `gastos-viaje-${todayStr()}.csv`;
+  const slug = c.trip.name.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+  a.download = `gastos-${slug || 'viaje'}-${todayStr()}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -641,34 +688,71 @@ function updateStatus() {
 
 function render() {
   updateStatus();
+  $tripBtn.hidden = store.net.needsLogin;
   if (store.net.needsLogin) {
     $title.textContent = 'Gastos de viaje';
     $view.innerHTML = viewLogin();
     return;
   }
+  const trip = store.activeTrip();
+  $tripBtn.textContent = `✈ ${trip.name} · ${trip.dest}→${trip.home} ▾`;
   const { r, m } = currentRoute();
   if (!isFormRoute()) draft = null;
-  if (r.tab !== 'ajustes') methodOpen = false;
+  if (r.tab !== 'ajustes') { methodOpen = false; tripOpen = false; personOpen = false; }
   $title.textContent = r.title;
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === r.tab));
   $view.innerHTML = r.view(m);
   if (isFormRoute() && draft) { updateConv(); renderChart(); centerPicked(); }
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
+  if (tripOpen) document.getElementById('trip-dialog')?.showModal();
+  if (personOpen) document.getElementById('person-dialog')?.showModal();
 }
 
-// El diálogo se cierra con Cancelar, la X, Escape o tocando fuera. Solo se limpia el estado: la próxima
+// Los diálogos se cierran con Cancelar, la X, Escape o tocando fuera. Solo se limpia el estado: la próxima
 // apertura vuelve a dibujar el formulario desde cero.
 $view.addEventListener('close', (ev) => {
-  if (ev.target.id !== 'method-dialog') return;
-  methodOpen = false;
-  editMethod = null;
+  if (ev.target.id === 'method-dialog') { methodOpen = false; editMethod = null; }
+  else if (ev.target.id === 'trip-dialog') { tripOpen = false; editTrip = null; }
+  else if (ev.target.id === 'person-dialog') { personOpen = false; editPerson = null; }
 }, true);
-$view.addEventListener('click', (ev) => { if (ev.target.id === 'method-dialog') ev.target.close(); });
+$view.addEventListener('click', (ev) => { if (['method-dialog', 'trip-dialog', 'person-dialog'].includes(ev.target.id)) ev.target.close(); });
+
+// Selector de viaje (arriba, en todas las pantallas).
+function openTripSwitch() {
+  const c = ctx();
+  document.getElementById('trip-list').innerHTML = c.trips.map((t) => `
+    <button type="button" class="trip-opt ${t.id === c.trip.id ? 'on' : ''}" role="radio" aria-checked="${t.id === c.trip.id}" data-trip="${esc(t.id)}">
+      <span><b>${esc(t.name)}</b><span class="muted">${esc(t.dest)} → ${esc(t.home)} · ${c.counts[t.id] ?? 0} gasto(s)</span></span>
+      <span class="trip-tick" aria-hidden="true">✓</span>
+    </button>`).join('');
+  $tripSwitch.showModal();
+}
+
+function switchTrip(id) {
+  if (id !== store.activeTrip().id) {
+    store.setActiveTrip(id);
+    draft = null; // el borrador y los filtros eran del otro viaje
+    convRate = null;
+    filters.method = '';
+    filters.person = '';
+    if (/^#\/nuevo\/.+/.test(location.hash)) location.hash = '#/gastos'; // el gasto que se editaba era del otro viaje
+    else render();
+  }
+  $tripSwitch.close();
+}
+
+$tripBtn.addEventListener('click', openTripSwitch);
+$tripSwitch.addEventListener('click', (ev) => {
+  const opt = ev.target.closest('[data-trip]');
+  if (opt) switchTrip(opt.dataset.trip);
+  else if (ev.target === $tripSwitch || ev.target.closest('[data-close]')) $tripSwitch.close();
+  else if (ev.target.closest('[data-manage]')) { $tripSwitch.close(); location.hash = '#/ajustes'; }
+});
 
 const formActive = () => isFormRoute() && draft && !store.net.needsLogin;
 
 store.listeners.add(() => {
-  if (formActive() || methodOpen) updateStatus();
+  if (formActive() || methodOpen || tripOpen || personOpen) updateStatus();
   else if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName) && $view.contains(document.activeElement)) updateStatus();
   else render();
 });
@@ -744,8 +828,9 @@ $view.addEventListener('click', async (ev) => {
     loadHistory();
   } else if (action === 'mode') { setTheme({ mode: id }); render(); }
   else if (action === 'accent') { setTheme({ accent: id }); render(); }
-  else if (action === 'edit-person') { editPerson = id; render(); }
-  else if (action === 'cancel-person') { editPerson = null; render(); }
+  else if (action === 'edit-person') { editPerson = id; personOpen = true; render(); }
+  else if (action === 'new-person') { editPerson = null; personOpen = true; render(); }
+  else if (action === 'cancel-person') document.getElementById('person-dialog')?.close();
   else if (action === 'pick-method') {
     draft.method = id;
     document.querySelectorAll('#cards .pitem').forEach((b) => {
@@ -757,6 +842,16 @@ $view.addEventListener('click', async (ev) => {
   } else if (action === 'auto-color') {
     document.getElementById('m-color').value = '';
     paintPreview();
+  } else if (action === 'edit-trip') { editTrip = id; tripOpen = true; render(); }
+  else if (action === 'new-trip') { editTrip = null; tripOpen = true; render(); }
+  else if (action === 'cancel-trip') document.getElementById('trip-dialog')?.close();
+  else if (action === 'trip-person') {
+    t.classList.toggle('on');
+    t.setAttribute('aria-pressed', String(t.classList.contains('on')));
+  } else if (action === 'del-trip') {
+    const n = c.counts[id] ?? 0;
+    const msg = n ? `Este viaje tiene ${n} gasto(s). ¿Borrar el viaje y todos sus gastos? No se puede deshacer.` : '¿Borrar este viaje?';
+    if (confirm(msg)) await busy(t, () => guard(async () => { await store.deleteTrip(id, n > 0); toast('Viaje borrado'); render(); }), 'Borrando…');
   } else if (action === 'edit-method') { editMethod = id; methodOpen = true; render(); }
   else if (action === 'new-method') { editMethod = null; methodOpen = true; render(); }
   else if (action === 'cancel-method') document.getElementById('method-dialog')?.close();
@@ -838,14 +933,26 @@ $view.addEventListener('submit', async (ev) => {
   if (f === 'exp-form') {
     if (!coolingDown()) submitForm(lastSubmitter?.dataset.then ?? 'list');
   } else if (f === 'trip-form') {
-    await busy(btn, () => guard(async () => {
-      await store.saveSettings({ dest: document.getElementById('t-dest').value, home: document.getElementById('t-home').value });
-      toast('Viaje guardado');
+    await busy(btn, () => guardIn('t-error', async () => {
+      const wasNew = !editTrip;
+      const out = await store.saveTrip({
+        id: editTrip ?? undefined,
+        name: document.getElementById('t-name').value,
+        dest: document.getElementById('t-dest').value,
+        home: document.getElementById('t-home').value,
+        people_ids: [...document.querySelectorAll('#t-people .chip.on')].map((b) => b.dataset.id),
+      });
+      if (wasNew) store.setActiveTrip(out.id); // el viaje nuevo pasa a ser el activo
+      tripOpen = false;
+      editTrip = null;
+      toast(wasNew ? 'Viaje creado' : 'Viaje guardado');
       render();
     }), 'Guardando…');
   } else if (f === 'person-form') {
-    await busy(btn, () => guard(async () => {
-      await store.savePerson({ id: editPerson ?? undefined, name: document.getElementById('p-name').value });
+    await busy(btn, () => guardIn('p-error', async () => {
+      // Una persona nueva entra en el viaje activo; las ya existentes no cambian de viajes al renombrarlas.
+      await store.savePerson({ id: editPerson ?? undefined, name: document.getElementById('p-name').value, trip_id: editPerson ? undefined : store.activeTrip().id });
+      personOpen = false;
       editPerson = null;
       toast('Persona guardada');
       render();

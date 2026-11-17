@@ -68,3 +68,41 @@ test('borrar sin internet también espera en cola', async () => {
   await store.flush();
   assert.equal((await db.all('SELECT * FROM expenses')).length, 0);
 });
+
+test('cada gasto en cola se queda en el viaje donde se guardó, aunque se cambie de viaje antes de enviarlo', async () => {
+  const mx = await store.saveTrip({ id: 'mx', name: 'Mexico', dest: 'MXN', home: 'EUR', people_ids: ['yo'] });
+  assert.equal(mx.id, 'mx');
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['MXN-EUR', '2026-11-14', 0.05]);
+  await store.refresh();
+  store.setActiveTrip('mx');
+  await store.fetchRate('2026-11-14'); // el celular aprende la tasa de México mientras hay internet
+
+  const base = { date: '2026-11-14', description: '', payment_method_id: 'cash', beneficiary_ids: ['yo'] };
+  online = false;
+  store.setActiveTrip('trip-1');
+  await store.saveExpense({ ...base, id: 'a', amount_cents: 1000 });
+  store.setActiveTrip('mx');
+  await store.saveExpense({ ...base, id: 'b', amount_cents: 2000 });
+  assert.equal(store.pendingCount(), 2);
+
+  // Cada viaje muestra solo lo suyo, convertido con sus propias monedas.
+  let st = store.getState();
+  assert.equal(st.trip.id, 'mx');
+  assert.deepEqual(st.expenses.map((e) => [e.id, e.amount_home]), [['b', 100]]); // 20 MXN * 0.05 = 1 EUR
+  assert.deepEqual(st.counts, { 'trip-1': 1, mx: 1 });
+  store.setActiveTrip('trip-1');
+  st = store.getState();
+  assert.deepEqual(st.expenses.map((e) => [e.id, e.amount_home]), [['a', 600000]]); // 10 BRL * 600 = 6.000 COP
+  assert.deepEqual(st.participants.map((p) => p.id), ['yo']);
+
+  online = true;
+  await store.flush();
+  assert.equal(store.pendingCount(), 0);
+  const rows = await db.all('SELECT id, trip_id FROM expenses ORDER BY id');
+  assert.deepEqual(rows.map((r) => [r.id, r.trip_id]), [['a', 'trip-1'], ['b', 'mx']]);
+
+  // Borrar el viaje activo hace volver al primero.
+  store.setActiveTrip('mx');
+  await store.deleteTrip('mx', true);
+  assert.equal(store.activeTrip().id, 'trip-1');
+});

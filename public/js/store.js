@@ -1,9 +1,9 @@
 // Datos del navegador: llamadas a la API, copia local para leer sin internet y cola de gastos
 // pendientes de enviar. Todo en localStorage (son pocos datos).
-import { currencies, setCurrencies, toHome, todayStr } from './money.mjs';
-import { DEFAULT_SETTINGS } from './currencies.mjs';
+import { setCurrencies, toHome, todayStr } from './money.mjs';
+import { currencyByCode, DEFAULT_SETTINGS } from './currencies.mjs';
 
-const K = { state: 'bg_state2', queue: 'bg_queue', pass: 'bg_pass', rates: 'bg_rates2', hist: 'bg_hist' };
+const K = { state: 'bg_state2', queue: 'bg_queue', pass: 'bg_pass', rates: 'bg_rates2', hist: 'bg_hist', trip: 'bg_trip' };
 
 function read(key, fallback) {
   try {
@@ -71,7 +71,7 @@ async function request(method, path, body) {
 
 // ---------- estado ----------
 
-let server = read(K.state, { today: todayStr(), settings: DEFAULT_SETTINGS, people: [], payment_methods: [], expenses: [] });
+let server = read(K.state, { today: todayStr(), trips: [], people: [], payment_methods: [], expenses: [] });
 // Cola guardada por la primera versión (solo BRL): mismos datos con el nombre de campo nuevo.
 let queue = read(K.queue, []).map((o) => {
   if (o.expense?.amount_brl_cents) {
@@ -82,47 +82,87 @@ let queue = read(K.queue, []).map((o) => {
 });
 let rates = read(K.rates, {}); // { "BRL-COP": { "2026-11-14": 586.7 } }
 
-const settingsOf = () => server.settings ?? DEFAULT_SETTINGS;
-const pairKey = () => `${settingsOf().dest}-${settingsOf().home}`;
-const applySettings = () => setCurrencies(settingsOf().dest, settingsOf().home);
+// ---------- viajes ----------
+// Todo lo que depende de monedas (formato, tasas, gráfico) sigue al viaje activo. Los gastos en cola y los
+// del servidor llevan su propio viaje, así que un gasto guardado en un viaje no cambia de viaje si luego
+// se cambia el viaje activo antes de enviarlo.
+
+const DEFAULT_TRIP = { id: 'trip-1', name: 'Viaje 1', dest: DEFAULT_SETTINGS.dest, home: DEFAULT_SETTINGS.home, people_ids: [] };
+
+// Siempre hay al menos un viaje. Una copia local guardada antes de que existieran los viajes solo trae
+// `settings`: se lee como el primer viaje.
+function tripsList() {
+  if (server.trips?.length) return server.trips;
+  const s = server.settings ?? DEFAULT_SETTINGS;
+  return [{ ...DEFAULT_TRIP, dest: s.dest, home: s.home, people_ids: (server.people ?? []).map((p) => p.id) }];
+}
+
+let activeId = null;
+try {
+  activeId = localStorage.getItem(K.trip);
+} catch {
+  /* sin almacenamiento: se usa el primer viaje */
+}
+
+const tripById = (id) => tripsList().find((t) => t.id === id);
+const expenseTrip = (e) => tripById(e.trip_id ?? tripsList()[0].id);
+
+export const activeTrip = () => tripById(activeId) ?? tripsList()[0];
+const pairKey = (trip = activeTrip()) => `${trip.dest}-${trip.home}`;
+const applySettings = () => setCurrencies(activeTrip().dest, activeTrip().home);
 applySettings();
 
-function remember(date, rate) {
-  rates[pairKey()] ??= {};
-  rates[pairKey()][date] = rate;
+export function setActiveTrip(id) {
+  activeId = id;
+  try {
+    localStorage.setItem(K.trip, id);
+  } catch {
+    /* sin almacenamiento */
+  }
+  applySettings();
+  notify();
+}
+
+function remember(date, rate, trip = activeTrip()) {
+  const key = pairKey(trip);
+  rates[key] ??= {};
+  rates[key][date] = rate;
   write(K.rates, rates);
 }
 
 function rememberRates(expenses) {
   for (const e of expenses) {
-    if (e.rate && e.rate_date && !e.rate_estimated) remember(e.rate_date, e.rate);
+    const trip = expenseTrip(e);
+    if (trip && e.rate && e.rate_date && !e.rate_estimated) remember(e.rate_date, e.rate, trip);
   }
 }
 
 // Tasa conocida en el celular para esa fecha, o la anterior más cercana.
-export function localRate(date) {
-  const map = rates[pairKey()] ?? {};
+export function localRate(date, trip = activeTrip()) {
+  const map = rates[pairKey(trip)] ?? {};
   if (map[date]) return { rate: map[date], estimated: false };
   const earlier = Object.keys(map).filter((d) => d <= date).sort().pop();
   return earlier ? { rate: map[earlier], estimated: true } : null;
 }
 
 export async function fetchRate(date) {
+  const trip = activeTrip();
   try {
-    const r = await request('GET', `/api/rate?date=${date}`);
-    if (r?.rate && !r.estimated) remember(r.rate_date, r.rate);
+    const r = await request('GET', `/api/rate?date=${date}&trip=${encodeURIComponent(trip.id)}`);
+    if (r?.rate && !r.estimated) remember(r.rate_date, r.rate, trip);
     return r?.rate ? r : null;
   } catch {
-    const l = localRate(date);
+    const l = localRate(date, trip);
     return l ? { rate: l.rate, estimated: true, local: true } : null;
   }
 }
 
 // Historial de tasas para el gráfico: lo pide al servidor y guarda una copia por si no hay internet.
 export async function fetchHistory(days = 30) {
-  const key = `${pairKey()}|${days}`;
+  const trip = activeTrip();
+  const key = `${pairKey(trip)}|${days}`;
   try {
-    const points = await request('GET', `/api/rates/history?days=${days}`);
+    const points = await request('GET', `/api/rates/history?days=${days}&trip=${encodeURIComponent(trip.id)}`);
     write(K.hist, { ...read(K.hist, {}), [key]: points });
     return points;
   } catch (err) {
@@ -145,26 +185,35 @@ export async function refresh() {
   }
 }
 
-// Estado que ve la pantalla: lo del servidor + lo que está en cola sin enviar.
+// Estado que ve la pantalla: lo del servidor + lo que está en cola sin enviar, solo del viaje activo.
+// `participants` son las personas que van en ese viaje; `counts` cuenta los gastos de cada viaje.
 export function getState() {
-  let expenses = server.expenses.map((e) => ({ ...e }));
+  const trips = tripsList();
+  const trip = activeTrip();
+  let all = server.expenses.map((e) => ({ ...e, trip_id: e.trip_id ?? trips[0].id }));
   for (const op of queue) {
-    expenses = expenses.filter((e) => e.id !== op.id);
-    if (op.op === 'save') {
-      const x = op.expense;
-      const r = x.rate_manual ? { rate: x.rate_manual } : localRate(x.date);
-      expenses.push({
-        ...x,
-        pending: true,
-        rate: x.rate_manual ?? null,
-        rate_manual: x.rate_manual ? 1 : 0,
-        rate_estimated: r?.estimated ? 1 : 0,
-        amount_home: r ? toHome(x.amount_cents, r.rate, currencies().home.digits) : null,
-      });
-    }
+    all = all.filter((e) => e.id !== op.id);
+    if (op.op !== 'save') continue;
+    const x = op.expense;
+    const t = expenseTrip(x);
+    if (!t) continue; // el viaje se borró: el servidor lo rechazará al enviar
+    const r = x.rate_manual ? { rate: x.rate_manual } : localRate(x.date, t);
+    all.push({
+      ...x,
+      trip_id: t.id,
+      pending: true,
+      rate: x.rate_manual ?? null,
+      rate_manual: x.rate_manual ? 1 : 0,
+      rate_estimated: r?.estimated ? 1 : 0,
+      amount_home: r ? toHome(x.amount_cents, r.rate, currencyByCode(t.home).digits) : null,
+    });
   }
+  const counts = {};
+  for (const e of all) counts[e.trip_id] = (counts[e.trip_id] ?? 0) + 1;
+  const expenses = all.filter((e) => e.trip_id === trip.id);
   expenses.sort((a, b) => (a.date === b.date ? (b.created_at ?? '').localeCompare(a.created_at ?? '') : b.date.localeCompare(a.date)));
-  return { ...server, expenses };
+  const going = new Set(trip.people_ids);
+  return { ...server, trips, trip, expenses, counts, participants: server.people.filter((p) => going.has(p.id)) };
 }
 
 export const pendingCount = () => queue.length;
@@ -179,7 +228,8 @@ function enqueue(op) {
 }
 
 export function saveExpense(expense) {
-  enqueue({ op: 'save', id: expense.id, expense: { ...expense, created_at: expense.created_at ?? new Date().toISOString() } });
+  // El gasto queda atado al viaje activo al guardarlo, aunque se envíe más tarde.
+  enqueue({ op: 'save', id: expense.id, expense: { ...expense, trip_id: expense.trip_id ?? activeTrip().id, created_at: expense.created_at ?? new Date().toISOString() } });
   return flush();
 }
 
@@ -224,7 +274,8 @@ async function mutate(method, path, body) {
   return out;
 }
 
-export const saveSettings = (s) => mutate('PUT', '/api/settings', s);
+export const saveTrip = (t) => mutate(t.id ? 'PUT' : 'POST', t.id ? `/api/trips/${t.id}` : '/api/trips', t);
+export const deleteTrip = (id, withExpenses = false) => mutate('DELETE', `/api/trips/${id}${withExpenses ? '?con_gastos=1' : ''}`);
 export const savePerson = (p) => mutate(p.id ? 'PUT' : 'POST', p.id ? `/api/people/${p.id}` : '/api/people', p);
 export const deletePerson = (id) => mutate('DELETE', `/api/people/${id}`);
 export const saveMethod = (m) => mutate(m.id ? 'PUT' : 'POST', m.id ? `/api/payment-methods/${m.id}` : '/api/payment-methods', m);
