@@ -10,6 +10,20 @@
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="/icon-192.png">
+  <script>
+    // Aplica el tema antes de pintar para que no parpadee (la lógica completa está en js/theme.js).
+    (function () {
+      var r = document.documentElement;
+      var dark = window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches;
+      try {
+        var t = JSON.parse(localStorage.getItem('bg_theme') || '{}');
+        if (t.mode === 'dark') dark = true;
+        else if (t.mode === 'light') dark = false;
+        if (t.accent) r.dataset.accent = t.accent;
+      } catch (e) { /* sin almacenamiento: se queda con el modo del teléfono */ }
+      r.dataset.scheme = dark ? 'dark' : 'light';
+    })();
+  </script>
   <link rel="stylesheet" href="/css/app.css">
 </head>
 <body>

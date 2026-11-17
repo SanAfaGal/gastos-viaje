@@ -1,9 +1,9 @@
 // Service worker: guarda la app en el celular para que abra sin internet.
 // Los datos (API) NO pasan por aquí: los maneja store.js con su copia local y su cola.
-const CACHE = 'gastos-viaje-v3';
+const CACHE = 'gastos-viaje-v4';
 const SHELL = [
   '/', '/index.html', '/css/app.css', '/js/app.js', '/js/store.js', '/js/money.mjs',
-  '/js/settlement.mjs', '/js/currencies.mjs', '/js/chart.mjs', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png',
+  '/js/settlement.mjs', '/js/currencies.mjs', '/js/chart.mjs', '/js/theme.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png',
 ];
 
 self.addEventListener('install', (event) => {

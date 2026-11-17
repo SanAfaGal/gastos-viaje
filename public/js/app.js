@@ -3,6 +3,7 @@ import { computeSettlement, splitEqual } from './settlement.mjs';
 import { addDays, currencies, fmtDest, fmtHome, fmtRate, parseAmount, toHome, todayStr } from './money.mjs';
 import { CURRENCIES } from './currencies.mjs';
 import { sparkline } from './chart.mjs';
+import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 
 const $view = document.getElementById('view');
@@ -13,6 +14,7 @@ const $toast = document.getElementById('toast');
 const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
+// Aviso grande arriba de la pantalla. kind: 'ok' (verde, ✓) o 'error' (naranja/rojo, !, dura más). Se cierra al tocarlo.
 let toastTimer;
 function toast(msg, kind = 'ok') {
   const icon = document.createElement('span');
@@ -362,6 +364,7 @@ function viewSettings() {
   const m = editMethod ? (c.methodsById[editMethod] ?? {}) : {};
   const kind = m.kind ?? 'card';
   const cur = currencies();
+  const theme = getTheme();
   const locked = c.expenses.length > 0;
   const option = (code, sel) => {
     const x = CURRENCIES.find((k) => k.code === code);
@@ -377,6 +380,13 @@ function viewSettings() {
         ${locked ? '<p class="muted">Ya hay gastos registrados, por eso no se puede cambiar. Para cambiarlo, borra todos los gastos.</p>'
           : '<button class="btn" type="submit">Guardar</button>'}
       </form></div>
+
+    <div class="card"><h2>Apariencia</h2>
+      <label>Modo</label>
+      <div class="seg">${MODES.map((m) => `<button type="button" class="chip ${theme.mode === m.id ? 'on' : ''}" data-action="mode" data-id="${esc(m.id)}">${esc(m.name)}</button>`).join('')}</div>
+      <label>Color</label>
+      <div class="seg">${ACCENTS.map((a) => `<button type="button" class="chip ${theme.accent === a.id ? 'on' : ''}" data-action="accent" data-id="${esc(a.id)}"><span class="swatch" style="background:${esc(a.color)}"></span>${esc(a.name)}</button>`).join('')}</div>
+    </div>
 
     <div class="card"><h2>Personas</h2>
       ${c.people.map((x) => `<div class="pay row"><span><b>${esc(x.name)}</b></span>
@@ -530,7 +540,9 @@ $view.addEventListener('click', async (ev) => {
       toast('Gasto borrado');
       location.hash = '#/gastos';
     }
-  } else if (action === 'edit-person') { editPerson = id; render(); }
+  } else if (action === 'mode') { setTheme({ mode: id }); render(); }
+  else if (action === 'accent') { setTheme({ accent: id }); render(); }
+  else if (action === 'edit-person') { editPerson = id; render(); }
   else if (action === 'cancel-person') { editPerson = null; render(); }
   else if (action === 'edit-method') { editMethod = id; render(); }
   else if (action === 'cancel-method') { editMethod = null; render(); }

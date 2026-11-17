@@ -6,6 +6,7 @@
   --muted: #5f6f66;
   --border: #dde5df;
   --brand: #0b6b4a;
+  --brand-2: #0a8f61;
   --brand-ink: #ffffff;
   --accent: #f2b705;
   --pos: #0b6b4a;
@@ -18,29 +19,37 @@
   --warn-text: #7a5a00;
   --shadow: 0 1px 2px rgb(20 34 27 / .06), 0 4px 14px rgb(20 34 27 / .06);
   --radius: 16px;
-  color-scheme: light dark;
+  color-scheme: light;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0e1612;
-    --surface: #16211b;
-    --surface-2: #1d2b23;
-    --text: #e8f0ea;
-    --muted: #93a79b;
-    --border: #28382f;
-    --brand: #2fb583;
-    --brand-ink: #04170f;
-    --pos: #3ccf98;
-    --neg: #ff8a52;
-    --toast-ok-bg: #4ade80;
-    --toast-ok-text: #03140d;
-    --toast-err-bg: #ff8a52;
-    --toast-err-text: #2a0d01;
-    --warn-bg: #3a2f0a;
-    --warn-text: #f5d36b;
-    --shadow: none;
-  }
+/* Colores de acento (modo claro). El modo se fija con data-scheme="dark|light" (ver theme.js). */
+:root[data-accent="azul"] { --brand: #1d4ed8; --brand-2: #3b82f6; }
+:root[data-accent="morado"] { --brand: #6d28d9; --brand-2: #8b5cf6; }
+:root[data-accent="naranja"] { --brand: #c2410c; --brand-2: #f97316; }
+
+:root[data-scheme="dark"] {
+  --bg: #0e1612;
+  --surface: #16211b;
+  --surface-2: #1d2b23;
+  --text: #e8f0ea;
+  --muted: #93a79b;
+  --border: #28382f;
+  --brand: #2fb583;
+  --brand-2: #1f9d70;
+  --brand-ink: #04170f;
+  --pos: #3ccf98;
+  --neg: #ff8a52;
+  --toast-ok-bg: #4ade80;
+  --toast-ok-text: #03140d;
+  --toast-err-bg: #ff8a52;
+  --toast-err-text: #2a0d01;
+  --warn-bg: #3a2f0a;
+  --warn-text: #f5d36b;
+  --shadow: none;
+  color-scheme: dark;
 }
+:root[data-scheme="dark"][data-accent="azul"] { --brand: #60a5fa; --brand-2: #3b82f6; --brand-ink: #04101f; }
+:root[data-scheme="dark"][data-accent="morado"] { --brand: #a78bfa; --brand-2: #8b5cf6; --brand-ink: #120626; }
+:root[data-scheme="dark"][data-accent="naranja"] { --brand: #fb923c; --brand-2: #f97316; --brand-ink: #2a1002; }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -77,13 +86,13 @@ main { padding: 4px 16px calc(110px + env(safe-area-inset-bottom)); max-width: 6
 }
 .tabbar svg { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .tabbar a.active { color: var(--brand); font-weight: 600; }
-.tabbar a.fab { flex: 0 0 auto; width: 56px; height: 56px; margin-top: -22px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); justify-content: center; box-shadow: 0 6px 16px rgb(11 107 74 / .4); }
+.tabbar a.fab { flex: 0 0 auto; width: 56px; height: 56px; margin-top: -22px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); justify-content: center; box-shadow: 0 6px 16px color-mix(in srgb, var(--brand) 45%, transparent); }
 .tabbar a.fab svg { width: 28px; height: 28px; stroke-width: 2.4; }
 
 .card { background: var(--surface); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); border: 1px solid var(--border); margin-bottom: 12px; }
 .card h2 { margin: 0 0 8px; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
-.hero { background: linear-gradient(135deg, #0b6b4a, #0a8f61); color: #fff; border: 0; }
-.hero h2 { color: rgb(255 255 255 / .75); }
+.hero { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: var(--brand-ink); border: 0; }
+.hero h2 { color: inherit; opacity: .8; }
 .hero .big { font-size: 2.1rem; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .hero .sub { opacity: .85; font-size: .9rem; margin-top: 2px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
@@ -155,3 +164,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .login { max-width: 360px; margin: 18vh auto 0; text-align: center; }
 .login h2 { font-size: 1.4rem; color: var(--text); text-transform: none; letter-spacing: 0; }
 @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+
+.seg { display: flex; flex-wrap: wrap; gap: 8px; }
+.seg .chip { flex: 1 1 auto; text-align: center; }
+.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 8px; vertical-align: -2px; box-shadow: 0 0 0 2px rgb(255 255 255 / .5) inset; }

@@ -5,6 +5,7 @@ Registro de gastos de un viaje con amigos o familia. Eliges el país donde gasta
 - País y moneda a elegir (Brasil, Argentina, México, Europa, Japón... y tu moneda de casa), en Ajustes.
 - Tarjetas (nombre, últimos 4 dígitos, débito o crédito), transferencias y efectivo, cada uno con su dueño.
 - Gastos solo tuyos, de otra persona o compartidos en partes iguales.
+- Tema a gusto: modo automático, claro u oscuro y cuatro colores, en Ajustes, Apariencia.
 - Funciona en el celular como app instalable y guarda gastos sin internet; los envía al volver la conexión.
 - Sin framework: JavaScript normal en el navegador y Node en el servidor. Única dependencia: `@libsql/client` (solo para la versión en línea).
 
