@@ -1163,6 +1163,7 @@ Se usa la tasa que hoy da la fuente para el día de cada gasto. ¿Actualizar?`;
 
 let dragSt = null; // { item, card, ids, grab, timer, active, ... } mientras hay un gesto sobre un gasto
 let suppressClick = false;
+let movedAway = false; // el puntero se movió antes de la espera: con mouse, soltar no debe contar como clic
 const HOLD_MS = 380; // tiempo presionado para empezar a arrastrar
 const MOVE_TOL = 8; // si el dedo se mueve más antes de eso, es un scroll y no se arrastra
 
@@ -1224,6 +1225,7 @@ function dragFollow() {
 }
 
 $view.addEventListener('pointerdown', (ev) => {
+  movedAway = false;
   if (dragSt || ev.button > 0) return;
   const item = ev.target.closest('.item[data-id]');
   const card = item?.closest('.day-card[data-day]');
@@ -1238,7 +1240,7 @@ $view.addEventListener('pointermove', (ev) => {
   const st = dragSt;
   if (!st || ev.pointerId !== st.pid) return;
   st.y = ev.clientY;
-  if (!st.active && Math.hypot(ev.clientX - st.x0, ev.clientY - st.y0) > MOVE_TOL) { clearTimeout(st.timer); dragSt = null; }
+  if (!st.active && Math.hypot(ev.clientX - st.x0, ev.clientY - st.y0) > MOVE_TOL) { clearTimeout(st.timer); dragSt = null; movedAway = true; }
 });
 $view.addEventListener('pointerup', (ev) => { if (dragSt && ev.pointerId === dragSt.pid) dragEnd(true); });
 $view.addEventListener('pointercancel', (ev) => { if (dragSt && ev.pointerId === dragSt.pid) dragEnd(false); });
@@ -1246,7 +1248,14 @@ $view.addEventListener('pointercancel', (ev) => { if (dragSt && ev.pointerId ===
 $view.addEventListener('touchmove', (ev) => { if (dragSt?.active) ev.preventDefault(); }, { passive: false });
 // El menú del botón largo y la selección de texto estorban al arrastrar.
 $view.addEventListener('contextmenu', (ev) => { if (ev.target.closest('.day-card[data-day] .item')) ev.preventDefault(); });
-$view.addEventListener('click', (ev) => { if (suppressClick) { ev.stopPropagation(); ev.preventDefault(); } }, true);
+// El clic (si lo hay) llega justo después de soltar; pasado ese instante el aviso se apaga, para no tragarse
+// un clic posterior hecho con el teclado.
+for (const type of ['pointerup', 'pointercancel']) {
+  $view.addEventListener(type, () => { if (movedAway) setTimeout(() => { movedAway = false; }, 50); });
+}
+$view.addEventListener('click', (ev) => {
+  if (suppressClick || movedAway) { movedAway = false; ev.stopPropagation(); ev.preventDefault(); }
+}, true);
 
 // Recorrer el gráfico con el dedo, el mouse o las flechas del teclado.
 function scrubTo(ev) {
