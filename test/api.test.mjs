@@ -563,3 +563,33 @@ test('la tasa manual ya no existe: se ignora si llega y siempre se usa la de la 
   const e = (await call('GET', '/api/state')).body.expenses[0];
   assert.deepEqual([e.rate, e.rate_manual], [580, 0]);
 });
+
+test('medio de pago "por definir": el gasto se guarda sin medio, no cuenta en las cuentas y se puede definir después', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, body) => handle({ method, path, body, db });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 1000]);
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
+  await call('POST', '/api/people', { id: 'ana', name: 'Ana' });
+  const base = { date: '2026-11-14', amount_cents: 1000, description: 'Cena', beneficiary_ids: ['yo', 'ana'] };
+
+  // Sin ningún medio de pago en el viaje no hay con qué rellenar: error claro.
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'p1', payment_method_id: null })).status, 400);
+
+  await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'p1', payment_method_id: null })).status, 201);
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'p2', payment_method_id: '' })).status, 201);
+  // Un id de medio que no existe sigue siendo error (no se confunde con "por definir").
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'p3', payment_method_id: 'fantasma' })).status, 400);
+
+  const state = async () => (await call('GET', '/api/state')).body.expenses;
+  const byId = async (id) => (await state()).find((e) => e.id === id);
+  assert.equal((await byId('p1')).payment_method_id, null); // el relleno interno no sale
+  assert.equal('pay_pending' in (await byId('p1')), false);
+
+  // Definir el medio después lo vuelve un gasto normal.
+  await call('PUT', '/api/expenses/p1', { ...base, id: 'p1', payment_method_id: 'efe' });
+  assert.equal((await byId('p1')).payment_method_id, 'efe');
+  // Y volver a "por definir" también se puede.
+  await call('PUT', '/api/expenses/p1', { ...base, id: 'p1', payment_method_id: null });
+  assert.equal((await byId('p1')).payment_method_id, null);
+});

@@ -58,8 +58,14 @@ function ctx() {
 
 const personName = (c, id) => c.peopleById[id]?.name ?? '¿?';
 
+// "Por definir": se sabe que se debe el gasto pero no con qué se pagó. No es un medio real: en el servidor
+// el gasto queda con payment_method_id = null y fuera de las cuentas.
+const PENDING = 'pending';
+const PENDING_METHOD = { id: PENDING, kind: 'pending', name: 'Por definir' };
+
 function methodLabel(m) {
   if (!m) return 'Medio borrado';
+  if (m.kind === 'pending') return 'Medio por definir';
   if (m.kind === 'card') return `${m.name}${m.last4 ? ` ••${m.last4}` : ''} · ${m.card_type === 'credit' ? 'Crédito' : 'Débito'}`;
   // 'pix' es el código interno guardado en la base (de la primera versión); en pantalla se llama Transferencia
   return `${m.name} · ${m.kind === 'pix' ? 'Transferencia' : 'Efectivo'}`;
@@ -72,6 +78,7 @@ const cardColor = (m) => (isHexColor(m.color) ? m.color : suggestColor(m.name) ?
 const ICONS = {
   cash: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v.01M18 15v.01"/></svg>',
   pix: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h13M16 3l4 4-4 4M17 17H4M8 13l-4 4 4 4"/></svg>',
+  pending: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.4-1 .9-1 1.7M12 17v.01"/></svg>',
 };
 
 // Una tarjeta real solo para kind 'card' (banco, red, chip y número). Efectivo y transferencia no son
@@ -80,7 +87,7 @@ const ICONS = {
 function cardHtml(m, { owner = '', pick = false, on = false } = {}) {
   const { c1, c2, fg, shadow } = cardPaint(cardColor(m));
   const isCard = m.kind === 'card';
-  const kindText = isCard ? (m.card_type === 'credit' ? 'Crédito' : 'Débito') : m.kind === 'pix' ? 'Transferencia' : 'Efectivo';
+  const kindText = isCard ? (m.card_type === 'credit' ? 'Crédito' : 'Débito') : m.kind === 'pix' ? 'Transferencia' : m.kind === 'pending' ? 'Pendiente' : 'Efectivo';
   const cap = [isCard ? kindText : '', owner ? `de ${owner}` : ''].filter(Boolean).join(' · ');
   const face = isCard
     ? `<span class="pc-top"><span class="pc-bank">${esc(m.name || 'Nombre')}</span><span class="pc-net">${esc(NETWORK_MARK[m.network] ?? '')}</span></span>
@@ -168,8 +175,9 @@ function expenseItem(c, e) {
   return `<div class="item" data-action="edit" data-id="${esc(e.id)}">
     <div><div class="t">${esc(e.description || 'Gasto')}${hasLocation(e)
       ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">📍</button>` : ''}</div>
-      <div class="muted">${esc(methodLabel(m))}</div>
+      <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : esc(methodLabel(m))}</div>
       <span class="tag">${esc(forWho(c, e))}</span>
+      ${e.payment_method_id == null ? '<span class="tag warn">Sin medio de pago</span>' : ''}
       ${e.pending ? '<span class="tag warn">Sin enviar</span>' : ''}
       ${e.amount_home == null ? '<span class="tag warn">Esperando tasa</span>' : ''}
       ${e.rate_estimated ? '<span class="tag warn">Tasa estimada</span>' : ''}
@@ -223,7 +231,7 @@ function viewList() {
   const q = filters.q.trim().toLowerCase();
   const list = c.expenses.filter((e) =>
     (!q || e.description.toLowerCase().includes(q)) &&
-    (!filters.method || e.payment_method_id === filters.method) &&
+    (!filters.method || (filters.method === PENDING ? e.payment_method_id == null : e.payment_method_id === filters.method)) &&
     (!filters.person || e.beneficiary_ids.includes(filters.person)) &&
     (!filters.approx || e.amount_approx));
   const approxCount = c.expenses.filter((e) => e.amount_approx).length;
@@ -239,7 +247,8 @@ function viewList() {
     <div class="filters">
       <input id="f-q" type="search" placeholder="Buscar descripción" value="${esc(filters.q)}">
       <select id="f-method"><option value="">Todos los medios</option>
-        ${c.payMethods.map((m) => `<option value="${esc(m.id)}" ${filters.method === m.id ? 'selected' : ''}>${esc(methodLabel(m))}</option>`).join('')}</select>
+        ${c.payMethods.map((m) => `<option value="${esc(m.id)}" ${filters.method === m.id ? 'selected' : ''}>${esc(methodLabel(m))}</option>`).join('')}
+        ${c.expenses.some((e) => e.payment_method_id == null) ? `<option value="${PENDING}" ${filters.method === PENDING ? 'selected' : ''}>Por definir</option>` : ''}</select>
       <select id="f-person"><option value="">Para cualquiera</option>
         ${c.people.map((p) => `<option value="${esc(p.id)}" ${filters.person === p.id ? 'selected' : ''}>${esc(personName(c, p.id))}</option>`).join('')}</select>
       ${approxCount ? `<button type="button" class="chip ${filters.approx ? 'on' : ''}" data-action="f-approx" aria-pressed="${filters.approx}">Aproximados (${approxCount})</button>` : ''}
@@ -256,11 +265,11 @@ function viewList() {
 
 let draft = null;
 let convRate = null; // { rate, estimated } para la fecha del formulario
-let lastMethod = localStorage.getItem('bg_lastMethod') ?? '';
 let lastBenes = JSON.parse(localStorage.getItem('bg_lastBenes') ?? '[]');
 
 function newDraft(c, date = todayStr()) {
-  const method = c.payMethods.some((m) => m.id === lastMethod) ? lastMethod : (c.payMethods[0]?.id ?? '');
+  // El medio de pago empieza vacío: hay que elegirlo a propósito (o marcar "Por definir").
+  const method = '';
   const going = new Set(c.people.map((p) => p.id));
   const benes = lastBenes.filter((id) => going.has(id));
   return { id: null, date, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), created_at: null, approx: false, lat: null, lng: null, place: '' };
@@ -271,7 +280,7 @@ function draftFrom(c, id) {
   if (!e) return null;
   return {
     id: e.id, date: e.date, amountText: (e.amount_cents / 100).toFixed(2).replace('.', ','),
-    desc: e.description, method: e.payment_method_id, benes: new Set(e.beneficiary_ids),
+    desc: e.description, method: e.payment_method_id ?? PENDING, benes: new Set(e.beneficiary_ids),
     created_at: e.created_at,
     approx: Boolean(e.amount_approx),
     lat: hasLocation(e) ? Number(e.lat) : null, lng: hasLocation(e) ? Number(e.lng) : null, place: e.place ?? '',
@@ -326,6 +335,43 @@ function locate() {
   }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
 }
 
+// Con muchos medios de pago el carrusel se vuelve largo. Se ordenan por el uso más reciente (los que más
+// usas quedan al principio) y, si hay varios dueños, se puede filtrar por dueño. "Por definir" va siempre al final.
+const MANY_METHODS = 4;
+
+function methodsByRecentUse(c) {
+  const last = new Map();
+  for (const e of c.expenses) {
+    if (e.payment_method_id == null) continue;
+    const t = `${e.date}|${e.created_at ?? ''}`;
+    if (t > (last.get(e.payment_method_id) ?? '')) last.set(e.payment_method_id, t);
+  }
+  return [...c.payMethods].sort((a, b) => (last.get(b.id) ?? '').localeCompare(last.get(a.id) ?? ''));
+}
+
+function ownerFilterHtml(c) {
+  const owners = [...new Set(c.payMethods.map((m) => m.owner_person_id))];
+  if (c.payMethods.length <= MANY_METHODS || owners.length < 2) return '';
+  const chip = (id, label) => `<button type="button" class="chip small ${(draft.owner ?? '') === id ? 'on' : ''}" data-action="pm-owner" data-id="${esc(id)}" aria-pressed="${(draft.owner ?? '') === id}">${esc(label)}</button>`;
+  return `<div class="chips owner-f" id="owner-f" aria-label="Filtrar medios por dueño">${chip('', 'Todos')}${owners.map((o) => chip(o, personName(c, o))).join('')}</div>`;
+}
+
+function cardsHtml(c) {
+  const shown = methodsByRecentUse(c).filter((m) => !draft.owner || m.owner_person_id === draft.owner || m.id === draft.method);
+  return shown.map((m) => cardHtml(m, { owner: personName(c, m.owner_person_id), pick: true, on: m.id === draft.method })).join('')
+    + cardHtml(PENDING_METHOD, { pick: true, on: draft.method === PENDING });
+}
+
+function paintCards() {
+  const c = ctx();
+  const box = document.getElementById('cards');
+  if (!box || !draft) return;
+  box.innerHTML = cardsHtml(c);
+  box.scrollLeft = 0;
+  const f = document.getElementById('owner-f');
+  if (f) f.outerHTML = ownerFilterHtml(c);
+}
+
 function viewForm(editId) {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
@@ -351,9 +397,9 @@ function viewForm(editId) {
       <input id="date" type="date" max="${todayStr()}" value="${esc(draft.date)}">
 
       <label id="cards-l">Pagado con</label>
-      <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">
-        ${c.payMethods.map((m) => cardHtml(m, { owner: personName(c, m.owner_person_id), pick: true, on: m.id === draft.method })).join('')}
-      </div>
+      ${ownerFilterHtml(c)}
+      <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">${cardsHtml(c)}</div>
+      <div class="muted hint">¿No sabes con qué se pagó? Elige "Por definir" y lo completas después; ese gasto no entra en las cuentas hasta entonces.</div>
 
       <label>¿Para quién es? (se divide en partes iguales)</label>
       <div class="chips" id="benes">
@@ -508,16 +554,14 @@ async function submitForm(then) {
     date: draft.date,
     amount_cents: cents,
     description: draft.desc.trim(),
-    payment_method_id: draft.method,
+    payment_method_id: draft.method === PENDING ? null : draft.method,
     beneficiary_ids: [...draft.benes],
     created_at: draft.created_at ?? undefined,
     amount_approx: draft.approx,
     // null explícito: al editar y quitar la ubicación, el servidor la borra.
     lat: draft.lat, lng: draft.lng, place: draft.lat == null ? null : draft.place.trim(),
   };
-  lastMethod = draft.method;
   lastBenes = [...draft.benes];
-  localStorage.setItem('bg_lastMethod', lastMethod);
   localStorage.setItem('bg_lastBenes', JSON.stringify(lastBenes));
   const keepDate = draft.date;
   const wasEdit = Boolean(draft.id);
@@ -541,8 +585,10 @@ function viewAccounts() {
   if (needsSetup(c)) return setupCard();
   const s = settlementOf(c);
   const byMethod = {};
-  for (const e of c.expenses) byMethod[e.payment_method_id] = (byMethod[e.payment_method_id] ?? 0) + (e.amount_home ?? 0);
+  for (const e of c.expenses) byMethod[e.payment_method_id ?? PENDING] = (byMethod[e.payment_method_id ?? PENDING] ?? 0) + (e.amount_home ?? 0);
+  const noMethod = c.expenses.filter((e) => e.payment_method_id == null).length;
   return `
+    ${noMethod ? `<div class="banner">${noMethod} gasto(s) con el medio de pago por definir; no entran en estas cuentas hasta que les pongas medio.</div>` : ''}
     ${s.pending ? `<div class="banner">${s.pending} gasto(s) sin tasa todavía; no entran en estas cuentas hasta convertirse.</div>` : ''}
     <div class="card"><h2>Quién le paga a quién</h2>
       ${s.transfers.length ? s.transfers.map((t) => `<div class="pay row"><span><b>${esc(personName(c, t.from))}</b> le paga a <b>${esc(personName(c, t.to))}</b></span><span class="num">${fmtHome(t.amount)}</span></div>`).join('')
@@ -555,6 +601,7 @@ function viewAccounts() {
     </div>
     <div class="card"><h2>Gastado por medio de pago</h2>
       ${c.payMethods.map((m) => `<div class="pay row"><span>${esc(methodLabel(m))}<div class="muted">de ${esc(personName(c, m.owner_person_id))}</div></span><span class="num">${fmtHome(byMethod[m.id] ?? 0)}</span></div>`).join('')}
+      ${noMethod ? `<div class="pay row"><span>Por definir<div class="muted">sin medio de pago</div></span><span class="num">${fmtHome(byMethod[PENDING] ?? 0)}</span></div>` : ''}
     </div>`;
 }
 
@@ -721,9 +768,30 @@ function viewMap() {
       <div class="empty">Aún no hay gastos con ubicación. Al agregar o editar un gasto, usa “Usar mi ubicación” o “Buscar o elegir en el mapa”.</div>
       <a class="btn secondary" href="#/gastos">Ir a Gastos</a></div>`;
   }
-  return `<div class="muted" style="margin:0 4px 6px">${n} gasto(s) con ubicación en ${esc(c.trip.name)} · el número es el orden en que llegaste a cada lugar</div>
+  const { places } = routeFrom(c.expenses);
+  const chip = (p) => {
+    const tag = places.length > 1 && p.n === 1 ? 'Inicio' : places.length > 1 && p.n === places.length ? 'Último' : '';
+    return `<button type="button" class="stop-chip" data-action="map-stop" data-id="${p.n}">
+      <span class="stop-n ${tag === 'Último' ? 'last' : ''}">${p.n}</span>
+      <span class="stop-t"><b>${esc(p.place || 'Sin nombre')}</b><span>${tag ? `${tag} · ` : ''}${esc(dayLabel(p.first_date))} · ${fmtHome(p.total_home)}</span></span></button>`;
+  };
+  return `<div class="map-head">
+      <a class="map-back" href="${esc(lastNonMap)}"><span aria-hidden="true">‹</span> Volver</a>
+      <div class="map-sum"><b>${places.length} lugar(es)</b><span>${n} gasto(s) · ${esc(c.trip.name)}</span></div>
+    </div>
     <div id="map" class="map" role="region" aria-label="Mapa de lugares"><div class="empty">Cargando mapa…</div></div>
-    <a class="btn secondary" href="#/">Volver</a>`;
+    <div class="stops" aria-label="Paradas, en el orden en que llegaste">${places.map(chip).join('')}</div>`;
+}
+
+// A qué pantalla vuelve el botón "Volver" del mapa: la última que no fue el mapa.
+let lastNonMap = '#/gastos';
+const stopMarkers = new Map(); // número de parada -> marcador de Leaflet
+
+function focusStop(n) {
+  const marker = stopMarkers.get(Number(n));
+  if (!marker || !leafletMap) return;
+  leafletMap.flyTo(marker.getLatLng(), Math.max(leafletMap.getZoom(), 16), { duration: 0.6 });
+  marker.openPopup();
 }
 
 async function initMap() {
@@ -744,21 +812,27 @@ async function initMap() {
   const { places, path } = routeFrom(c.expenses);
   let focus = null; // el lugar del gasto que se pidió ver (desde el pin de la lista)
   el.innerHTML = '';
-  const map = L.map(el);
+  const map = L.map(el, { zoomControl: false });
   leafletMap = map;
+  L.control.zoom({ position: 'bottomright', zoomInTitle: 'Acercar', zoomOutTitle: 'Alejar' }).addTo(map);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
     maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
   }).addTo(map);
   // El recorrido (línea punteada) va debajo; encima, cada parada numerada por orden de primera visita.
-  if (path.length > 1) L.polyline(path, { weight: 3, opacity: 0.6, dashArray: '6 8', interactive: false }).addTo(map);
+  const brand = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#0b6b4a';
+  if (path.length > 1) L.polyline(path, { color: brand, weight: 4, opacity: 0.75, dashArray: '2 9', lineCap: 'round', interactive: false }).addTo(map);
+  stopMarkers.clear();
   for (const p of places) {
-    const lines = p.ids.slice(0, 5).map((id) => esc(byId[id]?.description || 'Gasto'));
-    const more = p.ids.length > 5 ? `<br>y ${p.ids.length - 5} más` : '';
+    const lines = p.ids.slice(0, 5).map((id) => `<li>${esc(byId[id]?.description || 'Gasto')}</li>`).join('');
+    const more = p.ids.length > 5 ? `<li class="more">y ${p.ids.length - 5} más</li>` : '';
     const when = p.first_date === p.last_date ? dayLabel(p.first_date) : `${dayLabel(p.first_date)} a ${dayLabel(p.last_date)}`;
-    const html = `<b>Parada ${p.n}: ${esc(p.place || formatCoords(p.lat, p.lng))}</b><br>${esc(when)}<br>
-      ${lines.join('<br>')}${more}<br><b>${fmtHome(p.total_home)}</b> · ${fmtDest(p.total_dest)}`;
-    const icon = L.divIcon({ className: 'stop', html: `<span>${p.n}</span>`, iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -15] });
-    const marker = L.marker([p.lat, p.lng], { icon, title: `Parada ${p.n}`, alt: `Parada ${p.n}` }).addTo(map).bindPopup(html);
+    const html = `<div class="pop"><div class="pop-t">Parada ${p.n}</div><b>${esc(p.place || formatCoords(p.lat, p.lng))}</b>
+      <div class="pop-d">${esc(when)}</div><ul>${lines}${more}</ul>
+      <div class="pop-total">${fmtHome(p.total_home)} <span>${fmtDest(p.total_dest)}</span></div></div>`;
+    const last = places.length > 1 && p.n === places.length;
+    const icon = L.divIcon({ className: `stop${last ? ' last' : ''}`, html: `<span>${p.n}</span>`, iconSize: [34, 34], iconAnchor: [17, 17], popupAnchor: [0, -17] });
+    const marker = L.marker([p.lat, p.lng], { icon, title: `Parada ${p.n}`, alt: `Parada ${p.n}` }).addTo(map).bindPopup(html, { maxWidth: 260 });
+    stopMarkers.set(p.n, marker);
     if (mapFocus && p.ids.includes(mapFocus)) focus = { p, marker };
   }
   const pts = places.map((p) => [p.lat, p.lng]);
@@ -903,7 +977,7 @@ function downloadCsv() {
   const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', cur.dest.code, 'Tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
   for (const e of [...c.expenses].sort(compareChronological)) {
     const m = c.methodsById[e.payment_method_id];
-    rows.push([e.date, e.description, methodLabel(m), personName(c, m?.owner_person_id),
+    rows.push([e.date, e.description, e.payment_method_id == null ? 'Por definir' : methodLabel(m), m ? personName(c, m.owner_person_id) : '',
       e.beneficiary_ids.map((id) => personName(c, id)).join(' + '),
       (e.amount_cents / 100).toFixed(2), e.rate ?? '', e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
       e.amount_approx ? 'Sí' : '', hasLocation(e) ? e.lat : '', hasLocation(e) ? e.lng : '', e.place ?? '']);
@@ -976,6 +1050,7 @@ function render() {
   $title.textContent = r.title;
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === r.tab));
   if (!r.map && leafletMap) { leafletMap.remove(); leafletMap = null; }
+  if (!r.map) lastNonMap = location.hash || '#/';
   $view.innerHTML = r.view(m);
   if (r.map) initMap();
   if (isFormRoute() && draft) { updateConv(); renderChart(); centerPicked(); }
@@ -1084,6 +1159,8 @@ $view.addEventListener('click', async (ev) => {
   };
   if (action === 'edit') location.hash = `#/nuevo/${encodeURIComponent(id)}`;
   else if (action === 'show-place') location.hash = `#/mapa/${encodeURIComponent(id)}`;
+  else if (action === 'map-stop') focusStop(id);
+  else if (action === 'pm-owner') { draft.owner = id; paintCards(); }
   else if (action === 'bene') {
     draft.benes.has(id) ? draft.benes.delete(id) : draft.benes.add(id);
     t.classList.toggle('on', draft.benes.has(id));

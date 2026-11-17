@@ -65,7 +65,8 @@ CREATE TABLE IF NOT EXISTS expenses (
   lng REAL,
   place TEXT,
   amount_approx INTEGER NOT NULL DEFAULT 0,
-  sort_order INTEGER
+  sort_order INTEGER,
+  pay_pending INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (

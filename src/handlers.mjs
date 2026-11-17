@@ -110,7 +110,7 @@ async function peopleInTripExpenses(db, tripId) {
   const rows = await db.all(
     `SELECT eb.person_id AS p FROM expense_beneficiaries eb JOIN expenses e ON e.id = eb.expense_id WHERE e.trip_id = ?
      UNION
-     SELECT m.owner_person_id FROM expenses e JOIN payment_methods m ON m.id = e.payment_method_id WHERE e.trip_id = ?`,
+     SELECT m.owner_person_id FROM expenses e JOIN payment_methods m ON m.id = e.payment_method_id WHERE e.trip_id = ? AND e.pay_pending = 0`,
     [tripId, tripId],
   );
   return new Set(rows.map((r) => r.p));
@@ -276,9 +276,21 @@ async function saveExpense(db, id, body) {
   const settings = tripPair(trip);
   const going = await tripPeople(db, trip.id);
 
-  const method = await db.all('SELECT id, owner_person_id FROM payment_methods WHERE id = ?', [body.payment_method_id]);
-  if (!method.length) fail(400, 'El medio de pago no existe');
-  if (!going.has(method[0].owner_person_id)) fail(400, 'El dueño de ese medio de pago no va en este viaje');
+  // Medio "por definir": se sabe que se debe el gasto pero no con qué se pagó. La columna payment_method_id
+  // no admite vacío, así que se guarda un medio de relleno de alguien del viaje y se marca pay_pending.
+  // Ese gasto no entra en las cuentas y el relleno no se muestra (getState lo devuelve como null).
+  const payPending = body.payment_method_id == null || body.payment_method_id === '';
+  let methodId = body.payment_method_id;
+  if (payPending) {
+    const own = await db.all('SELECT id, owner_person_id FROM payment_methods ORDER BY name COLLATE NOCASE');
+    const filler = own.find((m) => going.has(m.owner_person_id));
+    if (!filler) fail(400, 'Agrega un medio de pago de alguien del viaje antes de registrar gastos');
+    methodId = filler.id;
+  } else {
+    const method = await db.all('SELECT id, owner_person_id FROM payment_methods WHERE id = ?', [methodId]);
+    if (!method.length) fail(400, 'El medio de pago no existe');
+    if (!going.has(method[0].owner_person_id)) fail(400, 'El dueño de ese medio de pago no va en este viaje');
+  }
 
   const ids = [...new Set(body.beneficiary_ids ?? [])];
   if (!ids.length) fail(400, 'Indica para quién es el gasto');
@@ -318,8 +330,8 @@ async function saveExpense(db, id, body) {
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
               rate, rate_date, rate_estimated, rate_manual, amount_home, created_at, trip_id,
-              lat, lng, place, amount_approx)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              lat, lng, place, amount_approx, pay_pending)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
@@ -328,10 +340,11 @@ async function saveExpense(db, id, body) {
               amount_home = excluded.amount_home,
               lat = excluded.lat, lng = excluded.lng, place = excluded.place,
               amount_approx = excluded.amount_approx,
+              pay_pending = excluded.pay_pending,
               sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
-      args: [id, body.date, cents, description, body.payment_method_id, rate, rateDate,
+      args: [id, body.date, cents, description, methodId, rate, rateDate,
         estimated, 0, amountHome, new Date().toISOString(), trip.id,
-        lat, lng, place, approx],
+        lat, lng, place, approx, payPending ? 1 : 0],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     ...ids.map((p) => ({
@@ -451,7 +464,10 @@ async function getState(db) {
     trips: trips.map((t) => ({ id: t.id, name: t.name, dest: t.dest_currency, home: t.home_currency, people_ids: byTrip.get(t.id) ?? [] })),
     people,
     payment_methods: methods,
-    expenses: expenses.map((e) => ({ ...e, beneficiary_ids: byExpense.get(e.id) ?? [] })),
+    // Con medio por definir (pay_pending) el relleno interno no sale: payment_method_id llega como null.
+    expenses: expenses.map(({ pay_pending: pp, ...e }) => ({
+      ...e, payment_method_id: pp ? null : e.payment_method_id, beneficiary_ids: byExpense.get(e.id) ?? [],
+    })),
   };
 }
 

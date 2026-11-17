@@ -28,7 +28,7 @@ export const isHexColor = (v) => typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.te
 
 export const DEFAULT_COLOR = '#3b4252';
 // Color de partida según el tipo de medio, si no se eligió otro.
-export const KIND_COLOR = { card: '#3b4252', pix: '#2563eb', cash: '#0d8a6a' };
+export const KIND_COLOR = { card: '#3b4252', pix: '#2563eb', cash: '#0d8a6a', pending: '#6b7280' };
 
 // Bancos frecuentes con un color sugerido. El nombre del medio es de texto libre (suele ser el banco);
 // si contiene alguno de estos nombres, la tarjeta toma su color cuando no se eligió otro.
