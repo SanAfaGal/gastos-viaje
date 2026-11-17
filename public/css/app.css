@@ -180,6 +180,74 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .seg .chip { flex: 1 1 auto; text-align: center; }
 .swatch { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 8px; vertical-align: -2px; box-shadow: 0 0 0 2px rgb(255 255 255 / .5) inset; }
 
+/* Medios de pago. La tarjeta (.pcard) lleva solo lo que lleva la física: banco, red, chip, número y nombre.
+   Tipo y dueño van en el pie (.pcap). Efectivo y transferencia usan la ficha plana (.flat), sin chip ni número.
+   Los colores llegan por --c1/--c2 desde cards.mjs. */
+.pitem { display: block; width: 100%; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; }
+.colorrow { display: flex; align-items: center; gap: 12px; }
+.colorrow input[type="color"] { flex: none; width: 72px; height: 46px; padding: 3px; border-radius: 12px; cursor: pointer; }
+.pcard {
+  position: relative; display: flex; flex-direction: column; justify-content: space-between;
+  aspect-ratio: 1.586; padding: 18px 20px; border-radius: 18px; color: var(--fg, #fff); text-shadow: var(--tsh, none);
+  background: linear-gradient(135deg, var(--c1), var(--c2)); box-shadow: 0 6px 16px rgb(0 0 0 / .18); overflow: hidden;
+}
+.pcard::after { content: ""; position: absolute; right: -25%; bottom: -50%; width: 85%; aspect-ratio: 1; border-radius: 50%; background: color-mix(in srgb, var(--fg, #fff) 9%, transparent); pointer-events: none; }
+.pcard > span { display: block; position: relative; z-index: 1; }
+.pc-top { display: flex !important; justify-content: space-between; align-items: center; gap: 12px; min-height: 28px; }
+.pc-bank { font-size: .85rem; font-weight: 700; letter-spacing: .03em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-net { flex: none; font-style: italic; font-weight: 800; font-size: 1rem; }
+.pc-chip { width: 38px; height: 28px; border-radius: 6px; background: linear-gradient(135deg, #ecd68f, #b8923a); box-shadow: inset 0 0 0 1px rgb(0 0 0 / .2); }
+.pc-bot { display: flex !important; flex-direction: column; gap: 6px; }
+.pc-num { font-size: 1.1rem; letter-spacing: .14em; font-variant-numeric: tabular-nums; min-height: 1.3em; }
+.pc-name { font-size: .95rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pcard.flat .pc-name { font-size: 1.15rem; font-weight: 700; }
+.pc-ico svg { display: block; width: 30px; height: 30px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.pcard.flat .pc-bank { text-transform: uppercase; font-size: .75rem; letter-spacing: .08em; opacity: .9; }
+.pcap { display: block; margin-top: 8px; font-size: .8rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pc-check { display: none !important; position: absolute !important; top: 12px; right: 12px; width: 24px; height: 24px; place-items: center; border-radius: 50%; background: #fff; color: #111; font-size: .9rem; font-weight: 800; text-shadow: none; }
+.pitem.on .pc-check { display: grid !important; }
+.pitem.on .pc-net, .pitem.on .pcard.flat .pc-bank { margin-right: 32px; }
+.preview { max-width: 300px; margin: 0 auto 6px; }
+
+/* Diálogo para crear o editar un medio de pago: la tarjeta queda fija arriba, los campos
+   hacen scroll en el medio y los botones quedan fijos abajo. En celular sube desde abajo. */
+dialog.sheet {
+  width: min(100%, 520px); max-width: 100%; max-height: min(100dvh, 760px); margin: auto; padding: 0;
+  border: 1px solid var(--border); border-radius: 20px; background: var(--surface); color: var(--text);
+  box-shadow: 0 20px 60px rgb(0 0 0 / .45); overflow: hidden;
+}
+dialog.sheet[open] { display: flex; }
+dialog.sheet::backdrop { background: rgb(0 0 0 / .55); }
+dialog.sheet form { display: flex; flex-direction: column; flex: 1; min-height: 0; width: 100%; }
+.sheet-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 6px; }
+.sheet-head h2 { margin: 0; font-size: 1.05rem; text-transform: none; letter-spacing: 0; color: var(--text); }
+.sheet-x { width: 36px; height: 36px; border: 0; border-radius: 50%; background: var(--surface-2); color: var(--text); font-size: 1.4rem; line-height: 1; cursor: pointer; }
+.sheet-preview { flex: none; padding: 6px 16px 12px; background: var(--surface); border-bottom: 1px solid var(--border); }
+.sheet-preview .pitem { max-width: 260px; margin: 0 auto; }
+.sheet-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 16px; }
+.sheet-foot { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 16px calc(12px + env(safe-area-inset-bottom)); border-top: 1px solid var(--border); background: var(--surface); }
+.sheet-foot .btn { flex: 1; margin-top: 0; width: auto; }
+.form-error { flex: 1 1 100%; margin: 0; padding: 8px 12px; border-radius: 10px; background: var(--warn-bg); color: var(--warn-text); font-size: .9rem; font-weight: 600; }
+.form-error[hidden] { display: none; }
+body:has(dialog[open]) { overflow: hidden; }
+@media (max-width: 599px) {
+  dialog.sheet { width: 100%; margin: auto 0 0; max-height: 92dvh; border-radius: 20px 20px 0 0; border-bottom: 0; }
+}
+
+/* Carrusel "Pagado con": desliza de lado y se frena en cada tarjeta. */
+.cards {
+  position: relative; display: flex; align-items: flex-start; gap: 14px; overflow-x: auto; padding: 8px 16px 14px; margin: 0 -16px;
+  scroll-snap-type: x mandatory; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+}
+.cards::-webkit-scrollbar { display: none; }
+.cards .pitem { flex: 0 0 min(80%, 290px); width: auto; scroll-snap-align: center; cursor: pointer; opacity: .7; transform: scale(.96); transition: transform .15s ease, opacity .15s ease; }
+.cards .pitem.on { opacity: 1; transform: none; }
+.cards .pitem.on .pcard { box-shadow: 0 0 0 3px var(--brand), 0 8px 20px rgb(0 0 0 / .25); }
+.cards .pitem.on .pcap { color: var(--text); font-weight: 600; }
+.cards .pitem:focus-visible { outline: 3px solid var(--brand); outline-offset: 3px; border-radius: 20px; }
+.cards .pitem:active, .cards .pitem.pressed { transform: scale(.95); }
+@media (prefers-reduced-motion: reduce) { .cards .pitem { transition: none; } }
+
 /* Toque: respuesta inmediata. */
 html { -webkit-tap-highlight-color: transparent; }
 button, a, .item, .chip { touch-action: manipulation; }

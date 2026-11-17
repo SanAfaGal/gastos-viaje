@@ -2,6 +2,7 @@
 import { computeSettlement, splitEqual } from './settlement.mjs';
 import { addDays, currencies, fmtDest, fmtHome, fmtRate, parseAmount, toHome, todayStr } from './money.mjs';
 import { CURRENCIES } from './currencies.mjs';
+import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, detectNetwork, isHexColor, suggestColor } from './cards.mjs';
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
 import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
@@ -47,9 +48,72 @@ const personName = (c, id) => c.peopleById[id]?.name ?? '¿?';
 
 function methodLabel(m) {
   if (!m) return 'Medio borrado';
-  if (m.kind === 'card') return `${m.name} ••${m.last4} · ${m.card_type === 'credit' ? 'Crédito' : 'Débito'}`;
+  if (m.kind === 'card') return `${m.name}${m.last4 ? ` ••${m.last4}` : ''} · ${m.card_type === 'credit' ? 'Crédito' : 'Débito'}`;
   // 'pix' es el código interno guardado en la base (de la primera versión); en pantalla se llama Transferencia
   return `${m.name} · ${m.kind === 'pix' ? 'Transferencia' : 'Efectivo'}`;
+}
+
+// Color de la tarjeta: el elegido, si no el sugerido por el banco, si no el del tipo de medio.
+const cardColor = (m) => (isHexColor(m.color) ? m.color : suggestColor(m.name) ?? KIND_COLOR[m.kind] ?? DEFAULT_COLOR);
+
+// Tarjeta dibujada (estilizada). Con pick=true es un botón del carrusel "Pagado con".
+const ICONS = {
+  cash: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="6" width="20" height="12" rx="2"/><circle cx="12" cy="12" r="3"/><path d="M6 9v.01M18 15v.01"/></svg>',
+  pix: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h13M16 3l4 4-4 4M17 17H4M8 13l-4 4 4 4"/></svg>',
+};
+
+// Una tarjeta real solo para kind 'card' (banco, red, chip y número). Efectivo y transferencia no son
+// tarjetas: se dibujan como una ficha plana, sin chip ni número. Los datos del dueño y el tipo van
+// en un pie debajo, para no amontonar la tarjeta. Con pick=true es un botón del carrusel "Pagado con".
+function cardHtml(m, { owner = '', pick = false, on = false } = {}) {
+  const { c1, c2, fg, shadow } = cardPaint(cardColor(m));
+  const isCard = m.kind === 'card';
+  const kindText = isCard ? (m.card_type === 'credit' ? 'Crédito' : 'Débito') : m.kind === 'pix' ? 'Transferencia' : 'Efectivo';
+  const cap = [isCard ? kindText : '', owner ? `de ${owner}` : ''].filter(Boolean).join(' · ');
+  const face = isCard
+    ? `<span class="pc-top"><span class="pc-bank">${esc(m.name || 'Nombre')}</span><span class="pc-net">${esc(NETWORK_MARK[m.network] ?? '')}</span></span>
+       <span class="pc-chip"></span>
+       <span class="pc-bot"><span class="pc-num">${m.last4 ? `•••• ${esc(m.last4)}` : ''}</span></span>`
+    : `<span class="pc-top"><span class="pc-ico">${ICONS[m.kind] ?? ICONS.cash}</span><span class="pc-bank">${esc(kindText)}</span></span>
+       <span class="pc-bot"><span class="pc-name">${esc(m.name || 'Nombre')}</span></span>`;
+  const inner = `<span class="pcard ${isCard ? '' : 'flat'}" style="--c1:${c1};--c2:${c2};--fg:${fg};--tsh:${shadow}">${face}<span class="pc-check" aria-hidden="true">✓</span></span>
+    <span class="pcap">${esc(cap)}</span>`;
+  return pick
+    ? `<button type="button" class="pitem ${on ? 'on' : ''}" role="radio" aria-checked="${on}" data-action="pick-method" data-id="${esc(m.id)}">${inner}</button>`
+    : `<div class="pitem">${inner}</div>`;
+}
+
+// Vista previa de la tarjeta en el formulario de Ajustes, con lo que se va escribiendo.
+function paintPreview() {
+  const box = document.getElementById('card-preview');
+  if (!box) return;
+  const g = (id) => document.getElementById(id);
+  const owner = g('m-owner').value ? g('m-owner').selectedOptions[0].textContent : '';
+  const m = {
+    kind: g('m-kind').value, name: g('m-name').value.trim(), last4: g('m-last4').value.trim(),
+    card_type: g('m-type').value, network: g('m-network').value, color: g('m-color').value,
+  };
+  box.innerHTML = cardHtml(m, { owner });
+  // En automático, el selector muestra el color que se está usando (el del banco o el del tipo de medio).
+  if (!m.color) g('m-color-pick').value = cardColor(m);
+  g('m-auto').classList.toggle('on', !m.color);
+}
+
+// Los primeros dígitos solo sirven para reconocer la red; no se envían ni se guardan.
+// El selector de color fija el color; "Automático" lo deja vacío para que lo decida la app.
+function onMethodForm(id) {
+  const g = (x) => document.getElementById(x);
+  if (id === 'm-bin') {
+    const net = detectNetwork(g('m-bin').value);
+    if (net) g('m-network').value = net;
+  } else if (id === 'm-color-pick') g('m-color').value = g('m-color-pick').value;
+  paintPreview();
+}
+
+// Deja la tarjeta elegida centrada en el carrusel sin mover la página.
+function centerPicked() {
+  const el = document.querySelector('#cards .pitem.on');
+  if (el) el.parentElement.scrollLeft = el.offsetLeft - (el.parentElement.clientWidth - el.offsetWidth) / 2;
 }
 
 function settlementOf(c) {
@@ -199,8 +263,10 @@ function viewForm(editId) {
       <label for="date">Día del gasto</label>
       <input id="date" type="date" max="${todayStr()}" value="${esc(draft.date)}">
 
-      <label for="method">Pagado con</label>
-      <select id="method">${c.methods.map((m) => `<option value="${esc(m.id)}" ${m.id === draft.method ? 'selected' : ''}>${esc(methodLabel(m))} — de ${esc(personName(c, m.owner_person_id))}</option>`).join('')}</select>
+      <label id="cards-l">Pagado con</label>
+      <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">
+        ${c.methods.map((m) => cardHtml(m, { owner: personName(c, m.owner_person_id), pick: true, on: m.id === draft.method })).join('')}
+      </div>
 
       <label>¿Para quién es? (se divide en partes iguales)</label>
       <div class="chips" id="benes">
@@ -415,7 +481,8 @@ function viewAccounts() {
 // --- ajustes ---
 
 let editPerson = null;
-let editMethod = null;
+let editMethod = null; // id del medio que se edita; null = uno nuevo
+let methodOpen = false; // diálogo de medio de pago abierto
 
 function viewSettings() {
   const c = ctx();
@@ -462,22 +529,43 @@ function viewSettings() {
       ${c.methods.map((x) => `<div class="pay row"><span><b>${esc(methodLabel(x))}</b><div class="muted">de ${esc(personName(c, x.owner_person_id))}</div></span>
         <span><button class="btn secondary small" data-action="edit-method" data-id="${esc(x.id)}">Editar</button>
         <button class="btn danger small" data-action="del-method" data-id="${esc(x.id)}">Borrar</button></span></div>`).join('') || '<div class="empty">Aún no hay medios de pago.</div>'}
-      ${c.people.length ? `<form id="method-form" autocomplete="off">
-        <label for="m-kind">${editMethod ? 'Editar medio de pago' : 'Agregar medio de pago'}</label>
+      ${c.people.length ? `<button class="btn" type="button" data-action="new-method">+ Agregar medio de pago</button>
+      ${methodOpen ? `<dialog id="method-dialog" class="sheet" aria-labelledby="md-title">
+      <form id="method-form" autocomplete="off">
+        <header class="sheet-head"><h2 id="md-title">${editMethod ? 'Editar medio de pago' : 'Nuevo medio de pago'}</h2>
+          <button type="button" class="sheet-x" data-action="cancel-method" aria-label="Cerrar">×</button></header>
+        <div id="card-preview" class="sheet-preview">${cardHtml(m.kind ? m : { kind: 'card', card_type: 'debit' }, { owner: m.owner_person_id ? personName(c, m.owner_person_id) : '' })}</div>
+        <div class="sheet-body">
+        <label for="m-kind">Tipo de medio</label>
         <select id="m-kind"><option value="card" ${kind === 'card' ? 'selected' : ''}>Tarjeta</option><option value="pix" ${kind === 'pix' ? 'selected' : ''}>Transferencia</option><option value="cash" ${kind === 'cash' ? 'selected' : ''}>Efectivo</option></select>
-        <label for="m-name">Nombre</label>
-        <input id="m-name" maxlength="40" placeholder="Ej: Visa de Ana, Transferencia de Juan" value="${esc(m.name ?? '')}" required>
+        <label for="m-name">${kind === 'card' ? 'Nombre (el banco, por ejemplo)' : 'Nombre'}</label>
+        <input id="m-name" maxlength="40" placeholder="${kind === 'card' ? 'Ej: Bancolombia, Nu, Visa de Ana' : kind === 'pix' ? 'Ej: Transferencia de Juan' : 'Ej: Efectivo de Ana'}" value="${esc(m.name ?? '')}" required>
         <div id="card-fields" ${kind === 'card' ? '' : 'hidden'}>
-          <label for="m-last4">Últimos 4 dígitos</label>
+          <label for="m-bin">Primeros dígitos (opcional)</label>
+          <input id="m-bin" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="Solo para reconocer la red; no se guarda">
+          <label for="m-network">Red</label>
+          <select id="m-network"><option value="">Sin especificar</option>${Object.entries(NETWORKS).map(([k, v]) => `<option value="${esc(k)}" ${m.network === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>
+          <label for="m-last4">Últimos 4 dígitos (opcional)</label>
           <input id="m-last4" inputmode="numeric" maxlength="4" placeholder="1234" value="${esc(m.last4 ?? '')}">
           <label for="m-type">Tipo</label>
           <select id="m-type"><option value="debit" ${m.card_type !== 'credit' ? 'selected' : ''}>Débito</option><option value="credit" ${m.card_type === 'credit' ? 'selected' : ''}>Crédito</option></select>
         </div>
-        <label for="m-owner">De quién es</label>
-        <select id="m-owner">${c.people.map((x) => `<option value="${esc(x.id)}" ${(m.owner_person_id ?? c.people[0]?.id) === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select>
-        <button class="btn" type="submit">${editMethod ? 'Guardar' : 'Agregar'}</button>
-        ${editMethod ? '<button class="btn secondary" type="button" data-action="cancel-method">Cancelar</button>' : ''}
-      </form>` : '<div class="muted">Agrega primero una persona.</div>'}
+        <label for="m-color-pick">Color</label>
+        <input id="m-color" type="hidden" value="${isHexColor(m.color) ? esc(m.color) : ''}">
+        <div class="colorrow">
+          <input id="m-color-pick" type="color" value="${esc(cardColor(m))}">
+          <button type="button" id="m-auto" class="chip ${isHexColor(m.color) ? '' : 'on'}" data-action="auto-color">Automático</button>
+        </div>
+        <label for="m-owner">De quién es (obligatorio)</label>
+        <select id="m-owner" required>
+          <option value="" disabled ${m.owner_person_id ? '' : 'selected'}>Elige una persona</option>
+          ${c.people.map((x) => `<option value="${esc(x.id)}" ${m.owner_person_id === x.id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}
+        </select>
+        </div>
+        <footer class="sheet-foot"><p id="m-error" class="form-error" role="alert" hidden></p>
+          <button class="btn secondary" type="button" data-action="cancel-method">Cancelar</button>
+          <button class="btn" type="submit">${editMethod ? 'Guardar' : 'Agregar'}</button></footer>
+      </form></dialog>` : ''}` : '<div class="muted">Agrega primero una persona.</div>'}
     </div>
 
     <div class="card"><h2>Datos</h2>
@@ -560,16 +648,27 @@ function render() {
   }
   const { r, m } = currentRoute();
   if (!isFormRoute()) draft = null;
+  if (r.tab !== 'ajustes') methodOpen = false;
   $title.textContent = r.title;
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === r.tab));
   $view.innerHTML = r.view(m);
-  if (isFormRoute() && draft) { updateConv(); renderChart(); }
+  if (isFormRoute() && draft) { updateConv(); renderChart(); centerPicked(); }
+  if (methodOpen) document.getElementById('method-dialog')?.showModal();
 }
+
+// El diálogo se cierra con Cancelar, la X, Escape o tocando fuera. Solo se limpia el estado: la próxima
+// apertura vuelve a dibujar el formulario desde cero.
+$view.addEventListener('close', (ev) => {
+  if (ev.target.id !== 'method-dialog') return;
+  methodOpen = false;
+  editMethod = null;
+}, true);
+$view.addEventListener('click', (ev) => { if (ev.target.id === 'method-dialog') ev.target.close(); });
 
 const formActive = () => isFormRoute() && draft && !store.net.needsLogin;
 
 store.listeners.add(() => {
-  if (formActive()) updateStatus();
+  if (formActive() || methodOpen) updateStatus();
   else if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName) && $view.contains(document.activeElement)) updateStatus();
   else render();
 });
@@ -647,8 +746,20 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'accent') { setTheme({ accent: id }); render(); }
   else if (action === 'edit-person') { editPerson = id; render(); }
   else if (action === 'cancel-person') { editPerson = null; render(); }
-  else if (action === 'edit-method') { editMethod = id; render(); }
-  else if (action === 'cancel-method') { editMethod = null; render(); }
+  else if (action === 'pick-method') {
+    draft.method = id;
+    document.querySelectorAll('#cards .pitem').forEach((b) => {
+      const on = b === t;
+      b.classList.toggle('on', on);
+      b.setAttribute('aria-checked', String(on));
+    });
+    t.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
+  } else if (action === 'auto-color') {
+    document.getElementById('m-color').value = '';
+    paintPreview();
+  } else if (action === 'edit-method') { editMethod = id; methodOpen = true; render(); }
+  else if (action === 'new-method') { editMethod = null; methodOpen = true; render(); }
+  else if (action === 'cancel-method') document.getElementById('method-dialog')?.close();
   else if (action === 'del-person') {
     if (confirm('¿Borrar esta persona?')) await busy(t, () => guard(async () => { await store.deletePerson(id); toast('Persona borrada'); render(); }), 'Borrando…');
   } else if (action === 'del-method') {
@@ -686,16 +797,22 @@ $view.addEventListener('input', (ev) => {
   else if (id === 'desc') draft.desc = ev.target.value;
   else if (id === 'manual') { draft.manual = ev.target.value; updateConv(); }
   else if (id === 'f-q') { filters.q = ev.target.value; const pos = ev.target.selectionStart; render(); const el = document.getElementById('f-q'); el.focus(); el.setSelectionRange(pos, pos); }
+  else if (id.startsWith('m-')) onMethodForm(id);
 });
 
 $view.addEventListener('change', (ev) => {
   const id = ev.target.id;
   if (id === 'date') {
     if (ev.target.value) { draft.date = ev.target.value; loadRate(); renderChart(); }
-  } else if (id === 'method') draft.method = ev.target.value;
-  else if (id === 'f-method') { filters.method = ev.target.value; render(); }
+  } else if (id === 'f-method') { filters.method = ev.target.value; render(); }
   else if (id === 'f-person') { filters.person = ev.target.value; render(); }
-  else if (id === 'm-kind') document.getElementById('card-fields').hidden = ev.target.value !== 'card';
+  else if (id === 'm-kind') {
+    const isCard = ev.target.value === 'card';
+    document.getElementById('card-fields').hidden = !isCard;
+    document.getElementById('m-name').placeholder = isCard ? 'Ej: Bancolombia, Nu, Visa de Ana' : ev.target.value === 'pix' ? 'Ej: Transferencia de Juan' : 'Ej: Efectivo de Ana';
+    document.querySelector('label[for="m-name"]').textContent = isCard ? 'Nombre (el banco, por ejemplo)' : 'Nombre';
+  }
+  if (id.startsWith('m-')) onMethodForm(id);
 });
 
 let lastSubmitter = null;
@@ -708,6 +825,15 @@ $view.addEventListener('submit', async (ev) => {
   const btn = ev.submitter ?? lastSubmitter;
   const guard = async (fn) => {
     try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error'); }
+  };
+  // Igual que guard, pero el error se muestra dentro del diálogo (el aviso de arriba queda tapado por él).
+  const guardIn = async (errId, fn) => {
+    const el = document.getElementById(errId);
+    if (el) el.hidden = true;
+    try { await fn(); } catch (err) {
+      const msg = err.offline ? 'Necesitas internet para esto' : err.message;
+      if (el) { el.textContent = msg; el.hidden = false; } else toast(msg, 'error');
+    }
   };
   if (f === 'exp-form') {
     if (!coolingDown()) submitForm(lastSubmitter?.dataset.then ?? 'list');
@@ -725,14 +851,17 @@ $view.addEventListener('submit', async (ev) => {
       render();
     }), 'Guardando…');
   } else if (f === 'method-form') {
-    await busy(btn, () => guard(async () => {
+    await busy(btn, () => guardIn('m-error', async () => {
       const kind = document.getElementById('m-kind').value;
       await store.saveMethod({
         id: editMethod ?? undefined, kind, name: document.getElementById('m-name').value,
         last4: kind === 'card' ? document.getElementById('m-last4').value : null,
         card_type: kind === 'card' ? document.getElementById('m-type').value : null,
+        network: kind === 'card' ? document.getElementById('m-network').value : null,
+        color: document.getElementById('m-color').value,
         owner_person_id: document.getElementById('m-owner').value,
       });
+      methodOpen = false;
       editMethod = null;
       toast('Medio de pago guardado');
       render();
