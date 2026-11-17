@@ -123,3 +123,30 @@ test('ubicación y monto aproximado viajan en la cola y se ven antes de enviar',
   const [row] = await db.all('SELECT lat, lng, place, amount_approx FROM expenses WHERE id = ?', ['geo']);
   assert.deepEqual({ ...row }, { lat: 4.60971, lng: -74.08175, place: 'Centro', amount_approx: 1 });
 });
+
+test('orden manual sin internet: se ve al instante, un reordenamiento nuevo reemplaza al anterior y se envía al volver', async () => {
+  store.setActiveTrip('trip-1');
+  const base = { date: '2026-11-14', description: '', payment_method_id: 'cash', beneficiary_ids: ['yo'], amount_cents: 1000 };
+  for (const id of ['o1', 'o2', 'o3']) await store.saveExpense({ ...base, id, created_at: `2026-11-14T10:0${id.slice(1)}:00Z` });
+  const day = () => store.getState().expenses.filter((e) => ['o1', 'o2', 'o3'].includes(e.id)).map((e) => e.id);
+  assert.deepEqual(day(), ['o1', 'o2', 'o3']); // cronológico
+
+  online = false;
+  const pend = store.pendingCount();
+  await store.saveOrder(['o3', 'o1', 'o2'], 'trip-1:2026-11-14');
+  assert.deepEqual(day(), ['o3', 'o1', 'o2']);
+  await store.saveOrder(['o2', 'o3', 'o1'], 'trip-1:2026-11-14'); // reemplaza al anterior
+  assert.equal(store.pendingCount(), pend + 1);
+  assert.deepEqual(day(), ['o2', 'o3', 'o1']);
+
+  // Editar un gasto sin enviar no lo saca de su lugar.
+  await store.saveExpense({ ...base, id: 'o3', description: 'editado', created_at: '2026-11-14T10:03:00Z' });
+  assert.deepEqual(day(), ['o2', 'o3', 'o1']);
+
+  online = true;
+  await store.flush();
+  assert.equal(store.pendingCount(), 0);
+  const rows = await db.all("SELECT id, sort_order FROM expenses WHERE id IN ('o1','o2','o3') ORDER BY sort_order");
+  assert.deepEqual(rows.map((r) => r.id), ['o2', 'o3', 'o1']);
+  assert.deepEqual(day(), ['o2', 'o3', 'o1']); // igual con lo que ya está en el servidor
+});

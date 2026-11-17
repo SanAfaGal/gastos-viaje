@@ -1,4 +1,5 @@
 // Lugares donde se hicieron gastos. Módulo puro (sin DOM): lo usan el navegador y las pruebas.
+import { compareChronological } from './order.mjs';
 
 // ¿El gasto trae una ubicación válida?
 export function hasLocation(e) {
@@ -9,10 +10,10 @@ export function hasLocation(e) {
 
 const keyOf = (e, decimals) => `${Number(e.lat).toFixed(decimals)},${Number(e.lng).toFixed(decimals)}`;
 
-// Gastos con ubicación, del más antiguo al más reciente (a igual día, por hora de creación).
+// Gastos con ubicación, del más antiguo al más reciente. Dentro de un día manda el orden de la lista
+// (el que se arrastró a mano, o la hora de creación).
 function byTime(expenses) {
-  return expenses.filter(hasLocation)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.created_at ?? '').localeCompare(String(b.created_at ?? '')));
+  return expenses.filter(hasLocation).sort(compareChronological);
 }
 
 // Agrupa los gastos que están muy cerca (con 3 decimales, unos 100 m) en un solo lugar y recorre el viaje en orden:

@@ -64,3 +64,16 @@ test('routeFrom: sin ubicaciones no hay paradas ni recorrido', async () => {
   const { routeFrom } = await import('../public/js/places.mjs');
   assert.deepEqual(routeFrom([{ id: 'x', date: '2026-11-10' }]), { places: [], path: [] });
 });
+
+test('routeFrom: dentro de un día respeta el orden manual de la lista', async () => {
+  const { routeFrom } = await import('../public/js/places.mjs');
+  const A = { lat: 4.6097, lng: -74.0817 };
+  const B = { lat: 6.2442, lng: -75.5812 };
+  const list = [
+    { id: 'a', date: '2026-11-10', created_at: '1', ...A, sort_order: 1 },
+    { id: 'b', date: '2026-11-10', created_at: '2', ...B, sort_order: 0 }, // se arrastró para ir primero
+  ];
+  const { places } = routeFrom(list);
+  assert.equal(places[0].ids[0], 'b'); // la parada 1 es B
+  assert.equal(places[0].n, 1);
+});

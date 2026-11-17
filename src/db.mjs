@@ -48,6 +48,7 @@ async function upgradeTrips(db) {
     ['lng', 'REAL'],
     ['place', 'TEXT'],
     ['amount_approx', 'INTEGER NOT NULL DEFAULT 0'],
+    ['sort_order', 'INTEGER'], // orden manual dentro del día (vacío = por hora de creación, al final)
   ];
   for (const [col, type] of extra) {
     if (!cols.includes(col)) await db.run(`ALTER TABLE expenses ADD COLUMN ${col} ${type}`);

@@ -473,3 +473,34 @@ test('tasa: si la fuente principal falla o va atrasada se usa Frankfurter', asyn
     : { ok: true, status: 200, json: async () => ({ date: '2026-11-15', brl: { cop: 585.03 } }) });
   assert.deepEqual(await resolveRate(db, today, PAIR, { fetchFn: both, today }), { rate: 578.36, rate_date: today, estimated: false });
 });
+
+test('API: orden manual de los gastos de un día (idempotente, ignora ids que no existen, se reinicia al cambiar de día)', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, body) => handle({ method, path, body, db });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 1000]);
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-13', 1000]);
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
+  await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  const base = { date: '2026-11-14', amount_cents: 1000, description: '', payment_method_id: 'efe', beneficiary_ids: ['yo'] };
+  for (const id of ['a', 'b', 'c']) await call('POST', '/api/expenses', { ...base, id });
+  const order = async () => (await db.all('SELECT id, sort_order FROM expenses ORDER BY id')).map((r) => [r.id, r.sort_order]);
+
+  assert.deepEqual(await order(), [['a', null], ['b', null], ['c', null]]); // sin orden manual al principio
+  assert.equal((await call('POST', '/api/order', { ids: ['c', 'a', 'b'] })).status, 200);
+  assert.deepEqual(await order(), [['a', 1], ['b', 2], ['c', 0]]);
+  assert.equal((await call('POST', '/api/order', { ids: ['c', 'a', 'b'] })).status, 200); // reenvío: igual
+  assert.deepEqual(await order(), [['a', 1], ['b', 2], ['c', 0]]);
+  assert.equal((await call('POST', '/api/order', { ids: ['c', 'fantasma', 'a'] })).status, 200); // el que no existe se ignora
+  assert.equal((await call('POST', '/api/order', { ids: [] })).status, 200);
+
+  // Editar sin cambiar de día conserva el lugar; cambiarlo de día lo manda al final del nuevo.
+  await call('PUT', '/api/expenses/c', { ...base, id: 'c', description: 'editado' });
+  assert.equal((await db.all('SELECT sort_order FROM expenses WHERE id = ?', ['c']))[0].sort_order, 0);
+  await call('PUT', '/api/expenses/c', { ...base, id: 'c', date: '2026-11-13' });
+  assert.equal((await db.all('SELECT sort_order FROM expenses WHERE id = ?', ['c']))[0].sort_order, null);
+
+  // Entradas inválidas.
+  for (const bad of [{}, { ids: 'a' }, { ids: [1] }, { ids: [''] }, { ids: Array(501).fill('x') }]) {
+    assert.equal((await call('POST', '/api/order', bad)).status, 400, JSON.stringify(bad).slice(0, 40));
+  }
+});

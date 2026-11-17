@@ -336,7 +336,8 @@ async function saveExpense(db, id, body) {
               rate_estimated = excluded.rate_estimated, rate_manual = excluded.rate_manual,
               amount_home = excluded.amount_home,
               lat = excluded.lat, lng = excluded.lng, place = excluded.place,
-              amount_approx = excluded.amount_approx`,
+              amount_approx = excluded.amount_approx,
+              sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
       args: [id, body.date, cents, description, body.payment_method_id, rate, rateDate,
         estimated, manual, amountHome, new Date().toISOString(), trip.id,
         lat, lng, place, approx],
@@ -348,6 +349,15 @@ async function saveExpense(db, id, body) {
     })),
   ]);
   return { id };
+}
+
+// Orden manual de los gastos de un día: la lista de ids, de arriba a abajo. Es idempotente; los ids que ya no
+// existen se ignoran (por ejemplo, un gasto borrado desde otro celular).
+async function saveOrder(db, body) {
+  const ids = body?.ids;
+  if (!Array.isArray(ids) || ids.length > 500 || ids.some((i) => typeof i !== 'string' || !i || i.length > 100)) fail(400, 'Orden inválido');
+  if (ids.length) await db.batch(ids.map((id, i) => ({ sql: 'UPDATE expenses SET sort_order = ? WHERE id = ?', args: [i, id] })));
+  return { ok: true };
 }
 
 async function deleteExpense(db, id) {
@@ -442,6 +452,8 @@ export async function handle({ method, path, query = new URLSearchParams(), body
       const r = await resolveRate(db, date, tripPair(await getTrip(db, query.get('trip'))));
       return ok(r ?? { rate: null });
     }
+
+    if (resource === 'order' && method === 'POST') return ok(await saveOrder(db, body));
 
     const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense] };
     if (writers[resource]) {

@@ -2,6 +2,7 @@
 // pendientes de enviar. Todo en localStorage (son pocos datos).
 import { setCurrencies, toHome, todayStr } from './money.mjs';
 import { currencyByCode, DEFAULT_SETTINGS } from './currencies.mjs';
+import { compareExpenses } from './order.mjs';
 
 const K = { state: 'bg_state2', queue: 'bg_queue', pass: 'bg_pass', rates: 'bg_rates2', hist: 'bg_hist', trip: 'bg_trip' };
 
@@ -192,6 +193,15 @@ export function getState() {
   const trip = activeTrip();
   let all = server.expenses.map((e) => ({ ...e, trip_id: e.trip_id ?? trips[0].id }));
   for (const op of queue) {
+    if (op.op === 'order') {
+      // Orden manual aún sin enviar: se ve al instante.
+      op.ids.forEach((id, i) => {
+        const e = all.find((x) => x.id === id);
+        if (e) e.sort_order = i;
+      });
+      continue;
+    }
+    const prev = all.find((e) => e.id === op.id);
     all = all.filter((e) => e.id !== op.id);
     if (op.op !== 'save') continue;
     const x = op.expense;
@@ -200,6 +210,8 @@ export function getState() {
     const r = x.rate_manual ? { rate: x.rate_manual } : localRate(x.date, t);
     all.push({
       ...x,
+      // Editar un gasto no lo cambia de lugar en su día (si cambia de día, queda al final del nuevo).
+      sort_order: prev && prev.date === x.date ? (prev.sort_order ?? null) : null,
       trip_id: t.id,
       pending: true,
       rate: x.rate_manual ?? null,
@@ -211,7 +223,7 @@ export function getState() {
   const counts = {};
   for (const e of all) counts[e.trip_id] = (counts[e.trip_id] ?? 0) + 1;
   const expenses = all.filter((e) => e.trip_id === trip.id);
-  expenses.sort((a, b) => (a.date === b.date ? (b.created_at ?? '').localeCompare(a.created_at ?? '') : b.date.localeCompare(a.date)));
+  expenses.sort(compareExpenses);
   const going = new Set(trip.people_ids);
   return { ...server, trips, trip, expenses, counts, participants: server.people.filter((p) => going.has(p.id)) };
 }
@@ -238,6 +250,13 @@ export function deleteExpense(id) {
   return flush();
 }
 
+// Orden manual de los gastos de un día (ids de arriba a abajo). `key` identifica el día y el viaje: un
+// reordenamiento nuevo del mismo día reemplaza al que aún no se envió.
+export function saveOrder(ids, key) {
+  enqueue({ op: 'order', id: `order:${key}`, ids });
+  return flush();
+}
+
 export async function flush() {
   if (net.syncing || !queue.length) return { sent: 0, errors: [] };
   net.syncing = true;
@@ -248,6 +267,7 @@ export async function flush() {
     for (const op of [...queue]) {
       try {
         if (op.op === 'save') await request('PUT', `/api/expenses/${op.id}`, op.expense);
+        else if (op.op === 'order') await request('POST', '/api/order', { ids: op.ids });
         else await request('DELETE', `/api/expenses/${op.id}`);
         queue = queue.filter((o) => o !== op);
         sent += 1;

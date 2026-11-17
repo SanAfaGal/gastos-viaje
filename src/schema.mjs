@@ -64,7 +64,8 @@ CREATE TABLE IF NOT EXISTS expenses (
   lat REAL,
   lng REAL,
   place TEXT,
-  amount_approx INTEGER NOT NULL DEFAULT 0
+  amount_approx INTEGER NOT NULL DEFAULT 0,
+  sort_order INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (

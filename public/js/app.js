@@ -5,6 +5,7 @@ import { CURRENCIES, DEFAULT_SETTINGS } from './currencies.mjs';
 import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, detectNetwork, isHexColor, suggestColor } from './cards.mjs';
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
 import { formatCoords, hasLocation, routeFrom } from './places.mjs';
+import { compareChronological, sameOrder } from './order.mjs';
 import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 
@@ -165,20 +166,26 @@ function expenseItem(c, e) {
   const m = c.methodsById[e.payment_method_id];
   const cop = e.amount_home == null ? 'Por convertir' : fmtHome(e.amount_home);
   return `<div class="item" data-action="edit" data-id="${esc(e.id)}">
-    <div><div class="t">${esc(e.description || 'Gasto')}</div>
+    <div><div class="t">${esc(e.description || 'Gasto')}${hasLocation(e)
+      ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">📍</button>` : ''}</div>
       <div class="muted">${esc(methodLabel(m))}</div>
       <span class="tag">${esc(forWho(c, e))}</span>
       ${e.pending ? '<span class="tag warn">Sin enviar</span>' : ''}
       ${e.amount_home == null ? '<span class="tag warn">Esperando tasa</span>' : ''}
       ${e.rate_estimated ? '<span class="tag warn">Tasa estimada</span>' : ''}
       ${e.rate_manual ? '<span class="tag">Tasa manual</span>' : ''}
-      ${e.amount_approx ? '<span class="tag warn">Monto aproximado</span>' : ''}
-      ${hasLocation(e) ? '<span class="tag" title="Tiene ubicación">📍</span>' : ''}</div>
+      ${e.amount_approx ? '<span class="tag warn">Monto aproximado</span>' : ''}</div>
     <div class="r"><div class="num">${cop}</div><div class="muted">${fmtDest(e.amount_cents)}</div></div>
   </div>`;
 }
 
 // ---------- pantallas ----------
+
+// Los 5 más recientes (día más nuevo y, dentro del día, el último en haberse creado), sin importar el orden
+// que tenga la lista.
+const recentExpenses = (c) => [...c.expenses]
+  .sort((a, b) => b.date.localeCompare(a.date) || String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
+  .slice(0, 5);
 
 function viewHome() {
   const c = ctx();
@@ -204,7 +211,7 @@ function viewHome() {
         <span class="num ${b.net < 0 ? 'neg' : 'pos'}">${b.net < 0 ? '−' : b.net > 0 ? '+' : ''}${fmtHome(Math.abs(b.net))}</span></div>`).join('')}
     </div>
     <div class="card"><h2>Últimos gastos</h2>
-      ${c.expenses.length ? c.expenses.slice(0, 5).map((e) => expenseItem(c, e)).join('') : '<div class="empty">Aún no hay gastos. Toca el + para agregar.</div>'}
+      ${c.expenses.length ? recentExpenses(c).map((e) => expenseItem(c, e)).join('') : '<div class="empty">Aún no hay gastos. Toca el + para agregar.</div>'}
     </div>`;
 }
 
@@ -220,6 +227,8 @@ function viewList() {
     (!filters.person || e.beneficiary_ids.includes(filters.person)) &&
     (!filters.approx || e.amount_approx));
   const approxCount = c.expenses.filter((e) => e.amount_approx).length;
+  // Solo se puede ordenar viendo el día completo: con un filtro puesto faltarían gastos y el orden saldría torcido.
+  const sortable = !q && !filters.method && !filters.person && !filters.approx;
   const total = list.reduce((a, e) => a + (e.amount_home ?? 0), 0);
   const days = [];
   for (const e of list) {
@@ -237,8 +246,9 @@ function viewList() {
     </div>
     <div class="row" style="margin:0 4px 4px"><span class="muted">${list.length} gasto(s) · ${fmtHome(total)}</span>
       <a class="map-link" href="#/mapa">🗺 Ver mapa</a></div>
+    ${sortable && days.some((d) => d.items.length > 1) ? '<div class="muted hint">Mantén presionado un gasto y arrástralo para ordenarlo dentro de su día.</div>' : ''}
     ${days.length ? days.map((d) => `<div class="day">${esc(dayLabel(d.date))}</div>
-      <div class="card" style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e)).join('')}</div>`).join('')
+      <div class="card day-card" ${sortable ? `data-day="${esc(d.date)}"` : ''} style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e)).join('')}</div>`).join('')
       : '<div class="empty">No hay gastos con ese filtro.</div>'}`;
 }
 
@@ -733,6 +743,7 @@ async function initMap() {
   const c = ctx();
   const byId = Object.fromEntries(c.expenses.map((e) => [e.id, e]));
   const { places, path } = routeFrom(c.expenses);
+  let focus = null; // el lugar del gasto que se pidió ver (desde el pin de la lista)
   el.innerHTML = '';
   const map = L.map(el);
   leafletMap = map;
@@ -748,10 +759,12 @@ async function initMap() {
     const html = `<b>Parada ${p.n}: ${esc(p.place || formatCoords(p.lat, p.lng))}</b><br>${esc(when)}<br>
       ${lines.join('<br>')}${more}<br><b>${fmtHome(p.total_home)}</b> · ${fmtDest(p.total_dest)}`;
     const icon = L.divIcon({ className: 'stop', html: `<span>${p.n}</span>`, iconSize: [30, 30], iconAnchor: [15, 15], popupAnchor: [0, -15] });
-    L.marker([p.lat, p.lng], { icon, title: `Parada ${p.n}`, alt: `Parada ${p.n}` }).addTo(map).bindPopup(html);
+    const marker = L.marker([p.lat, p.lng], { icon, title: `Parada ${p.n}`, alt: `Parada ${p.n}` }).addTo(map).bindPopup(html);
+    if (mapFocus && p.ids.includes(mapFocus)) focus = { p, marker };
   }
   const pts = places.map((p) => [p.lat, p.lng]);
-  if (prev) map.setView(prev.center, prev.zoom);
+  if (focus) { map.setView([focus.p.lat, focus.p.lng], 16); focus.marker.openPopup(); }
+  else if (prev) map.setView(prev.center, prev.zoom);
   else if (pts.length === 1) map.setView(pts[0], 15);
   else map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
   lastMapSig = mapSig();
@@ -760,7 +773,8 @@ async function initMap() {
 // La app se sincroniza sola cada 30 s y al volver a ella. Para que el mapa no se reinicie (zoom, popup abierto)
 // con cada sincronización, solo se redibuja si cambió algo de lo que muestra.
 let lastMapSig = '';
-const mapSig = () => JSON.stringify(routeFrom(ctx().expenses));
+let mapFocus = ''; // id del gasto cuyo lugar se abre al entrar al mapa
+const mapSig = () => JSON.stringify([routeFrom(ctx().expenses), mapFocus]);
 
 // --- elegir el lugar en el mapa o buscándolo por nombre (para gastos de antes, o si ya no estás ahí) ---
 
@@ -888,7 +902,7 @@ function downloadCsv() {
   const c = ctx();
   const cur = currencies();
   const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', cur.dest.code, 'Tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
-  for (const e of [...c.expenses].reverse()) {
+  for (const e of [...c.expenses].sort(compareChronological)) {
     const m = c.methodsById[e.payment_method_id];
     rows.push([e.date, e.description, methodLabel(m), personName(c, m?.owner_person_id),
       e.beneficiary_ids.map((id) => personName(c, id)).join(' + '),
@@ -919,7 +933,7 @@ const routes = [
   { re: /^#\/nuevo$/, tab: 'nuevo', title: 'Nuevo gasto', view: () => viewForm(null), form: true },
   { re: /^#\/cuentas$/, tab: 'cuentas', title: 'Cuentas', view: viewAccounts },
   { re: /^#\/ajustes$/, tab: 'ajustes', title: 'Ajustes', view: viewSettings },
-  { re: /^#\/mapa$/, tab: 'ajustes', title: 'Mapa', view: viewMap, map: true },
+  { re: /^#\/mapa(?:\/(.+))?$/, tab: 'ajustes', title: 'Mapa', view: viewMap, map: true },
 ];
 
 function currentRoute() {
@@ -955,6 +969,8 @@ function render() {
   const trip = store.activeTrip();
   $tripBtn.textContent = `✈ ${trip.name} · ${trip.dest}→${trip.home} ▾`;
   const { r, m } = currentRoute();
+  mapFocus = r.map && m[1] ? decodeURIComponent(m[1]) : '';
+  if (dragSt?.active) return; // no se redibuja la lista mientras se arrastra un gasto
   if (r.map && leafletMap && document.querySelector('#map.leaflet-container') && mapSig() === lastMapSig) return;
   if (!isFormRoute()) draft = null;
   if (r.tab !== 'ajustes') { methodOpen = false; tripOpen = false; personOpen = false; }
@@ -1068,6 +1084,7 @@ $view.addEventListener('click', async (ev) => {
     try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error'); }
   };
   if (action === 'edit') location.hash = `#/nuevo/${encodeURIComponent(id)}`;
+  else if (action === 'show-place') location.hash = `#/mapa/${encodeURIComponent(id)}`;
   else if (action === 'bene') {
     draft.benes.has(id) ? draft.benes.delete(id) : draft.benes.add(id);
     t.classList.toggle('on', draft.benes.has(id));
@@ -1131,6 +1148,95 @@ $view.addEventListener('click', async (ev) => {
   } else if (action === 'csv') downloadCsv();
   else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
 });
+
+// --- ordenar los gastos de un día: mantener presionado y arrastrar ---
+
+let dragSt = null; // { item, card, ids, grab, timer, active, ... } mientras hay un gesto sobre un gasto
+let suppressClick = false;
+const HOLD_MS = 380; // tiempo presionado para empezar a arrastrar
+const MOVE_TOL = 8; // si el dedo se mueve más antes de eso, es un scroll y no se arrastra
+
+function dragEnd(commit) {
+  const st = dragSt;
+  if (!st) return;
+  clearTimeout(st.timer);
+  cancelAnimationFrame(st.raf);
+  dragSt = null;
+  if (!st.active) return;
+  st.item.classList.remove('dragging');
+  st.item.style.transform = '';
+  st.item.style.zIndex = '';
+  st.card.classList.remove('sorting');
+  try { st.item.releasePointerCapture(st.pid); } catch { /* ya soltado */ }
+  suppressClick = true; // el clic que sigue a soltar no debe abrir el gasto
+  setTimeout(() => { suppressClick = false; }, 350);
+  const ids = [...st.card.querySelectorAll('.item[data-id]')].map((el) => el.dataset.id);
+  if (commit && !sameOrder(ids, st.ids)) store.saveOrder(ids, `${store.activeTrip().id}:${st.card.dataset.day}`);
+  else render(); // cancelado o sin cambios: se restaura la lista
+}
+
+function dragStart() {
+  const st = dragSt;
+  if (!st || st.active) return;
+  st.active = true;
+  const r = st.item.getBoundingClientRect();
+  st.grab = st.y - r.top; // dónde del gasto se tomó
+  st.item.classList.add('dragging');
+  st.item.style.zIndex = '5';
+  st.card.classList.add('sorting');
+  try { st.item.setPointerCapture(st.pid); } catch { /* el puntero ya terminó */ }
+  navigator.vibrate?.(15);
+  const tick = () => {
+    if (!dragSt?.active) return;
+    // Cerca del borde de la pantalla, la lista se desplaza sola.
+    const edge = 90;
+    if (st.y < edge) window.scrollBy(0, -Math.ceil((edge - st.y) / 6));
+    else if (st.y > window.innerHeight - edge) window.scrollBy(0, Math.ceil((st.y - (window.innerHeight - edge)) / 6));
+    dragFollow();
+    st.raf = requestAnimationFrame(tick);
+  };
+  st.raf = requestAnimationFrame(tick);
+}
+
+// Mueve el gasto con el dedo y lo cambia de lugar cuando pasa por la mitad de su vecino.
+function dragFollow() {
+  const st = dragSt;
+  if (!st?.active) return;
+  const { item, card } = st;
+  item.style.transform = '';
+  const prev = item.previousElementSibling;
+  const next = item.nextElementSibling;
+  const mid = (el) => { const b = el.getBoundingClientRect(); return b.top + b.height / 2; };
+  if (prev?.matches('.item') && st.y < mid(prev)) card.insertBefore(item, prev);
+  else if (next?.matches('.item') && st.y > mid(next)) next.after(item);
+  const nat = item.getBoundingClientRect();
+  item.style.transform = `translateY(${st.y - st.grab - nat.top}px)`;
+}
+
+$view.addEventListener('pointerdown', (ev) => {
+  if (dragSt || ev.button > 0) return;
+  const item = ev.target.closest('.item[data-id]');
+  const card = item?.closest('.day-card[data-day]');
+  if (!card || ev.target.closest('button, a, input, select') || card.querySelectorAll('.item').length < 2) return;
+  dragSt = {
+    item, card, pid: ev.pointerId, x0: ev.clientX, y0: ev.clientY, y: ev.clientY, active: false,
+    ids: [...card.querySelectorAll('.item[data-id]')].map((el) => el.dataset.id),
+    timer: setTimeout(dragStart, HOLD_MS),
+  };
+});
+$view.addEventListener('pointermove', (ev) => {
+  const st = dragSt;
+  if (!st || ev.pointerId !== st.pid) return;
+  st.y = ev.clientY;
+  if (!st.active && Math.hypot(ev.clientX - st.x0, ev.clientY - st.y0) > MOVE_TOL) { clearTimeout(st.timer); dragSt = null; }
+});
+$view.addEventListener('pointerup', (ev) => { if (dragSt && ev.pointerId === dragSt.pid) dragEnd(true); });
+$view.addEventListener('pointercancel', (ev) => { if (dragSt && ev.pointerId === dragSt.pid) dragEnd(false); });
+// En el celular, una vez que se empieza a arrastrar, el dedo no debe desplazar la página.
+$view.addEventListener('touchmove', (ev) => { if (dragSt?.active) ev.preventDefault(); }, { passive: false });
+// El menú del botón largo y la selección de texto estorban al arrastrar.
+$view.addEventListener('contextmenu', (ev) => { if (ev.target.closest('.day-card[data-day] .item')) ev.preventDefault(); });
+$view.addEventListener('click', (ev) => { if (suppressClick) { ev.stopPropagation(); ev.preventDefault(); } }, true);
 
 // Recorrer el gráfico con el dedo, el mouse o las flechas del teclado.
 function scrubTo(ev) {
