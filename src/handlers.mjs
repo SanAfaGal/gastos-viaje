@@ -309,19 +309,37 @@ async function saveExpense(db, id, body) {
   }
   const amountHome = rate == null ? null : toHome(cents, rate, homeDigits);
 
+  // Ubicación opcional: o vienen lat y lng válidas, o ninguna. Vacío (null, undefined, '') = sin ubicación.
+  const blank = (v) => v == null || v === '';
+  let lat = null;
+  let lng = null;
+  let place = null;
+  if (!blank(body.lat) || !blank(body.lng)) {
+    lat = Number(body.lat);
+    lng = Number(body.lng);
+    if (blank(body.lat) || blank(body.lng) || !Number.isFinite(lat) || !Number.isFinite(lng)
+      || lat < -90 || lat > 90 || lng < -180 || lng > 180) fail(400, 'La ubicación no es válida');
+    place = text(body.place, 'El lugar', { max: 120, required: false }) || null;
+  }
+  const approx = body.amount_approx ? 1 : 0;
+
   await db.batch([
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
-              rate, rate_date, rate_estimated, rate_manual, amount_home, created_at, trip_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              rate, rate_date, rate_estimated, rate_manual, amount_home, created_at, trip_id,
+              lat, lng, place, amount_approx)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
               rate = excluded.rate, rate_date = excluded.rate_date,
               rate_estimated = excluded.rate_estimated, rate_manual = excluded.rate_manual,
-              amount_home = excluded.amount_home`,
+              amount_home = excluded.amount_home,
+              lat = excluded.lat, lng = excluded.lng, place = excluded.place,
+              amount_approx = excluded.amount_approx`,
       args: [id, body.date, cents, description, body.payment_method_id, rate, rateDate,
-        estimated, manual, amountHome, new Date().toISOString(), trip.id],
+        estimated, manual, amountHome, new Date().toISOString(), trip.id,
+        lat, lng, place, approx],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     ...ids.map((p) => ({

@@ -106,3 +106,20 @@ test('cada gasto en cola se queda en el viaje donde se guardó, aunque se cambie
   await store.deleteTrip('mx', true);
   assert.equal(store.activeTrip().id, 'trip-1');
 });
+
+test('ubicación y monto aproximado viajan en la cola y se ven antes de enviar', async () => {
+  store.setActiveTrip('trip-1');
+  online = false;
+  await store.saveExpense({
+    id: 'geo', date: '2026-11-14', amount_cents: 1500, description: 'Café', payment_method_id: 'cash',
+    beneficiary_ids: ['yo'], lat: 4.60971, lng: -74.08175, place: 'Centro', amount_approx: true,
+  });
+  const seen = store.getState().expenses.find((e) => e.id === 'geo');
+  assert.deepEqual([seen.lat, seen.lng, seen.amount_approx], [4.60971, -74.08175, true]);
+
+  online = true;
+  await store.flush();
+  assert.equal(store.pendingCount(), 0);
+  const [row] = await db.all('SELECT lat, lng, place, amount_approx FROM expenses WHERE id = ?', ['geo']);
+  assert.deepEqual({ ...row }, { lat: 4.60971, lng: -74.08175, place: 'Centro', amount_approx: 1 });
+});

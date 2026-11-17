@@ -4,6 +4,7 @@ import { addDays, currencies, fmtDest, fmtHome, fmtRate, parseAmount, toHome, to
 import { CURRENCIES, DEFAULT_SETTINGS } from './currencies.mjs';
 import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, detectNetwork, isHexColor, suggestColor } from './cards.mjs';
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
+import { formatCoords, hasLocation, placesFrom } from './places.mjs';
 import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 
@@ -170,7 +171,9 @@ function expenseItem(c, e) {
       ${e.pending ? '<span class="tag warn">Sin enviar</span>' : ''}
       ${e.amount_home == null ? '<span class="tag warn">Esperando tasa</span>' : ''}
       ${e.rate_estimated ? '<span class="tag warn">Tasa estimada</span>' : ''}
-      ${e.rate_manual ? '<span class="tag">Tasa manual</span>' : ''}</div>
+      ${e.rate_manual ? '<span class="tag">Tasa manual</span>' : ''}
+      ${e.amount_approx ? '<span class="tag warn">Monto aproximado</span>' : ''}
+      ${hasLocation(e) ? '<span class="tag" title="Tiene ubicación">📍</span>' : ''}</div>
     <div class="r"><div class="num">${cop}</div><div class="muted">${fmtDest(e.amount_cents)}</div></div>
   </div>`;
 }
@@ -203,7 +206,7 @@ function viewHome() {
     </div>`;
 }
 
-const filters = { q: '', method: '', person: '' };
+const filters = { q: '', method: '', person: '', approx: false };
 
 function viewList() {
   const c = ctx();
@@ -212,7 +215,9 @@ function viewList() {
   const list = c.expenses.filter((e) =>
     (!q || e.description.toLowerCase().includes(q)) &&
     (!filters.method || e.payment_method_id === filters.method) &&
-    (!filters.person || e.beneficiary_ids.includes(filters.person)));
+    (!filters.person || e.beneficiary_ids.includes(filters.person)) &&
+    (!filters.approx || e.amount_approx));
+  const approxCount = c.expenses.filter((e) => e.amount_approx).length;
   const total = list.reduce((a, e) => a + (e.amount_home ?? 0), 0);
   const days = [];
   for (const e of list) {
@@ -226,6 +231,7 @@ function viewList() {
         ${c.payMethods.map((m) => `<option value="${esc(m.id)}" ${filters.method === m.id ? 'selected' : ''}>${esc(methodLabel(m))}</option>`).join('')}</select>
       <select id="f-person"><option value="">Para cualquiera</option>
         ${c.people.map((p) => `<option value="${esc(p.id)}" ${filters.person === p.id ? 'selected' : ''}>${esc(personName(c, p.id))}</option>`).join('')}</select>
+      ${approxCount ? `<button type="button" class="chip ${filters.approx ? 'on' : ''}" data-action="f-approx" aria-pressed="${filters.approx}">Aproximados (${approxCount})</button>` : ''}
     </div>
     <div class="muted" style="margin:0 4px 4px">${list.length} gasto(s) · ${fmtHome(total)}</div>
     ${days.length ? days.map((d) => `<div class="day">${esc(dayLabel(d.date))}</div>
@@ -244,7 +250,7 @@ function newDraft(c, date = todayStr()) {
   const method = c.payMethods.some((m) => m.id === lastMethod) ? lastMethod : (c.payMethods[0]?.id ?? '');
   const going = new Set(c.people.map((p) => p.id));
   const benes = lastBenes.filter((id) => going.has(id));
-  return { id: null, date, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), manual: '', created_at: null };
+  return { id: null, date, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), manual: '', created_at: null, approx: false, lat: null, lng: null, place: '' };
 }
 
 function draftFrom(c, id) {
@@ -254,7 +260,42 @@ function draftFrom(c, id) {
     id: e.id, date: e.date, amountText: (e.amount_cents / 100).toFixed(2).replace('.', ','),
     desc: e.description, method: e.payment_method_id, benes: new Set(e.beneficiary_ids),
     manual: e.rate_manual ? String(e.rate ?? '') : '', created_at: e.created_at,
+    approx: Boolean(e.amount_approx),
+    lat: hasLocation(e) ? Number(e.lat) : null, lng: hasLocation(e) ? Number(e.lng) : null, place: e.place ?? '',
   };
+}
+
+// Fila de ubicación del formulario. Se vuelve a dibujar sola (sin render()) para no perder lo escrito.
+function locHtml() {
+  if (draft.locating) return '<button type="button" class="btn secondary small" disabled>Buscando ubicación…</button>';
+  if (draft.lat == null) return '<button type="button" class="btn secondary small" data-action="locate">📍 Guardar ubicación</button>';
+  return `<div class="loc-set"><span class="tag">📍 ${esc(formatCoords(draft.lat, draft.lng))}</span>
+      <button type="button" class="btn secondary small" data-action="unlocate">Quitar</button></div>
+    <input id="place" maxlength="120" placeholder="Nombre del lugar (opcional)" value="${esc(draft.place)}">`;
+}
+
+function paintLoc() {
+  const el = document.getElementById('loc');
+  if (el && draft) el.innerHTML = locHtml();
+}
+
+function locate() {
+  if (!draft || draft.locating) return;
+  if (!navigator.geolocation) return toast('Este dispositivo no permite obtener la ubicación', 'error');
+  const target = draft;
+  target.locating = true;
+  paintLoc();
+  navigator.geolocation.getCurrentPosition((pos) => {
+    target.locating = false;
+    target.lat = pos.coords.latitude;
+    target.lng = pos.coords.longitude;
+    if (draft === target) paintLoc();
+  }, (err) => {
+    target.locating = false;
+    if (draft === target) paintLoc();
+    toast(err.code === 1 ? 'Sin permiso de ubicación. Actívalo en el navegador y vuelve a intentar.'
+      : 'No se pudo obtener la ubicación. Intenta de nuevo.', 'error');
+  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
 }
 
 function viewForm(editId) {
@@ -271,6 +312,7 @@ function viewForm(editId) {
     <form id="exp-form" autocomplete="off" novalidate>
       <label for="amount">Monto en ${esc(currencies().dest.name.toLowerCase())} (${esc(currencies().dest.code)})</label>
       <input id="amount" class="amount" inputmode="decimal" placeholder="0,00" value="${esc(draft.amountText)}">
+      <div class="chips"><button type="button" class="chip ${draft.approx ? 'on' : ''}" data-action="approx" aria-pressed="${draft.approx}">≈ Monto aproximado</button></div>
       <div class="conv" id="conv"></div>
       <div class="chart" id="chart" role="img"></div>
 
@@ -290,6 +332,9 @@ function viewForm(editId) {
 
       <label for="desc">Descripción (opcional)</label>
       <input id="desc" maxlength="120" placeholder="Almuerzo, Uber, entradas…" value="${esc(draft.desc)}">
+
+      <label>Ubicación (opcional)</label>
+      <div id="loc" class="loc">${locHtml()}</div>
 
       <details ${draft.manual ? 'open' : ''}><summary>Poner la tasa a mano</summary>
         <label for="manual">${esc(currencies().home.code)} por 1 ${esc(currencies().dest.code)}</label>
@@ -448,6 +493,9 @@ async function submitForm(then) {
     beneficiary_ids: [...draft.benes],
     rate_manual: manualRate() ?? undefined,
     created_at: draft.created_at ?? undefined,
+    amount_approx: draft.approx,
+    // null explícito: al editar y quitar la ubicación, el servidor la borra.
+    lat: draft.lat, lng: draft.lng, place: draft.lat == null ? null : draft.place.trim(),
   };
   lastMethod = draft.method;
   lastBenes = [...draft.benes];
@@ -615,10 +663,80 @@ function viewSettings() {
     </div>
 
     <div class="card"><h2>Datos</h2>
+      <a class="btn secondary" href="#/mapa">Mapa de lugares</a>
       <button class="btn secondary" data-action="csv">Descargar gastos (CSV)</button>
       <button class="btn secondary" data-action="logout">Cambiar código de acceso</button>
       <p class="muted">Tarjetas y transferencias solo guardan nombre y últimos 4 dígitos; nunca números completos.</p>
     </div>`;
+}
+
+// --- mapa de lugares ---
+
+const LEAFLET = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet';
+let leafletLoading = null;
+let leafletMap = null;
+
+// Leaflet se baja solo al abrir el mapa (no pesa en el resto de la app). Sin internet falla y se avisa.
+function loadLeaflet() {
+  if (globalThis.L) return Promise.resolve(globalThis.L);
+  leafletLoading ??= new Promise((resolve, reject) => {
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = `${LEAFLET}.css`;
+    document.head.append(css);
+    const js = document.createElement('script');
+    js.src = `${LEAFLET}.js`;
+    js.onload = () => resolve(globalThis.L);
+    js.onerror = () => { leafletLoading = null; js.remove(); reject(new Error('sin red')); };
+    document.head.append(js);
+  });
+  return leafletLoading;
+}
+
+function viewMap() {
+  const c = ctx();
+  if (needsSetup(c)) return setupCard();
+  const n = c.expenses.filter(hasLocation).length;
+  if (!n) {
+    return `<div class="card"><h2>Mapa de lugares</h2>
+      <div class="empty">Aún no hay gastos con ubicación. Al agregar un gasto, toca “Guardar ubicación”.</div>
+      <a class="btn secondary" href="#/ajustes">Volver</a></div>`;
+  }
+  return `<div class="muted" style="margin:0 4px 6px">${n} gasto(s) con ubicación en ${esc(c.trip.name)}</div>
+    <div id="map" class="map" role="region" aria-label="Mapa de lugares"><div class="empty">Cargando mapa…</div></div>
+    <a class="btn secondary" href="#/ajustes">Volver a Ajustes</a>`;
+}
+
+async function initMap() {
+  const el = document.getElementById('map');
+  if (!el) return;
+  leafletMap?.remove();
+  leafletMap = null;
+  let L;
+  try { L = await loadLeaflet(); } catch {
+    if (document.getElementById('map') === el) el.innerHTML = '<div class="empty">Necesitas internet para ver el mapa.</div>';
+    return;
+  }
+  if (document.getElementById('map') !== el) return; // se cambió de pantalla mientras cargaba
+  const c = ctx();
+  const byId = Object.fromEntries(c.expenses.map((e) => [e.id, e]));
+  const places = placesFrom(c.expenses);
+  el.innerHTML = '';
+  const map = L.map(el);
+  leafletMap = map;
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(map);
+  const pts = places.map((p) => {
+    const lines = p.ids.slice(0, 5).map((id) => esc(byId[id]?.description || 'Gasto'));
+    const more = p.ids.length > 5 ? `<br>y ${p.ids.length - 5} más` : '';
+    const html = `<b>${esc(p.place || formatCoords(p.lat, p.lng))}</b><br>${esc(dayLabel(byId[p.ids[0]].date))}${p.count > 1 ? ` y otros` : ''}<br>
+      ${lines.join('<br>')}${more}<br><b>${fmtHome(p.total_home)}</b> · ${fmtDest(p.total_dest)}`;
+    L.circleMarker([p.lat, p.lng], { radius: 6 + Math.min(p.count, 6), weight: 2, fillOpacity: 0.7 }).addTo(map).bindPopup(html);
+    return [p.lat, p.lng];
+  });
+  if (pts.length === 1) map.setView(pts[0], 15);
+  else map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
 }
 
 function viewLogin() {
@@ -631,12 +749,13 @@ function viewLogin() {
 function downloadCsv() {
   const c = ctx();
   const cur = currencies();
-  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', cur.dest.code, 'Tasa', cur.home.code]];
+  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', cur.dest.code, 'Tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
   for (const e of [...c.expenses].reverse()) {
     const m = c.methodsById[e.payment_method_id];
     rows.push([e.date, e.description, methodLabel(m), personName(c, m?.owner_person_id),
       e.beneficiary_ids.map((id) => personName(c, id)).join(' + '),
-      (e.amount_cents / 100).toFixed(2), e.rate ?? '', e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits)]);
+      (e.amount_cents / 100).toFixed(2), e.rate ?? '', e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
+      e.amount_approx ? 'Sí' : '', hasLocation(e) ? e.lat : '', hasLocation(e) ? e.lng : '', e.place ?? '']);
   }
   // Un texto que empieza con = + - @ se interpretaría como fórmula en Excel; se le antepone un apóstrofo.
   const cell = (v) => {
@@ -662,6 +781,7 @@ const routes = [
   { re: /^#\/nuevo$/, tab: 'nuevo', title: 'Nuevo gasto', view: () => viewForm(null), form: true },
   { re: /^#\/cuentas$/, tab: 'cuentas', title: 'Cuentas', view: viewAccounts },
   { re: /^#\/ajustes$/, tab: 'ajustes', title: 'Ajustes', view: viewSettings },
+  { re: /^#\/mapa$/, tab: 'ajustes', title: 'Mapa', view: viewMap, map: true },
 ];
 
 function currentRoute() {
@@ -701,7 +821,9 @@ function render() {
   if (r.tab !== 'ajustes') { methodOpen = false; tripOpen = false; personOpen = false; }
   $title.textContent = r.title;
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === r.tab));
+  if (!r.map && leafletMap) { leafletMap.remove(); leafletMap = null; }
   $view.innerHTML = r.view(m);
+  if (r.map) initMap();
   if (isFormRoute() && draft) { updateConv(); renderChart(); centerPicked(); }
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
   if (tripOpen) document.getElementById('trip-dialog')?.showModal();
@@ -811,7 +933,14 @@ $view.addEventListener('click', async (ev) => {
     draft.benes.has(id) ? draft.benes.delete(id) : draft.benes.add(id);
     t.classList.toggle('on', draft.benes.has(id));
     updateConv();
-  } else if (action === 'bene-all') {
+  } else if (action === 'approx') {
+    draft.approx = !draft.approx;
+    t.classList.toggle('on', draft.approx);
+    t.setAttribute('aria-pressed', String(draft.approx));
+  } else if (action === 'locate') locate();
+  else if (action === 'unlocate') { draft.lat = null; draft.lng = null; draft.place = ''; paintLoc(); }
+  else if (action === 'f-approx') { filters.approx = !filters.approx; render(); }
+  else if (action === 'bene-all') {
     draft.benes = new Set(c.people.map((p) => p.id));
     document.querySelectorAll('#benes .chip[data-id]').forEach((b) => b.classList.add('on'));
     updateConv();
@@ -890,6 +1019,7 @@ $view.addEventListener('input', (ev) => {
   const id = ev.target.id;
   if (id === 'amount') { draft.amountText = ev.target.value; updateConv(); }
   else if (id === 'desc') draft.desc = ev.target.value;
+  else if (id === 'place') draft.place = ev.target.value;
   else if (id === 'manual') { draft.manual = ev.target.value; updateConv(); }
   else if (id === 'f-q') { filters.q = ev.target.value; const pos = ev.target.selectionStart; render(); const el = document.getElementById('f-q'); el.focus(); el.setSelectionRange(pos, pos); }
   else if (id.startsWith('m-')) onMethodForm(id);

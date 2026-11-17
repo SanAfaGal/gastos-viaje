@@ -60,7 +60,11 @@ CREATE TABLE IF NOT EXISTS expenses (
   rate_manual INTEGER NOT NULL DEFAULT 0,
   amount_home INTEGER,
   created_at TEXT NOT NULL,
-  trip_id TEXT REFERENCES trips(id)
+  trip_id TEXT REFERENCES trips(id),
+  lat REAL,
+  lng REAL,
+  place TEXT,
+  amount_approx INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (

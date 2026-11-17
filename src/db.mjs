@@ -42,6 +42,17 @@ async function upgradeTrips(db) {
   const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
   if (!cols.includes('trip_id')) await db.run('ALTER TABLE expenses ADD COLUMN trip_id TEXT REFERENCES trips(id)');
 
+  // Ubicación opcional del gasto y marca de monto aproximado.
+  const extra = [
+    ['lat', 'REAL'],
+    ['lng', 'REAL'],
+    ['place', 'TEXT'],
+    ['amount_approx', 'INTEGER NOT NULL DEFAULT 0'],
+  ];
+  for (const [col, type] of extra) {
+    if (!cols.includes(col)) await db.run(`ALTER TABLE expenses ADD COLUMN ${col} ${type}`);
+  }
+
   const first = () => db.all('SELECT id FROM trips ORDER BY rowid LIMIT 1');
   if (!(await first()).length) {
     const rows = await db.all("SELECT key, value FROM settings WHERE key IN ('dest_currency', 'home_currency')");

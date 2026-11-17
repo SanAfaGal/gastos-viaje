@@ -72,6 +72,41 @@ test('API: personas, medios, gasto compartido, idempotencia y cuentas', async ()
   assert.equal((await call('GET', '/api/state')).body.expenses.length, 0);
 });
 
+test('API: ubicación opcional y monto aproximado', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, body) => handle({ method, path, body, db });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 1000]);
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
+  await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  const base = { id: 'g1', date: '2026-11-14', amount_cents: 5000, description: 'Taxi', payment_method_id: 'efe', beneficiary_ids: ['yo'] };
+  const get = async () => (await call('GET', '/api/state')).body.expenses.find((e) => e.id === 'g1');
+
+  // Sin ubicación y exacto por defecto.
+  assert.equal((await call('POST', '/api/expenses', base)).status, 201);
+  assert.deepEqual({ ...(await get()) }, { ...(await get()), lat: null, lng: null, place: null, amount_approx: 0 });
+
+  // Con ubicación y aproximado.
+  const geo = { ...base, lat: 4.60971, lng: -74.08175, place: ' Centro ', amount_approx: true };
+  assert.equal((await call('POST', '/api/expenses', geo)).status, 201);
+  let e = await get();
+  assert.deepEqual([e.lat, e.lng, e.place, e.amount_approx], [4.60971, -74.08175, 'Centro', 1]);
+
+  // Cadenas vacías o null = sin ubicación; quitarla y desmarcar aproximado al editar.
+  assert.equal((await call('POST', '/api/expenses', { ...base, lat: null, lng: null, place: null, amount_approx: false })).status, 201);
+  e = await get();
+  assert.deepEqual([e.lat, e.lng, e.place, e.amount_approx], [null, null, null, 0]);
+  assert.equal((await call('POST', '/api/expenses', { ...base, lat: '', lng: '' })).status, 201);
+
+  // Inválidas: fuera de rango, solo una coordenada, no numéricas.
+  for (const bad of [{ lat: 91, lng: 0 }, { lat: 0, lng: 181 }, { lat: 4.6 }, { lng: -74 }, { lat: 'x', lng: 1 }]) {
+    assert.equal((await call('POST', '/api/expenses', { ...base, ...bad })).status, 400, JSON.stringify(bad));
+  }
+  // El 0,0 es una ubicación válida (no se confunde con "vacío").
+  assert.equal((await call('POST', '/api/expenses', { ...base, lat: 0, lng: 0 })).status, 201);
+  e = await get();
+  assert.deepEqual([e.lat, e.lng], [0, 0]);
+});
+
 test('API: medios de pago con aspecto de tarjeta (color, red, últimos 4 opcionales, dueño obligatorio)', async () => {
   const db = await openMemoryDb();
   const call = (method, path, body) => handle({ method, path, body, db });
@@ -267,6 +302,11 @@ test('migración: base de la primera versión (BRL a COP) se conserva', async ()
   assert.equal(st.expenses[0].amount_cents, 5000);
   assert.equal(st.expenses[0].amount_home, 2933500); // 29.335 pesos en centésimas
   assert.equal(st.expenses[0].rate, 586.7);
+  // Ubicación y monto aproximado: columnas nuevas, vacías en los gastos viejos.
+  assert.deepEqual(
+    { lat: st.expenses[0].lat, lng: st.expenses[0].lng, place: st.expenses[0].place, amount_approx: st.expenses[0].amount_approx },
+    { lat: null, lng: null, place: null, amount_approx: 0 },
+  );
   // Las columnas nuevas de los medios de pago se agregan sin perder los datos viejos.
   assert.deepEqual(
     { name: st.payment_methods[0].name, color: st.payment_methods[0].color, network: st.payment_methods[0].network },
