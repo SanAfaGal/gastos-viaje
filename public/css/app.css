@@ -175,6 +175,13 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .loc-set { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .map { height: calc(100dvh - 240px); min-height: 320px; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 4px; }
 .map .empty { padding: 24px; }
+.map.pick { height: 48dvh; min-height: 260px; }
+.pick-search { display: flex; gap: 8px; margin: 4px 0 8px; }
+.pick-search input { flex: 1; min-width: 0; padding: 10px 12px; }
+.pick-search .btn { margin: 0; }
+.pick-results { display: grid; gap: 6px; margin-bottom: 8px; max-height: 30dvh; overflow-y: auto; }
+.pick-res { display: grid; gap: 2px; text-align: left; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
+.pick-res .muted { font-size: .8rem; }
 
 /* Aviso de acción: abajo, sobre la barra de pestañas; ancho, de color fuerte y con ícono. */
 .toast {

@@ -46,6 +46,21 @@
     <div class="sheet-body" id="trip-list" role="radiogroup" aria-labelledby="ts-title"></div>
     <footer class="sheet-foot"><button type="button" class="btn secondary" data-manage>Crear o editar viajes</button></footer>
   </dialog>
+  <dialog id="map-pick" class="sheet" aria-labelledby="mp-title">
+    <header class="sheet-head"><h2 id="mp-title">Elige el lugar del gasto</h2>
+      <button type="button" class="sheet-x" data-pick-cancel aria-label="Cerrar">×</button></header>
+    <div class="sheet-body">
+      <form id="pick-search" class="pick-search" role="search" autocomplete="off">
+        <input id="pick-q" type="search" maxlength="120" placeholder="Buscar un lugar por nombre" aria-label="Buscar un lugar por nombre">
+        <button class="btn small" type="submit">Buscar</button>
+      </form>
+      <div id="pick-results" class="pick-results" role="listbox" aria-label="Resultados" hidden></div>
+      <p class="muted" id="pick-hint">Toca el mapa donde fue la compra.</p>
+      <div id="pick-map" class="map pick"></div>
+    </div>
+    <footer class="sheet-foot"><button type="button" class="btn secondary" data-pick-cancel>Cancelar</button>
+      <button type="button" class="btn" id="pick-ok" disabled>Usar este punto</button></footer>
+  </dialog>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script type="module" src="/js/app.js"></script>
 </body>

@@ -268,8 +268,12 @@ function draftFrom(c, id) {
 // Fila de ubicación del formulario. Se vuelve a dibujar sola (sin render()) para no perder lo escrito.
 function locHtml() {
   if (draft.locating) return '<button type="button" class="btn secondary small" disabled>Buscando ubicación…</button>';
-  if (draft.lat == null) return '<button type="button" class="btn secondary small" data-action="locate">📍 Guardar ubicación</button>';
+  if (draft.lat == null) {
+    return `<div class="loc-set"><button type="button" class="btn secondary small" data-action="locate">📍 Usar mi ubicación</button>
+      <button type="button" class="btn secondary small" data-action="pick-map">🗺 Buscar o elegir en el mapa</button></div>`;
+  }
   return `<div class="loc-set"><span class="tag">📍 ${esc(formatCoords(draft.lat, draft.lng))}</span>
+      <button type="button" class="btn secondary small" data-action="pick-map">Cambiar</button>
       <button type="button" class="btn secondary small" data-action="unlocate">Quitar</button></div>
     <input id="place" maxlength="120" placeholder="Nombre del lugar (opcional)" value="${esc(draft.place)}">`;
 }
@@ -672,11 +676,11 @@ function viewSettings() {
 
 // --- mapa de lugares ---
 
-const LEAFLET = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet';
+const LEAFLET = '/vendor/leaflet/leaflet'; // Leaflet 1.9.4 alojado en la app (sin scripts de terceros)
 let leafletLoading = null;
 let leafletMap = null;
 
-// Leaflet se baja solo al abrir el mapa (no pesa en el resto de la app). Sin internet falla y se avisa.
+// Leaflet se carga solo al abrir un mapa (no pesa en el resto de la app).
 function loadLeaflet() {
   if (globalThis.L) return Promise.resolve(globalThis.L);
   leafletLoading ??= new Promise((resolve, reject) => {
@@ -738,6 +742,121 @@ async function initMap() {
   if (pts.length === 1) map.setView(pts[0], 15);
   else map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
 }
+
+// --- elegir el lugar en el mapa o buscándolo por nombre (para gastos de antes, o si ya no estás ahí) ---
+
+const $pick = document.getElementById('map-pick');
+const $pickOk = document.getElementById('pick-ok');
+const $pickResults = document.getElementById('pick-results');
+let pickMap = null;
+let pickMarker = null;
+let pickPoint = null;
+let pickName = ''; // nombre del resultado buscado; se usa como "lugar" si el gasto no tiene uno
+let pickLeaflet = null;
+
+function setPickPoint(latlng, name = '') {
+  pickPoint = { lat: latlng.lat, lng: latlng.lng };
+  pickName = name;
+  if (pickMarker) pickMarker.setLatLng(latlng);
+  else pickMarker = pickLeaflet.marker(latlng).addTo(pickMap);
+  $pickOk.disabled = false;
+  document.getElementById('pick-hint').textContent = `${name ? name + ' · ' : ''}${formatCoords(pickPoint.lat, pickPoint.lng)} · toca otro punto para moverlo`;
+}
+
+async function openPicker() {
+  if (!draft) return;
+  const target = draft;
+  pickPoint = null;
+  pickName = '';
+  $pick.pickFor = target;
+  $pickOk.disabled = true;
+  $pickResults.hidden = true;
+  $pickResults.innerHTML = '';
+  document.getElementById('pick-q').value = '';
+  document.getElementById('pick-hint').textContent = 'Busca el lugar por nombre o toca el mapa donde fue la compra.';
+  const box = document.getElementById('pick-map');
+  box.innerHTML = '<div class="empty">Cargando mapa…</div>';
+  $pick.showModal();
+  try { pickLeaflet = await loadLeaflet(); } catch {
+    box.innerHTML = '<div class="empty">No se pudo cargar el mapa.</div>';
+    return;
+  }
+  if (!$pick.open) return;
+  const L = pickLeaflet;
+  box.innerHTML = '';
+  pickMap?.remove();
+  pickMarker = null;
+  pickMap = L.map(box);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(pickMap);
+  // Arranca donde ya estaba el gasto; si no, en el último gasto con ubicación del viaje; si no, el mundo.
+  const last = ctx().expenses.find(hasLocation);
+  if (target.lat != null) { pickMap.setView([target.lat, target.lng], 16); setPickPoint({ lat: target.lat, lng: target.lng }); }
+  else if (last) pickMap.setView([last.lat, last.lng], 13);
+  else pickMap.setView([20, 0], 2);
+  pickMap.on('click', (ev) => setPickPoint(ev.latlng));
+  pickMap.invalidateSize();
+}
+
+// Búsqueda por nombre con Nominatim (el buscador de OpenStreetMap). Solo al enviar, nunca letra por letra
+// (su política lo prohíbe); prefiere resultados cerca de lo que se ve en el mapa.
+let searching = false;
+document.getElementById('pick-search').addEventListener('submit', async (ev) => {
+  ev.preventDefault();
+  const q = document.getElementById('pick-q').value.trim();
+  if (!q || searching || !pickMap) return;
+  searching = true;
+  const btn = ev.target.querySelector('button');
+  btn.disabled = true;
+  $pickResults.hidden = false;
+  $pickResults.innerHTML = '<div class="muted">Buscando…</div>';
+  try {
+    const b = pickMap.getBounds();
+    const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
+      q, format: 'jsonv2', limit: '6', 'accept-language': 'es',
+      viewbox: [b.getWest(), b.getNorth(), b.getEast(), b.getSouth()].join(','),
+    });
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('búsqueda');
+    const found = (await res.json()).filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)));
+    $pickResults.innerHTML = found.length
+      ? found.map((r, i) => `<button type="button" class="pick-res" role="option" data-i="${i}">
+          <b>${esc(r.name || r.display_name.split(',')[0])}</b><span class="muted">${esc(r.display_name)}</span></button>`).join('')
+      : '<div class="muted">No se encontró. Prueba con otro nombre o agrega la ciudad.</div>';
+    $pickResults.found = found;
+  } catch {
+    $pickResults.innerHTML = '<div class="muted">No se pudo buscar. Revisa tu conexión o toca el mapa.</div>';
+  } finally {
+    searching = false;
+    btn.disabled = false;
+  }
+});
+
+$pickResults.addEventListener('click', (ev) => {
+  const b = ev.target.closest('.pick-res');
+  const r = b && $pickResults.found?.[Number(b.dataset.i)];
+  if (!r || !pickMap) return;
+  const at = { lat: Number(r.lat), lng: Number(r.lon) };
+  setPickPoint(at, r.name || r.display_name.split(',')[0]);
+  pickMap.setView(at, 17);
+  $pickResults.hidden = true;
+});
+
+$pickOk.addEventListener('click', () => {
+  const target = $pick.pickFor;
+  if (pickPoint && target && target === draft) {
+    target.lat = pickPoint.lat;
+    target.lng = pickPoint.lng;
+    if (pickName && !target.place.trim()) target.place = pickName.slice(0, 120);
+    paintLoc();
+  }
+  $pick.close();
+});
+$pick.addEventListener('click', (ev) => {
+  if (ev.target === $pick || ev.target.closest('[data-pick-cancel]')) $pick.close();
+});
+$pick.addEventListener('close', () => { pickMap?.remove(); pickMap = null; pickMarker = null; $pick.pickFor = null; });
 
 function viewLogin() {
   return `<form id="login" class="login card"><h2>Código de acceso</h2>
@@ -938,6 +1057,7 @@ $view.addEventListener('click', async (ev) => {
     t.classList.toggle('on', draft.approx);
     t.setAttribute('aria-pressed', String(draft.approx));
   } else if (action === 'locate') locate();
+  else if (action === 'pick-map') openPicker();
   else if (action === 'unlocate') { draft.lat = null; draft.lng = null; draft.place = ''; paintLoc(); }
   else if (action === 'f-approx') { filters.approx = !filters.approx; render(); }
   else if (action === 'bene-all') {

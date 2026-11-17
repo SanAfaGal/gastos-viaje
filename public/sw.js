@@ -3,6 +3,8 @@
 const CACHE = 'gastos-viaje-v12';
 const SHELL = [
   '/', '/index.html', '/css/app.css', '/js/app.js', '/js/store.js', '/js/money.mjs', '/js/cards.mjs', '/js/places.mjs',
+  '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css',
+  '/vendor/leaflet/images/marker-icon.png', '/vendor/leaflet/images/marker-icon-2x.png', '/vendor/leaflet/images/marker-shadow.png', '/vendor/leaflet/images/layers.png', '/vendor/leaflet/images/layers-2x.png',
   '/js/settlement.mjs', '/js/currencies.mjs', '/js/chart.mjs', '/js/theme.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png',
 ];
 
