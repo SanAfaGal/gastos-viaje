@@ -129,6 +129,14 @@ input, select, textarea {
   background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
 }
 input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); outline-offset: 1px; }
+.lab-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 14px 0 6px; }
+.lab-row label { margin: 0; min-width: 0; }
+.switch { flex: none; display: inline-flex; align-items: center; gap: 8px; padding: 4px 12px 4px 4px; border: 1px solid var(--border); border-radius: 99px; background: var(--surface); color: var(--muted); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer; }
+.switch .track { position: relative; width: 34px; height: 20px; border-radius: 99px; background: var(--border); transition: background .15s; }
+.switch .track::after { content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgb(0 0 0 / .35); transition: transform .15s; }
+.switch.on { background: var(--warn-bg); color: var(--warn-text); border-color: transparent; }
+.switch.on .track { background: var(--warn-text); }
+.switch.on .track::after { transform: translateX(14px); }
 .amount { font-size: 1.8rem; font-weight: 700; text-align: left; font-variant-numeric: tabular-nums; }
 .conv { margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: .9rem; min-height: 42px; }
 .chart { margin-top: 10px; padding: 12px; border-radius: 12px; background: var(--surface-2); }

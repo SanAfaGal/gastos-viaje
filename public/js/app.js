@@ -317,9 +317,12 @@ function viewForm(editId) {
   }
   return `
     <form id="exp-form" autocomplete="off" novalidate>
-      <label for="amount">Monto en ${esc(currencies().dest.name.toLowerCase())} (${esc(currencies().dest.code)})</label>
+      <div class="lab-row">
+        <label for="amount">Monto en ${esc(currencies().dest.name.toLowerCase())} (${esc(currencies().dest.code)})</label>
+        <button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx"
+          title="Márcalo si el monto es redondeado y hay que ajustarlo después"><span class="track" aria-hidden="true"></span>Aproximado</button>
+      </div>
       <input id="amount" class="amount" inputmode="decimal" placeholder="0,00" value="${esc(draft.amountText)}">
-      <div class="chips"><button type="button" class="chip ${draft.approx ? 'on' : ''}" data-action="approx" aria-pressed="${draft.approx}">≈ Monto aproximado</button></div>
       <div class="conv" id="conv"></div>
       <div class="chart" id="chart" role="img"></div>
 
@@ -1072,7 +1075,7 @@ $view.addEventListener('click', async (ev) => {
   } else if (action === 'approx') {
     draft.approx = !draft.approx;
     t.classList.toggle('on', draft.approx);
-    t.setAttribute('aria-pressed', String(draft.approx));
+    t.setAttribute('aria-checked', String(draft.approx));
   } else if (action === 'locate') locate();
   else if (action === 'pick-map') openPicker();
   else if (action === 'unlocate') { draft.lat = null; draft.lng = null; draft.place = ''; paintLoc(); }
