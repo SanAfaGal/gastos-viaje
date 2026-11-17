@@ -119,16 +119,15 @@ export async function fetchRate(date) {
 }
 
 // Historial de tasas para el gráfico: lo pide al servidor y guarda una copia por si no hay internet.
-export async function fetchHistory() {
-  const key = pairKey();
+export async function fetchHistory(days = 30) {
+  const key = `${pairKey()}|${days}`;
   try {
-    const points = await request('GET', '/api/rates/history?days=45');
-    write(K.hist, { key, points, at: Date.now() });
+    const points = await request('GET', `/api/rates/history?days=${days}`);
+    write(K.hist, { ...read(K.hist, {}), [key]: points });
     return points;
   } catch (err) {
     if (err.status === 401) throw err;
-    const saved = read(K.hist, null);
-    return saved?.key === key ? saved.points : [];
+    return read(K.hist, {})[key] ?? [];
   }
 }
 

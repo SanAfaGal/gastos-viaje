@@ -1,5 +1,6 @@
-// Gráfico pequeño de la tasa de cambio (SVG a mano, sin librerías). Módulo puro: recibe puntos
-// [{ date, rate }] ordenados por fecha y devuelve el SVG y un resumen. Si hay menos de 2 puntos, null.
+// Gráfico de la tasa de cambio (SVG a mano, sin librerías). Módulo puro: recibe puntos
+// [{ date, rate }] ordenados por fecha y devuelve el dibujo y las posiciones de cada punto.
+// La interacción (línea guía al pasar el dedo o el mouse) la hace app.js con estas posiciones.
 const W = 300;
 const H = 72;
 const PAD = 8;
@@ -15,20 +16,28 @@ export function sparkline(points, selected) {
   const line = points.map((p, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(p.rate).toFixed(1)}`).join(' ');
   const area = `${line} L${x(points.length - 1).toFixed(1)} ${H - PAD} L${x(0).toFixed(1)} ${H - PAD} Z`;
   const si = points.findIndex((p) => p.date === selected);
-  const dot = si >= 0
-    ? `<line class="chart-sel" x1="${x(si).toFixed(1)}" x2="${x(si).toFixed(1)}" y1="${PAD}" y2="${H - PAD}"/>` +
-      `<circle class="chart-dot" cx="${x(si).toFixed(1)}" cy="${y(points[si].rate).toFixed(1)}" r="4.5"/>`
-    : '';
   const first = points[0];
-  const last = points.at(-1);
   return {
+    // Solo la línea y el área: los puntos y guías van como HTML para que no se deformen al estirar el SVG.
     svg: `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">` +
-      `<path class="chart-area" d="${area}"/><path class="chart-line" d="${line}"/>${dot}</svg>`,
+      `<path class="chart-area" d="${area}"/><path class="chart-line" d="${line}"/></svg>`,
+    xs: points.map((_, i) => +((x(i) / W) * 100).toFixed(2)), // posición horizontal de cada punto, en %
+    ys: points.map((p) => +((y(p.rate) / H) * 100).toFixed(2)), // posición vertical, en %
     min,
     max,
     first,
-    last,
+    last: points.at(-1),
+    selectedIndex: si,
     selected: si >= 0 ? points[si] : null,
-    change: ((last.rate - first.rate) / first.rate) * 100,
+    change: ((points.at(-1).rate - first.rate) / first.rate) * 100,
   };
+}
+
+// Variación (%) de un punto respecto al primero del período.
+export const changeAt = (points, i) => ((points[i].rate - points[0].rate) / points[0].rate) * 100;
+
+// Índice del punto más cercano a una posición horizontal (0 = borde izquierdo, 1 = derecho).
+export function nearestIndex(n, fraction) {
+  const t = (Math.min(1, Math.max(0, fraction)) * W - PAD) / (W - 2 * PAD);
+  return Math.min(n - 1, Math.max(0, Math.round(t * (n - 1))));
 }

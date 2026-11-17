@@ -2,7 +2,7 @@
 import { computeSettlement, splitEqual } from './settlement.mjs';
 import { addDays, currencies, fmtDest, fmtHome, fmtRate, parseAmount, toHome, todayStr } from './money.mjs';
 import { CURRENCIES } from './currencies.mjs';
-import { sparkline } from './chart.mjs';
+import { changeAt, nearestIndex, sparkline } from './chart.mjs';
 import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 
@@ -239,43 +239,101 @@ async function loadRate() {
   }
 }
 
-// --- gráfico de la tasa (últimos 45 días) ---
+// --- gráfico de la tasa, interactivo ---
+// Pasa el dedo o el mouse por encima (o usa las flechas) para ver la tasa de cada día.
+const RANGES = [7, 30, 90];
+let chartDays = RANGES.includes(Number(localStorage.getItem('bg_chartDays'))) ? Number(localStorage.getItem('bg_chartDays')) : 30;
 let history = null; // [{ date, rate }] o null mientras carga
+let chartGeo = null; // posiciones de los puntos (en %) del gráfico dibujado
+let chartIdx = 0; // punto mostrado en la lectura
 
 async function loadHistory() {
+  const days = chartDays;
+  history = null;
+  renderChart();
+  let points;
   try {
-    history = await store.fetchHistory();
+    points = await store.fetchHistory(days);
   } catch {
-    history = [];
+    points = [];
   }
+  if (days !== chartDays) return; // cambió de rango mientras cargaba
+  history = points;
   renderChart();
 }
+
+const numFmt = (v) => new Intl.NumberFormat(currencies().home.locale, { maximumFractionDigits: v < 10 ? 4 : 2 }).format(v);
+const pctFmt = (v) => `${v > 0 ? '+' : ''}${new Intl.NumberFormat(currencies().home.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(v)} %`;
+const dayShort = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('es-CO', { weekday: 'short', day: 'numeric', month: 'short' });
 
 function renderChart() {
   const el = document.getElementById('chart');
   if (!el || !draft) return;
+  const tabs = `<div class="mini-tabs" role="group" aria-label="Período del gráfico">${RANGES.map((d) =>
+    `<button type="button" class="mini-tab ${d === chartDays ? 'on' : ''}" data-action="range" data-id="${d}" aria-pressed="${d === chartDays}">${d} d</button>`).join('')}</div>`;
   const g = history ? sparkline(history, draft.date) : null;
   if (!g) {
-    el.innerHTML = '';
+    chartGeo = null;
     el.removeAttribute('aria-label');
+    el.innerHTML = history === null
+      ? `<div class="chart-top"><div class="chart-read"><div class="chart-meta">Cargando tasas…</div></div>${tabs}</div>`
+      : '';
     return;
   }
+  chartGeo = g;
   const cur = currencies();
-  const n = (v) => new Intl.NumberFormat(cur.home.locale, { maximumFractionDigits: v < 10 ? 4 : 2 }).format(v);
-  const pct = (v) => new Intl.NumberFormat(cur.home.locale, { maximumFractionDigits: 1, minimumFractionDigits: 1 }).format(v);
-  const trend = `${g.change > 0 ? '+' : ''}${pct(g.change)} %`;
-  const label = `Tasa ${cur.dest.code} a ${cur.home.code} en los últimos ${history.length} días: mínimo ${n(g.min)}, máximo ${n(g.max)}, `
-    + `${g.change >= 0 ? 'subió' : 'bajó'} ${pct(Math.abs(g.change))} %`;
-  el.setAttribute('aria-label', label);
-  el.innerHTML = `${g.svg}<div class="chart-cap" aria-hidden="true">
-    <span>Mín <b>${n(g.min)}</b> · Máx <b>${n(g.max)}</b></span>
-    <span>${esc(history.length)} días: <b>${trend}</b></span>
-    ${g.selected ? `<span>El día del gasto: <b>${n(g.selected.rate)}</b></span>` : ''}</div>`;
+  el.setAttribute('aria-label', `Tasa ${cur.dest.code} a ${cur.home.code} en los últimos ${history.length} días: mínimo ${numFmt(g.min)}, máximo ${numFmt(g.max)}, `
+    + `${g.change >= 0 ? 'subió' : 'bajó'} ${pctFmt(Math.abs(g.change)).replace('+', '')}`);
+  const sel = g.selectedIndex;
+  el.innerHTML = `<div class="chart-top">
+      <div class="chart-read" aria-hidden="true"><div class="chart-val" id="c-val"></div><div class="chart-meta" id="c-meta"></div><div class="chart-conv" id="c-conv"></div></div>
+      ${tabs}</div>
+    <div class="chart-plot" id="c-plot" tabindex="0" role="slider" aria-label="Recorrer los días del gráfico con las flechas"
+      aria-valuemin="0" aria-valuemax="${history.length - 1}" aria-valuenow="${sel >= 0 ? sel : history.length - 1}">
+      ${g.svg}
+      ${sel >= 0 ? `<div class="chart-sel" style="left:${g.xs[sel]}%"></div><div class="chart-dot" style="left:${g.xs[sel]}%;top:${g.ys[sel]}%"></div>` : ''}
+      <div class="chart-cross" id="c-cross" hidden></div><div class="chart-dot live" id="c-live" hidden></div>
+    </div>
+    <div class="chart-cap" aria-hidden="true"><span>Mín <b>${numFmt(g.min)}</b></span><span>Máx <b>${numFmt(g.max)}</b></span></div>`;
+  chartIdx = sel >= 0 ? sel : history.length - 1;
+  paintReadout(chartIdx, false);
+}
+
+// Escribe la lectura (tasa, fecha, variación y conversión del monto) del punto i y, si se está recorriendo, mueve la guía.
+function paintReadout(i, scrubbing) {
+  const val = document.getElementById('c-val');
+  if (!val || !history?.[i]) return;
+  chartIdx = i;
+  const p = history[i];
+  const cur = currencies();
+  val.textContent = `${numFmt(p.rate)} ${cur.home.code}`;
+  const isSel = !scrubbing && chartGeo.selectedIndex === i;
+  document.getElementById('c-meta').textContent = `${isSel ? 'Día del gasto' : dayShort(p.date)} · ${pctFmt(changeAt(history, i))} en ${history.length} días`;
+  const cents = parseAmount(draft?.amountText);
+  document.getElementById('c-conv').textContent = cents ? `${fmtDest(cents)} ese día = ${fmtHome(toHome(cents, p.rate, cur.home.digits))}` : '';
+  const cross = document.getElementById('c-cross');
+  const live = document.getElementById('c-live');
+  cross.hidden = !scrubbing;
+  live.hidden = !scrubbing;
+  if (scrubbing) {
+    cross.style.left = `${chartGeo.xs[i]}%`;
+    live.style.left = `${chartGeo.xs[i]}%`;
+    live.style.top = `${chartGeo.ys[i]}%`;
+  }
+  const plot = document.getElementById('c-plot');
+  plot.setAttribute('aria-valuenow', String(i));
+  plot.setAttribute('aria-valuetext', `${dayShort(p.date)}: ${numFmt(p.rate)} ${cur.home.code}`);
+}
+
+function resetReadout() {
+  if (!chartGeo) return;
+  paintReadout(chartGeo.selectedIndex >= 0 ? chartGeo.selectedIndex : history.length - 1, false);
 }
 
 function updateConv(loaded = false) {
   const el = document.getElementById('conv');
   if (!el || !draft) return;
+  if (chartGeo) paintReadout(chartIdx, !document.getElementById('c-cross')?.hidden);
   const cents = parseAmount(draft.amountText);
   const m = manualRate();
   const r = m ? { rate: m, estimated: false, manual: true } : convRate;
@@ -540,6 +598,10 @@ $view.addEventListener('click', async (ev) => {
       toast('Gasto borrado');
       location.hash = '#/gastos';
     }
+  } else if (action === 'range') {
+    chartDays = Number(id);
+    try { localStorage.setItem('bg_chartDays', String(chartDays)); } catch { /* sin almacenamiento */ }
+    loadHistory();
   } else if (action === 'mode') { setTheme({ mode: id }); render(); }
   else if (action === 'accent') { setTheme({ accent: id }); render(); }
   else if (action === 'edit-person') { editPerson = id; render(); }
@@ -553,6 +615,29 @@ $view.addEventListener('click', async (ev) => {
   } else if (action === 'csv') downloadCsv();
   else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
 });
+
+// Recorrer el gráfico con el dedo, el mouse o las flechas del teclado.
+function scrubTo(ev) {
+  const plot = document.getElementById('c-plot');
+  if (!plot || !history || !chartGeo) return;
+  const r = plot.getBoundingClientRect();
+  paintReadout(nearestIndex(history.length, (ev.clientX - r.left) / r.width), true);
+}
+$view.addEventListener('pointerdown', (ev) => { if (ev.target.closest('#c-plot')) scrubTo(ev); });
+$view.addEventListener('pointermove', (ev) => {
+  if (ev.target.closest('#c-plot') && (ev.pointerType === 'mouse' || ev.buttons)) scrubTo(ev);
+});
+$view.addEventListener('pointerup', (ev) => { if (ev.pointerType !== 'mouse') resetReadout(); });
+$view.addEventListener('pointercancel', resetReadout);
+$view.addEventListener('pointerleave', (ev) => { if (ev.target.id === 'c-plot') resetReadout(); }, true);
+$view.addEventListener('keydown', (ev) => {
+  if (ev.target.id !== 'c-plot' || !history) return;
+  const step = { ArrowLeft: -1, ArrowRight: 1, Home: -1e9, End: 1e9 }[ev.key];
+  if (!step) return;
+  ev.preventDefault();
+  paintReadout(Math.min(history.length - 1, Math.max(0, chartIdx + step)), true);
+});
+$view.addEventListener('focusout', (ev) => { if (ev.target.id === 'c-plot') resetReadout(); });
 
 $view.addEventListener('input', (ev) => {
   const id = ev.target.id;
