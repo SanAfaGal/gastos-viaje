@@ -155,6 +155,35 @@ export async function rateHistory(db, currencies, days = 45, opts = {}) {
   return dates.filter((d) => have.has(d)).map((date) => ({ date, rate: have.get(date) }));
 }
 
+// Botón "Actualizar tasas": vuelve a pedir a la fuente la tasa de cada día de `dates` (sin mirar la base) y
+// devuelve un Map fecha -> tasa solo con los días que la fuente trae exactos. Si `save`, los días cerrados
+// quedan guardados en la base (se sobrescribe lo que hubiera). Lanza si la fuente no responde.
+export async function refreshRates(db, currencies, dates, { save = true, fetchFn = fetch, today = todayStr() } = {}) {
+  const { dest, home } = currencies;
+  const out = new Map();
+  const queue = [...new Set(dates)].filter((d) => d <= today);
+  if (dest === home) { queue.forEach((d) => out.set(d, 1)); return out; }
+  const pair = `${dest}-${home}`;
+  let failure = null;
+  const worker = async () => {
+    while (queue.length && !failure) {
+      const d = queue.shift();
+      try {
+        const got = await fetchRate(d === today ? 'latest' : d, currencies, fetchFn, d);
+        if (got && got.date === d) {
+          out.set(d, got.rate);
+          if (save && d < today) await saveRate(db, pair, d, got.rate);
+        }
+      } catch (err) {
+        failure = err;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(6, queue.length) }, worker));
+  if (failure) throw failure;
+  return out;
+}
+
 // Solo para pruebas.
 export function _resetFailures() {
   netFailures.clear();

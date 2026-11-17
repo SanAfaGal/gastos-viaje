@@ -207,15 +207,15 @@ export function getState() {
     const x = op.expense;
     const t = expenseTrip(x);
     if (!t) continue; // el viaje se borró: el servidor lo rechazará al enviar
-    const r = x.rate_manual ? { rate: x.rate_manual } : localRate(x.date, t);
+    const r = localRate(x.date, t);
     all.push({
       ...x,
       // Editar un gasto no lo cambia de lugar en su día (si cambia de día, queda al final del nuevo).
       sort_order: prev && prev.date === x.date ? (prev.sort_order ?? null) : null,
       trip_id: t.id,
       pending: true,
-      rate: x.rate_manual ?? null,
-      rate_manual: x.rate_manual ? 1 : 0,
+      rate: r?.rate ?? null,
+      rate_manual: 0,
       rate_estimated: r?.estimated ? 1 : 0,
       amount_home: r ? toHome(x.amount_cents, r.rate, currencyByCode(t.home).digits) : null,
     });
@@ -300,4 +300,15 @@ export const savePerson = (p) => mutate(p.id ? 'PUT' : 'POST', p.id ? `/api/peop
 export const deletePerson = (id) => mutate('DELETE', `/api/people/${id}`);
 export const saveMethod = (m) => mutate(m.id ? 'PUT' : 'POST', m.id ? `/api/payment-methods/${m.id}` : '/api/payment-methods', m);
 export const deleteMethod = (id) => mutate('DELETE', `/api/payment-methods/${id}`);
+// Botón "Actualizar tasas". Con dry=true solo cuenta qué cambiaría. Al aplicarlo se olvidan las tasas guardadas
+// en el celular de este par y se vuelve a leer todo del servidor.
+export async function refreshRatesNow(dry) {
+  const out = await request('POST', `/api/rates/refresh?trip=${encodeURIComponent(activeTrip().id)}${dry ? '&dry=1' : ''}`);
+  if (!dry) {
+    delete rates[pairKey()];
+    write(K.rates, rates);
+    await refresh();
+  }
+  return out;
+}
 export const ping = () => request('GET', '/api/ping');

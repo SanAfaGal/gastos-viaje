@@ -157,18 +157,10 @@ test('API: medios de pago con aspecto de tarjeta (color, red, últimos 4 opciona
   assert.match(noOwner.body.error, /de quién es/);
 });
 
-test('API: tasa manual y código de acceso', async () => {
+test('API: código de acceso', async () => {
   const db = await openMemoryDb();
   const call = (method, path, body, passcode) => handle({ method, path, body, db, passcode });
   await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
-  await call('POST', '/api/payment-methods', { id: 'cash', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
-  await call('POST', '/api/expenses', {
-    id: 'e2', date: '2026-11-14', amount_cents: 1000, payment_method_id: 'cash',
-    beneficiary_ids: ['yo'], rate_manual: 900,
-  });
-  const e = (await call('GET', '/api/state')).body.expenses[0];
-  assert.equal(e.amount_home, 900000);
-  assert.equal(e.rate_manual, 1);
 
   process.env.APP_PASSCODE = 'secreto';
   try {
@@ -205,7 +197,9 @@ test('viajes: cada viaje tiene sus monedas, personas y gastos; el bloqueo de mon
   await call('POST', '/api/payment-methods', { id: 'ca', kind: 'cash', name: 'Efectivo Ana', owner_person_id: 'ana' });
   await call('POST', '/api/trips', { id: 'mx', name: 'Mexico', dest: 'MXN', home: 'EUR', people_ids: ['yo'] });
 
-  const exp = { date: '2026-11-14', amount_cents: 10000, payment_method_id: 'c', beneficiary_ids: ['yo'], rate_manual: 0.05 };
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['MXN-EUR', '2026-11-14', 0.05]);
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 0.05]);
+  const exp = { date: '2026-11-14', amount_cents: 10000, payment_method_id: 'c', beneficiary_ids: ['yo'] };
   assert.equal((await call('POST', '/api/expenses', { ...exp, id: 'g1', trip_id: 'mx' })).status, 201);
   assert.equal((await call('POST', '/api/expenses', { ...exp, id: 'g2' })).status, 201); // sin viaje: va al primero
   const st = (await call('GET', '/api/state')).body;
@@ -213,7 +207,7 @@ test('viajes: cada viaje tiene sus monedas, personas y gastos; el bloqueo de mon
   assert.equal(byId.g1.trip_id, 'mx');
   assert.equal(byId.g1.amount_home, 500); // 100 MXN * 0.05 = 5 EUR (monedas de México)
   assert.equal(byId.g2.trip_id, 'trip-1');
-  assert.equal(byId.g2.amount_home, 500); // con tasa manual, en COP: 100 BRL * 0.05 = 5 COP
+  assert.equal(byId.g2.amount_home, 500); // en COP (tasa de prueba): 100 BRL * 0.05 = 5 COP
 
   // Un gasto que se edita conserva su viaje aunque se mande otro.
   assert.equal((await call('PUT', '/api/expenses/g1', { ...exp, trip_id: 'trip-1' })).status, 200);
@@ -250,8 +244,9 @@ test('viajes: borrar con y sin gastos; el último no se borra', async () => {
   await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
   await call('POST', '/api/payment-methods', { id: 'c', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
   await call('POST', '/api/trips', { id: 'mx', name: 'Mexico', dest: 'MXN', home: 'EUR' });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['MXN-EUR', '2026-11-14', 1]);
   await call('POST', '/api/expenses', {
-    id: 'g1', trip_id: 'mx', date: '2026-11-14', amount_cents: 100, payment_method_id: 'c', beneficiary_ids: ['yo'], rate_manual: 1,
+    id: 'g1', trip_id: 'mx', date: '2026-11-14', amount_cents: 100, payment_method_id: 'c', beneficiary_ids: ['yo'],
   });
   assert.equal((await call('DELETE', '/api/trips/mx')).status, 409);
   assert.equal((await call('GET', '/api/state')).body.expenses.length, 1);
@@ -390,9 +385,7 @@ test('seguridad: límite de intentos fallidos por IP y topes de monto y tasa', a
   await handle({ method: 'POST', path: '/api/people', body: { id: 'p', name: 'P' }, db });
   await handle({ method: 'POST', path: '/api/payment-methods', body: { id: 'm', kind: 'cash', name: 'E', owner_person_id: 'p' }, db });
   const base = { date: '2026-11-14', payment_method_id: 'm', beneficiary_ids: ['p'] };
-  assert.equal((await open({ ...base, amount_cents: 1e12, rate_manual: 1 })).status, 400);
-  assert.equal((await open({ ...base, amount_cents: 100, rate_manual: 1e9 })).status, 400);
-  assert.equal((await open({ ...base, amount_cents: 100, rate_manual: 'abc' })).status, 201); // texto no numérico: usa la tasa del día o queda pendiente
+  assert.equal((await open({ ...base, amount_cents: 1e12 })).status, 400); // monto demasiado grande
 });
 
 test('historial de tasas: usa lo guardado, pide lo que falta y salta días sin dato', async () => {
@@ -503,4 +496,70 @@ test('API: orden manual de los gastos de un día (idempotente, ignora ids que no
   for (const bad of [{}, { ids: 'a' }, { ids: [1] }, { ids: [''] }, { ids: Array(501).fill('x') }]) {
     assert.equal((await call('POST', '/api/order', bad)).status, 400, JSON.stringify(bad).slice(0, 40));
   }
+});
+
+// Fuente simulada por día: table = { '2026-11-14': 587 } (BRL a COP). Frankfurter no responde.
+const withDatedRates = async (table, fn) => {
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    const version = u.match(/currency-api@([^/]+)\/v1/)?.[1] ?? u.match(/\/\/([^.]+)\.currency-api/)?.[1];
+    const rate = table[version === 'latest' ? todayYmd() : version];
+    if (!version || rate == null) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ date: version === 'latest' ? todayYmd() : version, brl: { cop: rate } }) };
+  };
+  try { return await fn(); } finally { globalThis.fetch = real; }
+};
+
+test('actualizar tasas: primero cuenta lo que cambiaría, luego corrige solo lo que difiere y es idempotente', async () => {
+  _resetFailures();
+  const db = await openMemoryDb();
+  const call = (method, path, body, query = {}) => handle({ method, path, body, query: new URLSearchParams(query), db });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 500]); // vieja y equivocada
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-13', 600]); // correcta
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
+  await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  await withDatedRates({ '2026-11-14': 587, '2026-11-13': 600 }, async () => {
+    const base = { amount_cents: 10000, description: '', payment_method_id: 'efe', beneficiary_ids: ['yo'] };
+    for (const [id, date] of [['a', '2026-11-14'], ['b', '2026-11-13'], ['c', '2026-11-12']]) await call('POST', '/api/expenses', { ...base, id, date });
+    const rows = async () => Object.fromEntries((await db.all('SELECT id, rate, amount_home FROM expenses')).map((r) => [r.id, [r.rate, r.amount_home]]));
+    assert.deepEqual((await rows()).a, [500, 5000000]);
+    assert.equal((await rows()).c[0], null); // la fuente no tiene el 12: sin tasa
+
+    // Solo contar: no cambia nada, ni los gastos ni la base de tasas.
+    const dry = (await call('POST', '/api/rates/refresh', null, { dry: '1' })).body;
+    assert.deepEqual([dry.dry, dry.changed, dry.unchanged, dry.no_data], [true, 1, 1, 1]);
+    assert.ok(dry.total_after > dry.total_before);
+    assert.deepEqual((await rows()).a, [500, 5000000]);
+    assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', ['2026-11-14']))[0].rate, 500);
+
+    // Aplicar: corrige el gasto del 14 y la tasa guardada de ese día; no toca los demás.
+    const done = (await call('POST', '/api/rates/refresh')).body;
+    assert.deepEqual([done.dry, done.changed, done.unchanged, done.no_data], [false, 1, 1, 1]);
+    assert.deepEqual((await rows()).a, [587, 5870000]);
+    assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', ['2026-11-14']))[0].rate, 587);
+    assert.equal(done.total_after - done.total_before, 870000);
+
+    // Repetirlo ya no cambia nada.
+    const again = (await call('POST', '/api/rates/refresh')).body;
+    assert.deepEqual([again.changed, again.unchanged, again.no_data], [0, 2, 1]);
+  });
+  // Sin internet no se cambia nada y se avisa.
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('sin red'); };
+  try { assert.equal((await call('POST', '/api/rates/refresh')).status, 503); } finally { globalThis.fetch = real; }
+  // Viaje que no existe.
+  assert.equal((await call('POST', '/api/rates/refresh', null, { trip: 'no' })).status, 400);
+});
+
+test('la tasa manual ya no existe: se ignora si llega y siempre se usa la de la fuente', async () => {
+  _resetFailures();
+  const db = await openMemoryDb();
+  const call = (method, path, body) => handle({ method, path, body, db });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 580]);
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
+  await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  await call('POST', '/api/expenses', { id: 'e', date: '2026-11-14', amount_cents: 1000, payment_method_id: 'efe', beneficiary_ids: ['yo'], rate_manual: 9999 });
+  const e = (await call('GET', '/api/state')).body.expenses[0];
+  assert.deepEqual([e.rate, e.rate_manual], [580, 0]);
 });

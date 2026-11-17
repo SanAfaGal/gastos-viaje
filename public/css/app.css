@@ -185,9 +185,19 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .filters select, .filters input { padding: 10px 12px; }
 .filters .chip { justify-self: start; }
 
-.loc { display: grid; gap: 8px; }
-.loc .btn.small { justify-self: start; }
-.loc-set { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+/* Ubicación del gasto: vacía (invitación con dos botones), guardada (tarjeta con nombre y coordenadas) o buscando. */
+.loc-box { display: grid; gap: 10px; padding: 12px; border: 1.5px dashed var(--border); border-radius: 14px; background: transparent; }
+.loc-box.set { border: 1px solid var(--border); background: var(--surface); }
+.loc-empty, .loc-head { display: flex; align-items: center; gap: 10px; font-size: .88rem; color: var(--muted); }
+.loc-ico { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--surface-2); font-size: 1.05rem; }
+.loc-ico.on { background: var(--brand); filter: none; }
+.loc-info { display: grid; min-width: 0; }
+.loc-info b { color: var(--text); font-size: 1rem; overflow-wrap: anywhere; }
+.loc-info .muted { font-size: .8rem; font-variant-numeric: tabular-nums; }
+.loc-btns { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.loc-btns .btn { display: block; width: 100%; margin: 0; padding: 11px 8px; font-size: .9rem; }
+.loc-wait { display: flex; align-items: center; justify-content: center; gap: 10px; padding: 10px 0; color: var(--muted); font-size: .9rem; }
+.spin { width: 1em; height: 1em; border: 2.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
 .map { height: calc(100dvh - 240px); min-height: 320px; border-radius: 14px; overflow: hidden; border: 1px solid var(--border); background: var(--surface-2); margin-bottom: 4px; }
 .map .empty { padding: 24px; }
 .stop { background: none; border: 0; }
@@ -312,5 +322,5 @@ main[aria-busy="true"] button:not(.busy), main[aria-busy="true"] .item, main[ari
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {
   .btn, .chip, .mini-tab, .item, .tabbar a, button { transition: none; }
-  .busy::before { animation-duration: 1.8s; }
+  .busy::before, .spin { animation-duration: 1.8s; }
 }

@@ -4,7 +4,7 @@ import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isValidDate, toHome, todayStr } from '../public/js/money.mjs';
 import { currencyByCode } from '../public/js/currencies.mjs';
 import { NETWORKS, isHexColor } from '../public/js/cards.mjs';
-import { rateHistory, resolveRate } from './rates.mjs';
+import { rateHistory, refreshRates, resolveRate } from './rates.mjs';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -21,7 +21,6 @@ const sha = (s) => createHash('sha256').update(String(s)).digest();
 
 // Topes para que un dato absurdo no desborde los cálculos (cents * rate debe quedar bajo 2^53).
 const MAX_CENTS = 5e9;
-const MAX_RATE = 1e6;
 const MAX_FAILS = 10;
 const MAX_GLOBAL = 300;
 const LOCK_MS = 15 * 60 * 1000;
@@ -289,23 +288,15 @@ async function saveExpense(db, id, body) {
   if (ids.some((p) => !going.has(p))) fail(400, 'Alguna persona no va en este viaje');
 
   const homeDigits = currencyByCode(settings.home).digits;
+  // La tasa siempre sale de la fuente (ya no hay tasa manual). La columna rate_manual queda en 0.
   let rate = null;
   let rateDate = null;
   let estimated = 0;
-  let manual = 0;
-  const manualRate = Number(body.rate_manual);
-  if (body.rate_manual != null && manualRate > 0) {
-    if (!Number.isFinite(manualRate) || manualRate > MAX_RATE) fail(400, 'La tasa manual no es válida');
-    rate = manualRate;
-    rateDate = body.date;
-    manual = 1;
-  } else {
-    const r = await resolveRate(db, body.date, settings);
-    if (r) {
-      rate = r.rate;
-      rateDate = r.rate_date;
-      estimated = r.estimated ? 1 : 0;
-    }
+  const r = await resolveRate(db, body.date, settings);
+  if (r) {
+    rate = r.rate;
+    rateDate = r.rate_date;
+    estimated = r.estimated ? 1 : 0;
   }
   const amountHome = rate == null ? null : toHome(cents, rate, homeDigits);
 
@@ -339,7 +330,7 @@ async function saveExpense(db, id, body) {
               amount_approx = excluded.amount_approx,
               sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
       args: [id, body.date, cents, description, body.payment_method_id, rate, rateDate,
-        estimated, manual, amountHome, new Date().toISOString(), trip.id,
+        estimated, 0, amountHome, new Date().toISOString(), trip.id,
         lat, lng, place, approx],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
@@ -365,6 +356,51 @@ async function deleteExpense(db, id) {
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     { sql: 'DELETE FROM expenses WHERE id = ?', args: [id] },
   ]);
+}
+
+// "Actualizar tasas": revisa los gastos del viaje contra la tasa que hoy da la fuente para el día de cada uno.
+// Con ?dry=1 solo cuenta qué cambiaría; sin él corrige las tasas guardadas y los montos de esos gastos.
+async function refreshTripRates(db, query) {
+  const trip = await getTrip(db, query.get('trip'));
+  const dry = query.get('dry') === '1';
+  const settings = tripPair(trip);
+  const digits = currencyByCode(settings.home).digits;
+  const rows = await db.all(
+    'SELECT id, date, amount_cents, amount_home, rate, rate_estimated FROM expenses WHERE trip_id = ? AND rate_manual = 0',
+    [trip.id],
+  );
+  const dates = [...new Set(rows.map((r) => r.date))].sort().slice(-120);
+  let fresh;
+  try {
+    fresh = await refreshRates(db, settings, dates, { save: !dry });
+  } catch {
+    fail(503, 'No se pudo consultar la fuente de tasas. Intenta de nuevo con internet.');
+  }
+  let changed = 0;
+  let unchanged = 0;
+  let noData = 0;
+  let before = 0;
+  let after = 0;
+  const updates = [];
+  for (const e of rows) {
+    const rate = fresh.get(e.date);
+    before += e.amount_home ?? 0;
+    if (rate == null) { // la fuente no trae ese día (o hoy aún no lo publica): no se toca
+      noData += 1;
+      after += e.amount_home ?? 0;
+      continue;
+    }
+    const home = toHome(e.amount_cents, rate, digits);
+    after += home;
+    if (e.amount_home === home && e.rate === rate && !e.rate_estimated) { unchanged += 1; continue; }
+    changed += 1;
+    updates.push({
+      sql: 'UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = 0, amount_home = ? WHERE id = ?',
+      args: [rate, e.date, home, e.id],
+    });
+  }
+  if (!dry && updates.length) await db.batch(updates);
+  return { dry, changed, unchanged, no_data: noData, total_before: before, total_after: after };
 }
 
 // Gastos sin tasa (se guardaron sin internet) o con tasa estimada: reintenta conseguirla.
@@ -445,6 +481,8 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     if (resource === 'rates' && id === 'history' && method === 'GET') {
       return ok(await rateHistory(db, tripPair(await getTrip(db, query.get('trip'))), Number(query.get('days'))));
     }
+
+    if (resource === 'rates' && id === 'refresh' && method === 'POST') return ok(await refreshTripRates(db, query));
 
     if (resource === 'rate' && method === 'GET') {
       const date = query.get('date') ?? todayStr();

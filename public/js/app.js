@@ -263,7 +263,7 @@ function newDraft(c, date = todayStr()) {
   const method = c.payMethods.some((m) => m.id === lastMethod) ? lastMethod : (c.payMethods[0]?.id ?? '');
   const going = new Set(c.people.map((p) => p.id));
   const benes = lastBenes.filter((id) => going.has(id));
-  return { id: null, date, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), manual: '', created_at: null, approx: false, lat: null, lng: null, place: '' };
+  return { id: null, date, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), created_at: null, approx: false, lat: null, lng: null, place: '' };
 }
 
 function draftFrom(c, id) {
@@ -272,7 +272,7 @@ function draftFrom(c, id) {
   return {
     id: e.id, date: e.date, amountText: (e.amount_cents / 100).toFixed(2).replace('.', ','),
     desc: e.description, method: e.payment_method_id, benes: new Set(e.beneficiary_ids),
-    manual: e.rate_manual ? String(e.rate ?? '') : '', created_at: e.created_at,
+    created_at: e.created_at,
     approx: Boolean(e.amount_approx),
     lat: hasLocation(e) ? Number(e.lat) : null, lng: hasLocation(e) ? Number(e.lng) : null, place: e.place ?? '',
   };
@@ -280,15 +280,26 @@ function draftFrom(c, id) {
 
 // Fila de ubicación del formulario. Se vuelve a dibujar sola (sin render()) para no perder lo escrito.
 function locHtml() {
-  if (draft.locating) return '<button type="button" class="btn secondary small" disabled>Buscando ubicación…</button>';
-  if (draft.lat == null) {
-    return `<div class="loc-set"><button type="button" class="btn secondary small" data-action="locate">📍 Usar mi ubicación</button>
-      <button type="button" class="btn secondary small" data-action="pick-map">🗺 Buscar o elegir en el mapa</button></div>`;
+  if (draft.locating) {
+    return '<div class="loc-box"><div class="loc-wait" role="status"><span class="spin" aria-hidden="true"></span>Buscando tu ubicación…</div></div>';
   }
-  return `<div class="loc-set"><span class="tag">📍 ${esc(formatCoords(draft.lat, draft.lng))}</span>
-      <button type="button" class="btn secondary small" data-action="pick-map">Cambiar</button>
-      <button type="button" class="btn secondary small" data-action="unlocate">Quitar</button></div>
-    <input id="place" maxlength="120" placeholder="Nombre del lugar (opcional)" value="${esc(draft.place)}">`;
+  if (draft.lat == null) {
+    return `<div class="loc-box">
+      <div class="loc-empty"><span class="loc-ico" aria-hidden="true">📍</span><span>Sin ubicación. Sirve para ver en el mapa dónde gastaste.</span></div>
+      <div class="loc-btns">
+        <button type="button" class="btn secondary small" data-action="locate">📍 Estoy aquí</button>
+        <button type="button" class="btn secondary small" data-action="pick-map">🗺 Buscar en el mapa</button>
+      </div></div>`;
+  }
+  return `<div class="loc-box set">
+      <div class="loc-head"><span class="loc-ico on" aria-hidden="true">📍</span>
+        <div class="loc-info"><b id="loc-name">${esc(draft.place.trim() || 'Ubicación guardada')}</b>
+          <span class="muted">${esc(formatCoords(draft.lat, draft.lng))}</span></div></div>
+      <input id="place" maxlength="120" placeholder="Ponle un nombre al lugar (opcional)" aria-label="Nombre del lugar" value="${esc(draft.place)}">
+      <div class="loc-btns">
+        <button type="button" class="btn secondary small" data-action="pick-map">Cambiar</button>
+        <button type="button" class="btn danger small" data-action="unlocate">Quitar</button>
+      </div></div>`;
 }
 
 function paintLoc() {
@@ -356,20 +367,10 @@ function viewForm(editId) {
       <label>Ubicación (opcional)</label>
       <div id="loc" class="loc">${locHtml()}</div>
 
-      <details ${draft.manual ? 'open' : ''}><summary>Poner la tasa a mano</summary>
-        <label for="manual">${esc(currencies().home.code)} por 1 ${esc(currencies().dest.code)}</label>
-        <input id="manual" inputmode="decimal" placeholder="Ej: 585,5" value="${esc(draft.manual)}">
-      </details>
-
       <button class="btn" type="submit" data-then="list">${draft.id ? 'Guardar cambios' : 'Guardar'}</button>
       ${draft.id ? '<button class="btn danger" type="button" data-action="del">Borrar gasto</button>'
         : '<button class="btn secondary" type="submit" data-then="again">Guardar y agregar otro</button>'}
     </form>`;
-}
-
-function manualRate() {
-  const n = Number(String(draft.manual).replace(',', '.'));
-  return n > 0 ? n : null;
 }
 
 async function loadRate() {
@@ -480,8 +481,7 @@ function updateConv(loaded = false) {
   if (!el || !draft) return;
   if (chartGeo) paintReadout(chartIdx, !document.getElementById('c-cross')?.hidden);
   const cents = parseAmount(draft.amountText);
-  const m = manualRate();
-  const r = m ? { rate: m, estimated: false, manual: true } : convRate;
+  const r = convRate;
   const c = ctx();
   if (!cents) { el.textContent = 'Escribe el monto para ver la conversión.'; return; }
   if (!r) {
@@ -492,7 +492,7 @@ function updateConv(loaded = false) {
   const n = Math.max(draft.benes.size, 1);
   const each = Object.values(splitEqual(cop, [...draft.benes].length ? [...draft.benes] : ['x']))[0];
   el.innerHTML = `<b>${fmtDest(cents)} ≈ ${fmtHome(cop)}</b><br>
-    <span class="muted">${fmtRate(r.rate)}${r.manual ? ' (manual)' : r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
+    <span class="muted">${fmtRate(r.rate)}${r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
     ${n > 1 ? ` · ${n} personas: ${fmtHome(each)} c/u` : ''}</span>`;
   void c;
 }
@@ -503,7 +503,6 @@ async function submitForm(then) {
   if (!cents) return toast('Escribe un monto válido', 'error');
   if (!draft.method) return toast('Elige con qué se pagó', 'error');
   if (!draft.benes.size) return toast('Elige para quién es el gasto', 'error');
-  if (draft.manual && !manualRate()) return toast('La tasa manual no es válida', 'error');
   const exp = {
     id: draft.id ?? store.uuid(),
     date: draft.date,
@@ -511,7 +510,6 @@ async function submitForm(then) {
     description: draft.desc.trim(),
     payment_method_id: draft.method,
     beneficiary_ids: [...draft.benes],
-    rate_manual: manualRate() ?? undefined,
     created_at: draft.created_at ?? undefined,
     amount_approx: draft.approx,
     // null explícito: al editar y quitar la ubicación, el servidor la borra.
@@ -684,6 +682,7 @@ function viewSettings() {
 
     <div class="card"><h2>Datos</h2>
       <a class="btn secondary" href="#/mapa">Mapa de lugares</a>
+      <button class="btn secondary" data-action="refresh-rates">Actualizar tasas de este viaje</button>
       <button class="btn secondary" data-action="csv">Descargar gastos (CSV)</button>
       <button class="btn secondary" data-action="logout">Cambiar código de acceso</button>
       <p class="muted">Tarjetas y transferencias solo guardan nombre y últimos 4 dígitos; nunca números completos.</p>
@@ -1145,6 +1144,17 @@ $view.addEventListener('click', async (ev) => {
     if (confirm('¿Borrar esta persona?')) await busy(t, () => guard(async () => { await store.deletePerson(id); toast('Persona borrada'); render(); }), 'Borrando…');
   } else if (action === 'del-method') {
     if (confirm('¿Borrar este medio de pago?')) await busy(t, () => guard(async () => { await store.deleteMethod(id); toast('Medio borrado'); render(); }), 'Borrando…');
+  } else if (action === 'refresh-rates') {
+    await busy(t, () => guard(async () => {
+      const p = await store.refreshRatesNow(true);
+      if (!p.changed) return toast(p.no_data ? 'Las tasas que la fuente tiene ya están al día' : 'Las tasas ya están al día');
+      const msg = `${p.changed} gasto(s) cambiarían de valor: ${fmtHome(p.total_before)} → ${fmtHome(p.total_after)}.
+
+Se usa la tasa que hoy da la fuente para el día de cada gasto. ¿Actualizar?`;
+      if (!confirm(msg)) return undefined;
+      const done = await store.refreshRatesNow(false);
+      return toast(`${done.changed} gasto(s) actualizados`);
+    }), 'Revisando…');
   } else if (action === 'csv') downloadCsv();
   else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
 });
@@ -1265,8 +1275,11 @@ $view.addEventListener('input', (ev) => {
   const id = ev.target.id;
   if (id === 'amount') { draft.amountText = ev.target.value; updateConv(); }
   else if (id === 'desc') draft.desc = ev.target.value;
-  else if (id === 'place') draft.place = ev.target.value;
-  else if (id === 'manual') { draft.manual = ev.target.value; updateConv(); }
+  else if (id === 'place') {
+    draft.place = ev.target.value;
+    const name = document.getElementById('loc-name');
+    if (name) name.textContent = draft.place.trim() || 'Ubicación guardada';
+  }
   else if (id === 'f-q') { filters.q = ev.target.value; const pos = ev.target.selectionStart; render(); const el = document.getElementById('f-q'); el.focus(); el.setSelectionRange(pos, pos); }
   else if (id.startsWith('m-')) onMethodForm(id);
 });
