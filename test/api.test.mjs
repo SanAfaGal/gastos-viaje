@@ -12,7 +12,18 @@ delete process.env.TURSO_AUTH_TOKEN;
 
 const PAIR = { dest: 'BRL', home: 'COP' };
 const todayYmd = todayStr; // mismo cálculo de "hoy" que usa el servidor
+// Simula la fuente de hoy sin salir a internet: table = { brl: { cop: 600 } } con la fecha de hoy.
+const withLiveRates = async (table, fn, date = todayYmd()) => {
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const base = String(url).match(/currencies\/([a-z]+)\.json/)?.[1];
+    if (!base || !table[base]) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ date, [base]: table[base] }) };
+  };
+  try { return await fn(); } finally { globalThis.fetch = real; }
+};
 const fakeFetch = (table) => async (url) => {
+  if (url.includes('frankfurter')) return { ok: false, status: 404, json: async () => ({}) };
   const m = url.match(/@([^/]+)\/v1/) ?? url.match(/\/\/([^.]+)\.currency-api/);
   const key = m[1];
   if (key in table) return { ok: true, status: 200, json: async () => ({ brl: { cop: table[key] } }) };
@@ -253,6 +264,7 @@ test('viajes: borrar con y sin gastos; el último no se borra', async () => {
 });
 
 test('viajes: la tasa y el historial usan las monedas del viaje pedido', async () => {
+  _resetFailures();
   const db = await openMemoryDb();
   const call = (method, path, query = {}) => handle({ method, path, query: new URLSearchParams(query), db });
   await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 800]);
@@ -261,13 +273,13 @@ test('viajes: la tasa y el historial usan las monedas del viaje pedido', async (
   assert.equal((await call('GET', '/api/rate', { date: '2026-11-14' })).body.rate, 800); // sin viaje: el primero
   assert.equal((await call('GET', '/api/rate', { date: '2026-11-14', trip: 'mx' })).body.rate, 0.05);
   assert.equal((await call('GET', '/api/rate', { date: '2026-11-14', trip: 'no' })).status, 400);
-  // Historial: hoy ya está guardado en cada par, así que no hace falta pedir nada a internet.
-  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', todayYmd(), 600]);
-  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['MXN-EUR', todayYmd(), 0.07]);
-  const rates = async (trip) => (await call('GET', '/api/rates/history', { days: '2', ...trip })).body.map((p) => p.rate);
-  assert.ok((await rates({ trip: 'mx' })).includes(0.07));
-  assert.ok(!(await rates({ trip: 'mx' })).includes(600));
-  assert.ok((await rates({})).includes(600)); // sin viaje: el primero (BRL a COP)
+  // Historial: hoy se pide a la fuente (simulada aquí) con las monedas de cada viaje.
+  await withLiveRates({ brl: { cop: 600 }, mxn: { eur: 0.07 } }, async () => {
+    const rates = async (trip) => (await call('GET', '/api/rates/history', { days: '2', ...trip })).body.map((p) => p.rate);
+    assert.ok((await rates({ trip: 'mx' })).includes(0.07));
+    assert.ok(!(await rates({ trip: 'mx' })).includes(600));
+    assert.ok((await rates({})).includes(600)); // sin viaje: el primero (BRL a COP)
+  });
 });
 
 test('migración: base de la primera versión (BRL a COP) se conserva', async () => {
@@ -400,14 +412,64 @@ test('historial de tasas: usa lo guardado, pide lo que falta y salta días sin d
   assert.ok(!pedidos.some((u) => u.includes('@2026-11-14')));
   assert.ok(pedidos.some((u) => u.includes('@latest'))); // hoy
   const otra = await rateHistory(db, PAIR, 5, { fetchFn: async () => { throw new Error('sin red'); }, today: '2026-11-16' });
-  assert.equal(otra.length, 4); // segunda vez sale de la base, sin internet
+  assert.equal(otra.length, 3); // sin internet salen los días guardados; hoy no se guarda, así que falta
   assert.equal((await rateHistory(db, { dest: 'USD', home: 'USD' }, 3, { today: '2026-11-16' })).length, 3);
 });
 
 test('API: /api/rates/history responde con la moneda del viaje', async () => {
+  _resetFailures();
   const db = await openMemoryDb();
-  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', todayYmd(), 600]);
-  const r = await handle({ method: 'GET', path: '/api/rates/history', query: new URLSearchParams('days=2'), db });
+  const r = await withLiveRates({ brl: { cop: 600 } }, () => handle({ method: 'GET', path: '/api/rates/history', query: new URLSearchParams('days=2'), db }));
   assert.equal(r.status, 200);
   assert.ok(Array.isArray(r.body) && r.body.some((p) => p.rate === 600));
+});
+
+test('tasa de hoy: no se guarda, se vuelve a preguntar y avisa si la fuente aún trae la de ayer', async () => {
+  _resetFailures();
+  const db = await openMemoryDb();
+  const today = '2026-11-16';
+  const yesterday = '2026-11-15';
+  // Un valor viejo guardado para hoy por la versión anterior no se usa.
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', today, 999]);
+  const live = (rate, date) => ({
+    fetchFn: async (url) => (url.includes('frankfurter')
+      ? { ok: false, status: 404, json: async () => ({}) }
+      : { ok: true, status: 200, json: async () => ({ date, brl: { cop: rate } }) }),
+    today,
+  });
+  // La fuente ya publicó hoy: tasa exacta y no queda guardada.
+  assert.deepEqual(await resolveRate(db, today, PAIR, live(580, today)), { rate: 580, rate_date: today, estimated: false });
+  assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', [today]))[0].rate, 999); // la fila vieja no se tocó
+  // Mismo día más tarde: la fuente cambió y se ve el cambio (no hay caché de hoy).
+  assert.equal((await resolveRate(db, today, PAIR, live(585, today))).rate, 585);
+  // La fuente aún trae la de ayer: se usa como estimada, con su fecha real, y queda guardada en el día de ayer.
+  const stale = await resolveRate(db, today, PAIR, live(570, yesterday));
+  assert.deepEqual(stale, { rate: 570, rate_date: yesterday, estimated: true });
+  assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', [yesterday]))[0].rate, 570);
+  // Un día cerrado sí sale de la base sin preguntar de nuevo.
+  const offline = { fetchFn: async () => { throw new Error('sin red'); }, today };
+  assert.equal((await resolveRate(db, yesterday, PAIR, offline)).rate, 570);
+});
+
+test('tasa: si la fuente principal falla o va atrasada se usa Frankfurter', async () => {
+  _resetFailures();
+  const db = await openMemoryDb();
+  const today = '2026-11-16';
+  const urls = [];
+  const fetchFn = (frank) => async (url) => {
+    urls.push(url);
+    if (url.includes('frankfurter')) return { ok: true, status: 200, json: async () => frank };
+    return { ok: false, status: 500, json: async () => ({}) }; // la principal está caída
+  };
+  const r = await resolveRate(db, '2026-11-14', PAIR, { fetchFn: fetchFn({ date: '2026-11-14', base: 'BRL', quote: 'COP', rate: 587.01 }), today });
+  assert.deepEqual(r, { rate: 587.01, rate_date: '2026-11-14', estimated: false });
+  assert.ok(urls.some((u) => u.includes('frankfurter.dev/v2/rate/BRL/COP?date=2026-11-14')));
+  assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', ['2026-11-14']))[0].rate, 587.01);
+
+  // Hoy: la principal trae ayer y Frankfurter ya trae hoy; gana la más reciente.
+  _resetFailures();
+  const both = async (url) => (url.includes('frankfurter')
+    ? { ok: true, status: 200, json: async () => ({ date: today, rate: 578.36 }) }
+    : { ok: true, status: 200, json: async () => ({ date: '2026-11-15', brl: { cop: 585.03 } }) });
+  assert.deepEqual(await resolveRate(db, today, PAIR, { fetchFn: both, today }), { rate: 578.36, rate_date: today, estimated: false });
 });

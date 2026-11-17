@@ -482,7 +482,7 @@ function updateConv(loaded = false) {
   const n = Math.max(draft.benes.size, 1);
   const each = Object.values(splitEqual(cop, [...draft.benes].length ? [...draft.benes] : ['x']))[0];
   el.innerHTML = `<b>${fmtDest(cents)} ≈ ${fmtHome(cop)}</b><br>
-    <span class="muted">${fmtRate(r.rate)}${r.manual ? ' (manual)' : r.estimated ? ' (tasa estimada)' : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
+    <span class="muted">${fmtRate(r.rate)}${r.manual ? ' (manual)' : r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
     ${n > 1 ? ` · ${n} personas: ${fmtHome(each)} c/u` : ''}</span>`;
   void c;
 }
