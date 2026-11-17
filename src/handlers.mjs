@@ -3,6 +3,7 @@
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isValidDate, toHome, todayStr } from '../public/js/money.mjs';
 import { currencyByCode, DEFAULT_SETTINGS } from '../public/js/currencies.mjs';
+import { NETWORKS, isHexColor } from '../public/js/cards.mjs';
 import { rateHistory, resolveRate } from './rates.mjs';
 
 class HttpError extends Error {
@@ -143,23 +144,39 @@ async function saveMethod(db, id, body) {
   const name = text(body.name, 'El nombre');
   let last4 = null;
   let cardType = null;
+  let network = null;
   if (kind === 'card') {
-    last4 = text(body.last4, 'Los últimos 4 dígitos', { max: 4 });
-    if (!/^\d{4}$/.test(last4)) fail(400, 'Los últimos dígitos deben ser 4 números');
+    // Hay tarjetas sin número visible: los últimos 4 son opcionales.
+    const raw = String(body.last4 ?? '').trim();
+    if (raw) {
+      if (!/^\d{4}$/.test(raw)) fail(400, 'Los últimos dígitos deben ser 4 números');
+      last4 = raw;
+    }
     cardType = body.card_type;
     if (!['debit', 'credit'].includes(cardType)) fail(400, 'Indica si es débito o crédito');
+    if (body.network) {
+      if (!Object.hasOwn(NETWORKS, body.network)) fail(400, 'Red de tarjeta inválida');
+      network = body.network;
+    }
   }
+  let color = null;
+  if (body.color) {
+    if (!isHexColor(body.color)) fail(400, 'Color inválido');
+    color = body.color;
+  }
+  if (!body.owner_person_id) fail(400, 'Elige de quién es el medio de pago');
   const owner = await db.all('SELECT id FROM people WHERE id = ?', [body.owner_person_id]);
   if (!owner.length) fail(400, 'El dueño no existe');
   await db.run(
-    `INSERT INTO payment_methods (id, kind, name, last4, card_type, owner_person_id)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO payment_methods (id, kind, name, last4, card_type, owner_person_id, color, network)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, name = excluded.name,
        last4 = excluded.last4, card_type = excluded.card_type,
-       owner_person_id = excluded.owner_person_id`,
-    [id, kind, name, last4, cardType, body.owner_person_id],
+       owner_person_id = excluded.owner_person_id,
+       color = excluded.color, network = excluded.network`,
+    [id, kind, name, last4, cardType, body.owner_person_id, color, network],
   );
-  return { id, kind, name, last4, card_type: cardType, owner_person_id: body.owner_person_id };
+  return { id, kind, name, last4, card_type: cardType, owner_person_id: body.owner_person_id, color, network };
 }
 
 async function deleteMethod(db, id) {
@@ -264,7 +281,7 @@ async function getState(db) {
   await fillPendingRates(db, settings);
   const [people, methods, expenses, links] = await Promise.all([
     db.all('SELECT id, name FROM people ORDER BY name COLLATE NOCASE'),
-    db.all('SELECT id, kind, name, last4, card_type, owner_person_id FROM payment_methods ORDER BY name COLLATE NOCASE'),
+    db.all('SELECT id, kind, name, last4, card_type, owner_person_id, color, network FROM payment_methods ORDER BY name COLLATE NOCASE'),
     db.all('SELECT * FROM expenses ORDER BY date DESC, created_at DESC'),
     db.all('SELECT expense_id, person_id FROM expense_beneficiaries'),
   ]);

@@ -22,7 +22,9 @@ CREATE TABLE IF NOT EXISTS payment_methods (
   name TEXT NOT NULL,
   last4 TEXT,
   card_type TEXT CHECK (card_type IN ('debit', 'credit')),
-  owner_person_id TEXT NOT NULL REFERENCES people(id)
+  owner_person_id TEXT NOT NULL REFERENCES people(id),
+  color TEXT,
+  network TEXT
 );
 
 CREATE TABLE IF NOT EXISTS rates (

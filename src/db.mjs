@@ -21,7 +21,14 @@ async function migrate(db) {
       { sql: 'UPDATE expenses SET amount_home = amount_home * 100 WHERE amount_home IS NOT NULL' },
     ]);
   }
-  const rateCols = (await db.all('PRAGMA table_info(rates)')).map((c) => c.name);
+  // Medios de pago con aspecto de tarjeta: color y red (opcionales).
+  const methodCols = (await db.all('PRAGMA table_info(payment_methods)')).map((c) => c.name);
+  if (methodCols.length) {
+    for (const col of ['color', 'network']) {
+      if (!methodCols.includes(col)) await db.run(`ALTER TABLE payment_methods ADD COLUMN ${col} TEXT`);
+    }
+  }
+  const rateCols =(await db.all('PRAGMA table_info(rates)')).map((c) => c.name);
   if (rateCols.length && !rateCols.includes('pair')) {
     await db.run('DROP TABLE rates'); // es solo un caché: se vuelve a pedir
   }

@@ -72,6 +72,45 @@ test('API: personas, medios, gasto compartido, idempotencia y cuentas', async ()
   assert.equal((await call('GET', '/api/state')).body.expenses.length, 0);
 });
 
+test('API: medios de pago con aspecto de tarjeta (color, red, últimos 4 opcionales, dueño obligatorio)', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, body) => handle({ method, path, body, db });
+  await call('POST', '/api/people', { id: 'ana', name: 'Ana' });
+  const base = { kind: 'card', name: 'Nu', card_type: 'credit', owner_person_id: 'ana' };
+
+  // Sin últimos 4 (hay tarjetas sin número visible), con red y color libre.
+  const ok = await call('POST', '/api/payment-methods', { ...base, id: 'nu', network: 'mastercard', color: '#7c3aed' });
+  assert.equal(ok.status, 201);
+  assert.deepEqual(
+    { last4: ok.body.last4, network: ok.body.network, color: ok.body.color },
+    { last4: null, network: 'mastercard', color: '#7c3aed' },
+  );
+  const saved = (await call('GET', '/api/state')).body.payment_methods.find((m) => m.id === 'nu');
+  assert.equal(saved.color, '#7c3aed');
+  assert.equal(saved.last4, null);
+
+  // Con últimos 4 sigue validando que sean 4 números.
+  assert.equal((await call('POST', '/api/payment-methods', { ...base, last4: '12a4' })).status, 400);
+  assert.equal((await call('POST', '/api/payment-methods', { ...base, id: 'c', last4: '1234' })).status, 201);
+
+  // Red y color inválidos se rechazan; vacíos quedan en automático.
+  assert.equal((await call('POST', '/api/payment-methods', { ...base, network: 'inventada' })).status, 400);
+  assert.equal((await call('POST', '/api/payment-methods', { ...base, color: 'rojo' })).status, 400);
+  assert.equal((await call('POST', '/api/payment-methods', { ...base, color: '#12345' })).status, 400);
+  const auto = await call('POST', '/api/payment-methods', { ...base, id: 'auto', network: '', color: '' });
+  assert.deepEqual({ network: auto.body.network, color: auto.body.color }, { network: null, color: null });
+
+  // Efectivo no es tarjeta: ignora la red pero admite color.
+  const cash = await call('POST', '/api/payment-methods', { kind: 'cash', name: 'Efectivo', owner_person_id: 'ana', network: 'visa', color: '#0d8a6a' });
+  assert.equal(cash.body.network, null);
+  assert.equal(cash.body.color, '#0d8a6a');
+
+  // El dueño es obligatorio.
+  const noOwner = await call('POST', '/api/payment-methods', { ...base, owner_person_id: '' });
+  assert.equal(noOwner.status, 400);
+  assert.match(noOwner.body.error, /de quién es/);
+});
+
 test('API: tasa manual y código de acceso', async () => {
   const db = await openMemoryDb();
   const call = (method, path, body, passcode) => handle({ method, path, body, db, passcode });
@@ -146,6 +185,11 @@ test('migración: base de la primera versión (BRL a COP) se conserva', async ()
   assert.equal(st.expenses[0].amount_cents, 5000);
   assert.equal(st.expenses[0].amount_home, 2933500); // 29.335 pesos en centésimas
   assert.equal(st.expenses[0].rate, 586.7);
+  // Las columnas nuevas de los medios de pago se agregan sin perder los datos viejos.
+  assert.deepEqual(
+    { name: st.payment_methods[0].name, color: st.payment_methods[0].color, network: st.payment_methods[0].network },
+    { name: 'Efectivo', color: null, network: null },
+  );
 });
 
 test('seguridad: límite de intentos fallidos por IP y topes de monto y tasa', async () => {
