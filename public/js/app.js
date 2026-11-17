@@ -14,12 +14,22 @@ const esc = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 let toastTimer;
-function toast(msg) {
-  $toast.textContent = msg;
+function toast(msg, kind = 'ok') {
+  const icon = document.createElement('span');
+  icon.className = 'toast-icon';
+  icon.setAttribute('aria-hidden', 'true');
+  icon.textContent = kind === 'error' ? '!' : '✓';
+  const text = document.createElement('span');
+  text.textContent = msg;
+  $toast.replaceChildren(icon, text);
+  $toast.className = `toast ${kind}`;
+  $toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  void $toast.offsetWidth; // reinicia la animación si ya había un aviso
   $toast.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $toast.classList.remove('show'), 2600);
+  toastTimer = setTimeout(() => $toast.classList.remove('show'), kind === 'error' ? 6000 : 3500);
 }
+$toast.addEventListener('click', () => $toast.classList.remove('show'));
 
 // ---------- datos derivados ----------
 
@@ -284,10 +294,10 @@ function updateConv(loaded = false) {
 
 async function submitForm(then) {
   const cents = parseAmount(draft.amountText);
-  if (!cents) return toast('Escribe un monto válido');
-  if (!draft.method) return toast('Elige con qué se pagó');
-  if (!draft.benes.size) return toast('Elige para quién es el gasto');
-  if (draft.manual && !manualRate()) return toast('La tasa manual no es válida');
+  if (!cents) return toast('Escribe un monto válido', 'error');
+  if (!draft.method) return toast('Elige con qué se pagó', 'error');
+  if (!draft.benes.size) return toast('Elige para quién es el gasto', 'error');
+  if (draft.manual && !manualRate()) return toast('La tasa manual no es válida', 'error');
   const exp = {
     id: draft.id ?? store.uuid(),
     date: draft.date,
@@ -305,7 +315,7 @@ async function submitForm(then) {
   const keepDate = draft.date;
   const wasEdit = Boolean(draft.id);
   const c = ctx();
-  store.saveExpense(exp).then((r) => { if (r?.errors?.length) toast(r.errors[0]); });
+  store.saveExpense(exp).then((r) => { if (r?.errors?.length) toast(r.errors[0], 'error'); });
   toast(wasEdit ? 'Cambios guardados' : 'Gasto guardado');
   if (then === 'again' && !wasEdit) {
     draft = newDraft(c, keepDate);
@@ -502,7 +512,7 @@ $view.addEventListener('click', async (ev) => {
   const { action, id } = t.dataset;
   const c = ctx();
   const guard = async (fn) => {
-    try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message); }
+    try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error'); }
   };
   if (action === 'edit') location.hash = `#/nuevo/${encodeURIComponent(id)}`;
   else if (action === 'bene') {
@@ -557,7 +567,7 @@ $view.addEventListener('submit', async (ev) => {
   ev.preventDefault();
   const f = ev.target.id;
   const guard = async (fn) => {
-    try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message); }
+    try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error'); }
   };
   if (f === 'exp-form') submitForm(lastSubmitter?.dataset.then ?? 'list');
   else if (f === 'trip-form') {
@@ -594,7 +604,7 @@ $view.addEventListener('submit', async (ev) => {
       await store.flush();
       render();
     });
-    if (store.net.needsLogin) toast('Código incorrecto');
+    if (store.net.needsLogin) toast('Código incorrecto', 'error');
   }
 });
 
