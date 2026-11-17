@@ -133,26 +133,106 @@ test('API: tasa manual y código de acceso', async () => {
   }
 });
 
-test('ajustes: elegir país y moneda; se bloquea cuando ya hay gastos', async () => {
+test('viajes: una base nueva trae "Viaje 1" (BRL a COP) y las monedas se validan', async () => {
   const db = await openMemoryDb();
   const call = (method, path, body) => handle({ method, path, body, db });
-  let st = (await call('GET', '/api/state')).body;
-  assert.deepEqual(st.settings, { dest: 'BRL', home: 'COP' });
+  const st = (await call('GET', '/api/state')).body;
+  assert.deepEqual(st.trips, [{ id: 'trip-1', name: 'Viaje 1', dest: 'BRL', home: 'COP', people_ids: [] }]);
+  assert.equal(st.settings, undefined);
 
-  assert.equal((await call('PUT', '/api/settings', { dest: 'USD', home: 'USD' })).status, 400);
-  assert.equal((await call('PUT', '/api/settings', { dest: 'XXX', home: 'COP' })).status, 400);
-  assert.equal((await call('PUT', '/api/settings', { dest: 'MXN', home: 'EUR' })).status, 200);
-  st = (await call('GET', '/api/state')).body;
-  assert.deepEqual(st.settings, { dest: 'MXN', home: 'EUR' });
+  const base = { name: 'Mexico', dest: 'MXN', home: 'EUR' };
+  assert.equal((await call('POST', '/api/trips', { ...base, dest: 'USD', home: 'USD' })).status, 400); // iguales
+  assert.equal((await call('POST', '/api/trips', { ...base, dest: 'XXX' })).status, 400);
+  assert.equal((await call('POST', '/api/trips', { ...base, name: '  ' })).status, 400);
+  assert.equal((await call('POST', '/api/trips', { ...base, id: 'mx', people_ids: ['nadie'] })).status, 400);
+  const ok = await call('POST', '/api/trips', { ...base, id: 'mx' });
+  assert.equal(ok.status, 201);
+  assert.equal((await call('GET', '/api/state')).body.trips.length, 2);
+});
 
+test('viajes: cada viaje tiene sus monedas, personas y gastos; el bloqueo de monedas es por viaje', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, body) => handle({ method, path, body, db });
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' }); // sin viaje: entra en todos
+  await call('POST', '/api/people', { id: 'ana', name: 'Ana' });
+  await call('POST', '/api/payment-methods', { id: 'c', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  await call('POST', '/api/payment-methods', { id: 'ca', kind: 'cash', name: 'Efectivo Ana', owner_person_id: 'ana' });
+  await call('POST', '/api/trips', { id: 'mx', name: 'Mexico', dest: 'MXN', home: 'EUR', people_ids: ['yo'] });
+
+  const exp = { date: '2026-11-14', amount_cents: 10000, payment_method_id: 'c', beneficiary_ids: ['yo'], rate_manual: 0.05 };
+  assert.equal((await call('POST', '/api/expenses', { ...exp, id: 'g1', trip_id: 'mx' })).status, 201);
+  assert.equal((await call('POST', '/api/expenses', { ...exp, id: 'g2' })).status, 201); // sin viaje: va al primero
+  const st = (await call('GET', '/api/state')).body;
+  const byId = Object.fromEntries(st.expenses.map((e) => [e.id, e]));
+  assert.equal(byId.g1.trip_id, 'mx');
+  assert.equal(byId.g1.amount_home, 500); // 100 MXN * 0.05 = 5 EUR (monedas de México)
+  assert.equal(byId.g2.trip_id, 'trip-1');
+  assert.equal(byId.g2.amount_home, 500); // con tasa manual, en COP: 100 BRL * 0.05 = 5 COP
+
+  // Un gasto que se edita conserva su viaje aunque se mande otro.
+  assert.equal((await call('PUT', '/api/expenses/g1', { ...exp, trip_id: 'trip-1' })).status, 200);
+  assert.equal((await call('GET', '/api/state')).body.expenses.find((e) => e.id === 'g1').trip_id, 'mx');
+
+  // Monedas: bloqueadas solo en el viaje que ya tiene gastos.
+  assert.equal((await call('PUT', '/api/trips/mx', { name: 'Mexico', dest: 'BRL', home: 'EUR' })).status, 409);
+  assert.equal((await call('PUT', '/api/trips/mx', { name: 'México 2026', dest: 'MXN', home: 'EUR' })).status, 200); // renombrar: ok
+  await call('POST', '/api/trips', { id: 'vacio', name: 'Vacío', dest: 'BRL', home: 'COP' });
+  assert.equal((await call('PUT', '/api/trips/vacio', { name: 'Vacío', dest: 'USD', home: 'COP' })).status, 200); // sin gastos: ok
+
+  // Participantes: Ana no va a México, así que no cuenta como beneficiaria ni su medio de pago sirve.
+  assert.equal((await call('POST', '/api/expenses', { ...exp, id: 'g3', trip_id: 'mx', beneficiary_ids: ['ana'] })).status, 400);
+  assert.equal((await call('POST', '/api/expenses', { ...exp, id: 'g4', trip_id: 'mx', payment_method_id: 'ca' })).status, 400);
+  // No se puede quitar a quien tiene gastos en el viaje; a quien no, sí.
+  assert.equal((await call('PUT', '/api/trips/mx', { name: 'México 2026', dest: 'MXN', home: 'EUR', people_ids: [] })).status, 409);
+  assert.equal((await call('PUT', '/api/trips/trip-1', { name: 'Viaje 1', dest: 'BRL', home: 'COP', people_ids: ['ana'] })).status, 409); // quita a Yo, que tiene g2
+  assert.equal((await call('PUT', '/api/trips/trip-1', { name: 'Viaje 1', dest: 'BRL', home: 'COP', people_ids: ['yo'] })).status, 200); // quita a Ana, sin gastos
+  await call('PUT', '/api/trips/trip-1', { name: 'Viaje 1', dest: 'BRL', home: 'COP', people_ids: ['yo', 'ana'] });
+  assert.equal((await call('PUT', '/api/trips/vacio', { name: 'Vacío', dest: 'USD', home: 'COP', people_ids: ['ana'] })).status, 200);
+
+  // Una persona nueva con viaje entra solo en ese viaje; renombrarla no la mete en otros.
+  await call('POST', '/api/people', { id: 'leo', name: 'Leo', trip_id: 'vacio' });
+  await call('PUT', '/api/people/leo', { name: 'Leonardo' });
+  const trips = Object.fromEntries((await call('GET', '/api/state')).body.trips.map((t) => [t.id, t.people_ids.sort()]));
+  assert.deepEqual(trips.vacio, ['ana', 'leo']);
+  assert.ok(!trips.mx.includes('leo') && !trips['trip-1'].includes('leo'));
+});
+
+test('viajes: borrar con y sin gastos; el último no se borra', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, body, query = {}) => handle({ method, path, body, db, query: new URLSearchParams(query) });
+  assert.equal((await call('DELETE', '/api/trips/trip-1')).status, 400); // es el único
   await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
   await call('POST', '/api/payment-methods', { id: 'c', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  await call('POST', '/api/trips', { id: 'mx', name: 'Mexico', dest: 'MXN', home: 'EUR' });
   await call('POST', '/api/expenses', {
-    id: 'g1', date: '2026-11-14', amount_cents: 10000, payment_method_id: 'c', beneficiary_ids: ['yo'], rate_manual: 0.05,
+    id: 'g1', trip_id: 'mx', date: '2026-11-14', amount_cents: 100, payment_method_id: 'c', beneficiary_ids: ['yo'], rate_manual: 1,
   });
-  assert.equal((await call('GET', '/api/state')).body.expenses[0].amount_home, 500); // 100 MXN * 0.05 = 5 EUR
-  assert.equal((await call('PUT', '/api/settings', { dest: 'BRL', home: 'COP' })).status, 409);
-  assert.equal((await call('PUT', '/api/settings', { dest: 'MXN', home: 'EUR' })).status, 200); // mismas monedas: ok
+  assert.equal((await call('DELETE', '/api/trips/mx')).status, 409);
+  assert.equal((await call('GET', '/api/state')).body.expenses.length, 1);
+  assert.equal((await call('DELETE', '/api/trips/mx', null, { con_gastos: '1' })).status, 200);
+  const st = (await call('GET', '/api/state')).body;
+  assert.equal(st.expenses.length, 0);
+  assert.deepEqual(st.trips.map((t) => t.id), ['trip-1']);
+  assert.equal((await db.all('SELECT COUNT(*) AS n FROM expense_beneficiaries'))[0].n, 0);
+  assert.equal((await call('DELETE', '/api/trips/no-existe')).status, 200); // borrar de nuevo no falla
+});
+
+test('viajes: la tasa y el historial usan las monedas del viaje pedido', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, query = {}) => handle({ method, path, query: new URLSearchParams(query), db });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 800]);
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['MXN-EUR', '2026-11-14', 0.05]);
+  await handle({ method: 'POST', path: '/api/trips', body: { id: 'mx', name: 'Mexico', dest: 'MXN', home: 'EUR' }, db });
+  assert.equal((await call('GET', '/api/rate', { date: '2026-11-14' })).body.rate, 800); // sin viaje: el primero
+  assert.equal((await call('GET', '/api/rate', { date: '2026-11-14', trip: 'mx' })).body.rate, 0.05);
+  assert.equal((await call('GET', '/api/rate', { date: '2026-11-14', trip: 'no' })).status, 400);
+  // Historial: hoy ya está guardado en cada par, así que no hace falta pedir nada a internet.
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', todayYmd(), 600]);
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['MXN-EUR', todayYmd(), 0.07]);
+  const rates = async (trip) => (await call('GET', '/api/rates/history', { days: '2', ...trip })).body.map((p) => p.rate);
+  assert.ok((await rates({ trip: 'mx' })).includes(0.07));
+  assert.ok(!(await rates({ trip: 'mx' })).includes(600));
+  assert.ok((await rates({})).includes(600)); // sin viaje: el primero (BRL a COP)
 });
 
 test('migración: base de la primera versión (BRL a COP) se conserva', async () => {
@@ -181,7 +261,9 @@ test('migración: base de la primera versión (BRL a COP) se conserva', async ()
 
   const db = await openFileDb(file);
   const st = (await handle({ method: 'GET', path: '/api/state', db })).body;
-  assert.deepEqual(st.settings, { dest: 'BRL', home: 'COP' });
+  // Los datos de un solo viaje pasan a "Viaje 1" (BRL a COP) con todos sus gastos y personas.
+  assert.deepEqual(st.trips, [{ id: 'trip-1', name: 'Viaje 1', dest: 'BRL', home: 'COP', people_ids: ['yo'] }]);
+  assert.equal(st.expenses[0].trip_id, 'trip-1');
   assert.equal(st.expenses[0].amount_cents, 5000);
   assert.equal(st.expenses[0].amount_home, 2933500); // 29.335 pesos en centésimas
   assert.equal(st.expenses[0].rate, 586.7);
@@ -190,6 +272,44 @@ test('migración: base de la primera versión (BRL a COP) se conserva', async ()
     { name: st.payment_methods[0].name, color: st.payment_methods[0].color, network: st.payment_methods[0].network },
     { name: 'Efectivo', color: null, network: null },
   );
+});
+
+test('migración a varios viajes: conserva las monedas de ajustes y es idempotente', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { mkdtempSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { openFileDb } = await import('../src/db.mjs');
+  const file = join(mkdtempSync(join(tmpdir(), 'bg-trips-')), 'un-viaje.db');
+  const old = new DatabaseSync(file);
+  old.exec(`
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE people (id TEXT PRIMARY KEY, name TEXT NOT NULL);
+    CREATE TABLE payment_methods (id TEXT PRIMARY KEY, kind TEXT NOT NULL, name TEXT NOT NULL, last4 TEXT, card_type TEXT, owner_person_id TEXT NOT NULL);
+    CREATE TABLE rates (pair TEXT NOT NULL, date TEXT NOT NULL, rate REAL NOT NULL, PRIMARY KEY (pair, date));
+    CREATE TABLE expenses (id TEXT PRIMARY KEY, date TEXT NOT NULL, amount_cents INTEGER NOT NULL, description TEXT NOT NULL DEFAULT '',
+      payment_method_id TEXT NOT NULL, rate REAL, rate_date TEXT, rate_estimated INTEGER NOT NULL DEFAULT 0,
+      rate_manual INTEGER NOT NULL DEFAULT 0, amount_home INTEGER, created_at TEXT NOT NULL);
+    CREATE TABLE expense_beneficiaries (expense_id TEXT NOT NULL, person_id TEXT NOT NULL, PRIMARY KEY (expense_id, person_id));
+    INSERT INTO settings VALUES ('dest_currency','MXN'), ('home_currency','EUR');
+    INSERT INTO people VALUES ('yo','Yo'), ('ana','Ana');
+    INSERT INTO payment_methods VALUES ('m','cash','Efectivo',NULL,NULL,'yo');
+    INSERT INTO expenses VALUES ('e','2026-11-14',5000,'Cena','m',0.05,'2026-11-14',0,0,250,'2026-11-14T00:00:00Z');
+    INSERT INTO expense_beneficiaries VALUES ('e','yo'), ('e','ana');
+  `);
+  old.close();
+
+  for (let pass = 1; pass <= 2; pass += 1) { // abrir otra vez (otro arranque en frío) no duplica nada
+    const db = await openFileDb(file);
+    const st = (await handle({ method: 'GET', path: '/api/state', db })).body;
+    assert.equal(st.trips.length, 1, 'pasada ' + pass);
+    assert.deepEqual(
+      { id: st.trips[0].id, dest: st.trips[0].dest, home: st.trips[0].home, people: [...st.trips[0].people_ids].sort() },
+      { id: 'trip-1', dest: 'MXN', home: 'EUR', people: ['ana', 'yo'] },
+    );
+    assert.equal(st.expenses[0].trip_id, 'trip-1');
+    assert.equal(st.expenses[0].amount_home, 250);
+  }
 });
 
 test('seguridad: límite de intentos fallidos por IP y topes de monto y tasa', async () => {

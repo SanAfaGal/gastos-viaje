@@ -6,6 +6,7 @@ import { mkdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import schema from './schema.mjs';
+import { currencyByCode, DEFAULT_SETTINGS } from '../public/js/currencies.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const statements = schema.split(';').map((s) => s.trim()).filter(Boolean);
@@ -34,20 +35,34 @@ async function migrate(db) {
   }
 }
 
+// Varios viajes: siempre existe al menos uno. Las bases anteriores (un solo viaje) pasan a "Viaje 1" con las
+// monedas que tenían en ajustes (o BRL/COP, que era lo de la primera versión), con todos sus gastos y todas
+// sus personas. Es idempotente: corre en cada arranque, y el id fijo evita duplicados si dos arrancan a la vez.
+async function upgradeTrips(db) {
+  const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
+  if (!cols.includes('trip_id')) await db.run('ALTER TABLE expenses ADD COLUMN trip_id TEXT REFERENCES trips(id)');
+
+  const first = () => db.all('SELECT id FROM trips ORDER BY rowid LIMIT 1');
+  if (!(await first()).length) {
+    const rows = await db.all("SELECT key, value FROM settings WHERE key IN ('dest_currency', 'home_currency')");
+    const s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
+    const dest = currencyByCode(s.dest_currency) ? s.dest_currency : DEFAULT_SETTINGS.dest;
+    const home = currencyByCode(s.home_currency) ? s.home_currency : DEFAULT_SETTINGS.home;
+    await db.batch([
+      {
+        sql: 'INSERT OR IGNORE INTO trips (id, name, dest_currency, home_currency, created_at) VALUES (?, ?, ?, ?, ?)',
+        args: ['trip-1', 'Viaje 1', dest, home, new Date().toISOString()],
+      },
+      { sql: 'INSERT OR IGNORE INTO trip_people (trip_id, person_id) SELECT ?, id FROM people', args: ['trip-1'] },
+    ]);
+  }
+  await db.run('UPDATE expenses SET trip_id = ? WHERE trip_id IS NULL', [(await first())[0].id]);
+}
+
 async function open(adapter) {
   await migrate(adapter);
   await adapter.batch(statements.map((sql) => ({ sql })));
-  const existing = await adapter.all('SELECT value FROM settings WHERE key = ?', ['dest_currency']);
-  if (!existing.length) {
-    const hadExpenses = (await adapter.all('SELECT COUNT(*) AS n FROM expenses'))[0].n > 0;
-    if (hadExpenses) {
-      // Datos de la primera versión: eran reales a pesos colombianos.
-      await adapter.batch([
-        { sql: 'INSERT INTO settings (key, value) VALUES (?, ?)', args: ['dest_currency', 'BRL'] },
-        { sql: 'INSERT INTO settings (key, value) VALUES (?, ?)', args: ['home_currency', 'COP'] },
-      ]);
-    }
-  }
+  await upgradeTrips(adapter);
   return adapter;
 }
 

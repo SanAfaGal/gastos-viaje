@@ -2,7 +2,7 @@
 // La usan server.mjs (local) y netlify/functions/api.mjs (en línea).
 import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { isValidDate, toHome, todayStr } from '../public/js/money.mjs';
-import { currencyByCode, DEFAULT_SETTINGS } from '../public/js/currencies.mjs';
+import { currencyByCode } from '../public/js/currencies.mjs';
 import { NETWORKS, isHexColor } from '../public/js/cards.mjs';
 import { rateHistory, resolveRate } from './rates.mjs';
 
@@ -88,39 +88,112 @@ function text(value, label, { max = 80, required = true } = {}) {
   return s;
 }
 
-// ---------- ajustes del viaje (monedas) ----------
+// ---------- viajes ----------
 
-async function getSettings(db) {
-  const rows = await db.all('SELECT key, value FROM settings');
-  const map = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  const dest = currencyByCode(map.dest_currency) ? map.dest_currency : DEFAULT_SETTINGS.dest;
-  const home = currencyByCode(map.home_currency) ? map.home_currency : DEFAULT_SETTINGS.home;
-  return { dest, home };
+// Sin id devuelve el primero (el más antiguo): así responden las peticiones viejas que no traen viaje.
+async function getTrip(db, id) {
+  const rows = id
+    ? await db.all('SELECT * FROM trips WHERE id = ?', [id])
+    : await db.all('SELECT * FROM trips ORDER BY rowid LIMIT 1');
+  if (!rows.length) fail(400, 'El viaje no existe');
+  return rows[0];
 }
 
-async function saveSettings(db, body) {
+const tripPair = (t) => ({ dest: t.dest_currency, home: t.home_currency });
+
+async function tripPeople(db, tripId) {
+  const rows = await db.all('SELECT person_id FROM trip_people WHERE trip_id = ?', [tripId]);
+  return new Set(rows.map((r) => r.person_id));
+}
+
+// Quién aparece en los gastos de un viaje: como beneficiario o como dueño del medio con que se pagó.
+async function peopleInTripExpenses(db, tripId) {
+  const rows = await db.all(
+    `SELECT eb.person_id AS p FROM expense_beneficiaries eb JOIN expenses e ON e.id = eb.expense_id WHERE e.trip_id = ?
+     UNION
+     SELECT m.owner_person_id FROM expenses e JOIN payment_methods m ON m.id = e.payment_method_id WHERE e.trip_id = ?`,
+    [tripId, tripId],
+  );
+  return new Set(rows.map((r) => r.p));
+}
+
+async function saveTrip(db, id, body) {
+  const name = text(body.name, 'El nombre del viaje', { max: 40 });
   if (!currencyByCode(body.dest) || !currencyByCode(body.home)) fail(400, 'Moneda no válida');
   if (body.dest === body.home) fail(400, 'El país del viaje y tu moneda deben ser distintos');
-  const current = await getSettings(db);
-  if (current.dest !== body.dest || current.home !== body.home) {
-    const used = await db.all('SELECT COUNT(*) AS n FROM expenses');
-    if (used[0].n > 0) fail(409, 'Ya hay gastos registrados: borra todos los gastos para cambiar el país o la moneda');
+
+  const prev = (await db.all('SELECT * FROM trips WHERE id = ?', [id]))[0];
+  let ids;
+  if (Array.isArray(body.people_ids)) {
+    ids = [...new Set(body.people_ids)];
+    if (ids.length) {
+      const found = await db.all(`SELECT id FROM people WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
+      if (found.length !== ids.length) fail(400, 'Alguna persona no existe');
+    }
+  } else {
+    // Sin lista: viaje nuevo con todas las personas; viaje existente, sin cambios.
+    ids = prev ? [...(await tripPeople(db, id))] : (await db.all('SELECT id FROM people')).map((p) => p.id);
   }
+
+  if (prev) {
+    const used = (await db.all('SELECT COUNT(*) AS n FROM expenses WHERE trip_id = ?', [id]))[0].n;
+    if (used > 0 && (prev.dest_currency !== body.dest || prev.home_currency !== body.home)) {
+      fail(409, 'Este viaje ya tiene gastos: borra sus gastos para cambiar el país o la moneda');
+    }
+    const keep = new Set(ids);
+    const inUse = await peopleInTripExpenses(db, id);
+    const names = [];
+    for (const p of await tripPeople(db, id)) {
+      if (!keep.has(p) && inUse.has(p)) names.push((await db.all('SELECT name FROM people WHERE id = ?', [p]))[0]?.name ?? '¿?');
+    }
+    if (names.length) fail(409, `No se puede quitar a ${names.join(', ')}: tiene gastos en este viaje`);
+  }
+
   await db.batch([
-    { sql: 'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', args: ['dest_currency', body.dest] },
-    { sql: 'INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', args: ['home_currency', body.home] },
+    {
+      sql: `INSERT INTO trips (id, name, dest_currency, home_currency, created_at) VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET name = excluded.name,
+              dest_currency = excluded.dest_currency, home_currency = excluded.home_currency`,
+      args: [id, name, body.dest, body.home, new Date().toISOString()],
+    },
+    { sql: 'DELETE FROM trip_people WHERE trip_id = ?', args: [id] },
+    ...ids.map((p) => ({ sql: 'INSERT INTO trip_people (trip_id, person_id) VALUES (?, ?)', args: [id, p] })),
   ]);
-  return { dest: body.dest, home: body.home };
+  return { id, name, dest: body.dest, home: body.home, people_ids: ids };
+}
+
+async function deleteTrip(db, id, withExpenses) {
+  const trips = await db.all('SELECT id FROM trips');
+  if (!trips.some((t) => t.id === id)) return;
+  if (trips.length === 1) fail(400, 'No se puede borrar el único viaje');
+  const n = (await db.all('SELECT COUNT(*) AS n FROM expenses WHERE trip_id = ?', [id]))[0].n;
+  if (n > 0 && !withExpenses) fail(409, `Este viaje tiene ${n} gasto(s). Confirma para borrarlos junto con el viaje`);
+  await db.batch([
+    { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id IN (SELECT id FROM expenses WHERE trip_id = ?)', args: [id] },
+    { sql: 'DELETE FROM expenses WHERE trip_id = ?', args: [id] },
+    { sql: 'DELETE FROM trip_people WHERE trip_id = ?', args: [id] },
+    { sql: 'DELETE FROM trips WHERE id = ?', args: [id] },
+  ]);
 }
 
 // ---------- personas ----------
 
 async function savePerson(db, id, body) {
   const name = text(body.name, 'El nombre');
+  const isNew = !(await db.all('SELECT id FROM people WHERE id = ?', [id])).length;
   await db.run(
     'INSERT INTO people (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name',
     [id, name],
   );
+  // Una persona nueva entra en el viaje indicado; sin viaje, en todos. Al renombrar no se toca nada.
+  if (isNew) {
+    if (body.trip_id) {
+      const trip = await getTrip(db, body.trip_id);
+      await db.run('INSERT OR IGNORE INTO trip_people (trip_id, person_id) VALUES (?, ?)', [trip.id, id]);
+    } else {
+      await db.run('INSERT OR IGNORE INTO trip_people (trip_id, person_id) SELECT id, ? FROM trips', [id]);
+    }
+  }
   return { id, name };
 }
 
@@ -133,7 +206,10 @@ async function deletePerson(db, id) {
   if (used[0].m > 0 || used[0].b > 0) {
     fail(409, 'No se puede borrar: tiene medios de pago o gastos asociados');
   }
-  await db.run('DELETE FROM people WHERE id = ?', [id]);
+  await db.batch([
+    { sql: 'DELETE FROM trip_people WHERE person_id = ?', args: [id] },
+    { sql: 'DELETE FROM people WHERE id = ?', args: [id] },
+  ]);
 }
 
 // ---------- medios de pago ----------
@@ -194,16 +270,24 @@ async function saveExpense(db, id, body) {
   if (cents > MAX_CENTS) fail(400, 'El monto es demasiado grande');
   const description = text(body.description, 'La descripción', { max: 120, required: false });
 
-  const method = await db.all('SELECT id FROM payment_methods WHERE id = ?', [body.payment_method_id]);
+  // Un gasto que ya existe conserva su viaje. Uno nuevo va al viaje indicado; sin viaje (colas guardadas antes
+  // de que hubiera varios viajes) va al primero.
+  const prevTrip = (await db.all('SELECT trip_id FROM expenses WHERE id = ?', [id]))[0]?.trip_id;
+  const trip = await getTrip(db, prevTrip ?? body.trip_id);
+  const settings = tripPair(trip);
+  const going = await tripPeople(db, trip.id);
+
+  const method = await db.all('SELECT id, owner_person_id FROM payment_methods WHERE id = ?', [body.payment_method_id]);
   if (!method.length) fail(400, 'El medio de pago no existe');
+  if (!going.has(method[0].owner_person_id)) fail(400, 'El dueño de ese medio de pago no va en este viaje');
 
   const ids = [...new Set(body.beneficiary_ids ?? [])];
   if (!ids.length) fail(400, 'Indica para quién es el gasto');
   const marks = ids.map(() => '?').join(',');
   const found = await db.all(`SELECT id FROM people WHERE id IN (${marks})`, ids);
   if (found.length !== ids.length) fail(400, 'Alguna persona no existe');
+  if (ids.some((p) => !going.has(p))) fail(400, 'Alguna persona no va en este viaje');
 
-  const settings = await getSettings(db);
   const homeDigits = currencyByCode(settings.home).digits;
   let rate = null;
   let rateDate = null;
@@ -228,8 +312,8 @@ async function saveExpense(db, id, body) {
   await db.batch([
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
-              rate, rate_date, rate_estimated, rate_manual, amount_home, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              rate, rate_date, rate_estimated, rate_manual, amount_home, created_at, trip_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
@@ -237,7 +321,7 @@ async function saveExpense(db, id, body) {
               rate_estimated = excluded.rate_estimated, rate_manual = excluded.rate_manual,
               amount_home = excluded.amount_home`,
       args: [id, body.date, cents, description, body.payment_method_id, rate, rateDate,
-        estimated, manual, amountHome, new Date().toISOString()],
+        estimated, manual, amountHome, new Date().toISOString(), trip.id],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     ...ids.map((p) => ({
@@ -256,15 +340,17 @@ async function deleteExpense(db, id) {
 }
 
 // Gastos sin tasa (se guardaron sin internet) o con tasa estimada: reintenta conseguirla.
-async function fillPendingRates(db, settings) {
-  const homeDigits = currencyByCode(settings.home).digits;
+async function fillPendingRates(db) {
   const rows = await db.all(
-    `SELECT id, date, amount_cents, amount_home, rate_estimated, rate_date FROM expenses
-     WHERE rate_manual = 0 AND (amount_home IS NULL OR rate_estimated = 1)
-     ORDER BY date DESC LIMIT 8`,
+    `SELECT e.id, e.date, e.amount_cents, e.amount_home, e.rate_estimated, e.rate_date,
+            t.dest_currency, t.home_currency
+     FROM expenses e JOIN trips t ON t.id = e.trip_id
+     WHERE e.rate_manual = 0 AND (e.amount_home IS NULL OR e.rate_estimated = 1)
+     ORDER BY e.date DESC LIMIT 8`,
   );
   for (const e of rows) {
-    const r = await resolveRate(db, e.date, settings);
+    const homeDigits = currencyByCode(e.home_currency).digits;
+    const r = await resolveRate(db, e.date, { dest: e.dest_currency, home: e.home_currency });
     if (!r) continue;
     const same = e.amount_home != null && r.estimated === Boolean(e.rate_estimated) && r.rate_date === e.rate_date;
     if (same) continue;
@@ -277,9 +363,10 @@ async function fillPendingRates(db, settings) {
 }
 
 async function getState(db) {
-  const settings = await getSettings(db);
-  await fillPendingRates(db, settings);
-  const [people, methods, expenses, links] = await Promise.all([
+  await fillPendingRates(db);
+  const [trips, tripLinks, people, methods, expenses, links] = await Promise.all([
+    db.all('SELECT * FROM trips ORDER BY rowid'),
+    db.all('SELECT trip_id, person_id FROM trip_people'),
     db.all('SELECT id, name FROM people ORDER BY name COLLATE NOCASE'),
     db.all('SELECT id, kind, name, last4, card_type, owner_person_id, color, network FROM payment_methods ORDER BY name COLLATE NOCASE'),
     db.all('SELECT * FROM expenses ORDER BY date DESC, created_at DESC'),
@@ -290,9 +377,14 @@ async function getState(db) {
     if (!byExpense.has(l.expense_id)) byExpense.set(l.expense_id, []);
     byExpense.get(l.expense_id).push(l.person_id);
   }
+  const byTrip = new Map();
+  for (const l of tripLinks) {
+    if (!byTrip.has(l.trip_id)) byTrip.set(l.trip_id, []);
+    byTrip.get(l.trip_id).push(l.person_id);
+  }
   return {
     today: todayStr(),
-    settings,
+    trips: trips.map((t) => ({ id: t.id, name: t.name, dest: t.dest_currency, home: t.home_currency, people_ids: byTrip.get(t.id) ?? [] })),
     people,
     payment_methods: methods,
     expenses: expenses.map((e) => ({ ...e, beneficiary_ids: byExpense.get(e.id) ?? [] })),
@@ -311,16 +403,25 @@ export async function handle({ method, path, query = new URLSearchParams(), body
 
     if (resource === 'ping' && method === 'GET') return ok({ ok: true });
     if (resource === 'state' && method === 'GET') return ok(await getState(db));
-    if (resource === 'settings' && method === 'PUT') return ok(await saveSettings(db, body ?? {}));
 
+    if (resource === 'trips') {
+      if (method === 'POST' && !id) return ok(await put(saveTrip), 201);
+      if (method === 'PUT' && id) return ok(await put(saveTrip));
+      if (method === 'DELETE' && id) {
+        await deleteTrip(db, id, query.get('con_gastos') === '1');
+        return ok({ ok: true });
+      }
+    }
+
+    // Las tasas dependen de las monedas del viaje (?trip=); sin viaje se usa el primero.
     if (resource === 'rates' && id === 'history' && method === 'GET') {
-      return ok(await rateHistory(db, await getSettings(db), Number(query.get('days'))));
+      return ok(await rateHistory(db, tripPair(await getTrip(db, query.get('trip'))), Number(query.get('days'))));
     }
 
     if (resource === 'rate' && method === 'GET') {
       const date = query.get('date') ?? todayStr();
       if (!isValidDate(date)) fail(400, 'Fecha inválida');
-      const r = await resolveRate(db, date, await getSettings(db));
+      const r = await resolveRate(db, date, tripPair(await getTrip(db, query.get('trip'))));
       return ok(r ?? { rate: null });
     }
 

@@ -16,6 +16,20 @@ CREATE TABLE IF NOT EXISTS people (
   name TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS trips (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  dest_currency TEXT NOT NULL,
+  home_currency TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS trip_people (
+  trip_id TEXT NOT NULL REFERENCES trips(id) ON DELETE CASCADE,
+  person_id TEXT NOT NULL REFERENCES people(id),
+  PRIMARY KEY (trip_id, person_id)
+);
+
 CREATE TABLE IF NOT EXISTS payment_methods (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL CHECK (kind IN ('card', 'pix', 'cash')),
@@ -45,7 +59,8 @@ CREATE TABLE IF NOT EXISTS expenses (
   rate_estimated INTEGER NOT NULL DEFAULT 0,
   rate_manual INTEGER NOT NULL DEFAULT 0,
   amount_home INTEGER,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  trip_id TEXT REFERENCES trips(id)
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (
