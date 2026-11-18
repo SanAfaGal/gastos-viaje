@@ -21,3 +21,9 @@
   for = "/js/*"
   [headers.values]
     Cache-Control = "no-cache"
+
+# Leaflet va fijo en una versión (1.9.4): se puede guardar un año sin revisar.
+[[headers]]
+  for = "/vendor/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"

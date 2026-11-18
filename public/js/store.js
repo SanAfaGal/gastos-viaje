@@ -36,12 +36,15 @@ export function setPass(p) {
   net.needsLogin = false;
 }
 
-async function request(method, path, body) {
+const NOT_MODIFIED = Symbol('not-modified');
+let stateEtag = null; // versión del estado que ya tenemos: el servidor responde 304 si no cambió
+
+async function request(method, path, body, extraHeaders = {}) {
   let res;
   try {
     res = await fetch(path, {
       method,
-      headers: { 'content-type': 'application/json', 'x-passcode': getPass() },
+      headers: { 'content-type': 'application/json', 'x-passcode': getPass(), ...extraHeaders },
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -52,12 +55,14 @@ async function request(method, path, body) {
     throw err;
   }
   net.online = true;
+  if (res.status === 304) return NOT_MODIFIED;
   let data = null;
   try {
     data = await res.json();
   } catch {
     /* sin cuerpo */
   }
+  if (path === '/api/state' && res.ok) stateEtag = res.headers?.get?.('etag') ?? null;
   if (res.status === 401) {
     net.needsLogin = true;
     notify();
@@ -73,6 +78,7 @@ async function request(method, path, body) {
 // ---------- estado ----------
 
 let server = read(K.state, { today: todayStr(), trips: [], people: [], payment_methods: [], expenses: [] });
+let serverJson = JSON.stringify(server); // para saber si lo que llega del servidor cambió algo
 // Cola guardada por la primera versión (solo BRL): mismos datos con el nombre de campo nuevo.
 let queue = read(K.queue, []).map((o) => {
   if (o.expense?.amount_brl_cents) {
@@ -172,14 +178,26 @@ export async function fetchHistory(days = 30) {
   }
 }
 
+// Solo se avisa a la pantalla (y se guarda la copia local) si lo recibido es distinto de lo que ya había:
+// así la sincronización periódica no redibuja ni escribe en localStorage cuando no cambió nada.
 export async function refresh() {
+  const wasOnline = net.online;
   try {
-    server = await request('GET', '/api/state');
-    applySettings();
-    write(K.state, server);
+    const fresh = await request('GET', '/api/state', undefined, stateEtag ? { 'if-none-match': stateEtag } : {});
     net.lastSync = Date.now();
-    rememberRates(server.expenses);
-    notify();
+    if (fresh === NOT_MODIFIED) {
+      if (!wasOnline) notify();
+      return true;
+    }
+    const json = JSON.stringify(fresh);
+    if (json !== serverJson) {
+      server = fresh;
+      serverJson = json;
+      applySettings();
+      write(K.state, server);
+      rememberRates(server.expenses);
+      notify();
+    } else if (!wasOnline) notify(); // volvió la conexión: la pantalla muestra el estado de red
     return true;
   } catch (err) {
     if (!err.offline) throw err;

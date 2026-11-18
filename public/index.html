@@ -25,6 +25,19 @@
     })();
   </script>
   <link rel="stylesheet" href="/css/app.css">
+  <!-- Los módulos se piden todos a la vez, en vez de uno detrás de otro según se van importando. -->
+  <link rel="modulepreload" href="/js/app.js">
+  <link rel="modulepreload" href="/js/store.js">
+  <link rel="modulepreload" href="/js/money.mjs">
+  <link rel="modulepreload" href="/js/currencies.mjs">
+  <link rel="modulepreload" href="/js/settlement.mjs">
+  <link rel="modulepreload" href="/js/cards.mjs">
+  <link rel="modulepreload" href="/js/chart.mjs">
+  <link rel="modulepreload" href="/js/places.mjs">
+  <link rel="modulepreload" href="/js/order.mjs">
+  <link rel="modulepreload" href="/js/theme.js">
+  <link rel="modulepreload" href="/js/stats.mjs">
+  <link rel="modulepreload" href="/js/geosearch.mjs">
 </head>
 <body>
   <header class="topbar">

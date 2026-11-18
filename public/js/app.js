@@ -1762,11 +1762,11 @@ async function sync() {
 window.addEventListener('online', sync);
 window.addEventListener('offline', () => { store.net.online = false; updateStatus(); });
 document.addEventListener('visibilitychange', () => { if (!document.hidden && !formActive()) sync(); });
-setInterval(() => { if (!document.hidden && !formActive()) sync(); }, 30000);
+setInterval(() => { if (!document.hidden && !formActive()) sync(); }, 60000);
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 
-render();
-sync().then(() => { if (!formActive()) render(); });
+render(); // primero lo guardado en el teléfono; si el servidor trae algo distinto, refresh() avisa y se redibuja
+sync();

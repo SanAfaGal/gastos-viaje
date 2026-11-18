@@ -1,6 +1,7 @@
 // Función de Netlify: misma API que el servidor local, con Turso como base.
 import { getDb } from '../../src/db.mjs';
 import { handle } from '../../src/handlers.mjs';
+import { toHttp } from '../../src/http.mjs';
 
 export default async (req, context) => {
   const url = new URL(req.url);
@@ -21,10 +22,8 @@ export default async (req, context) => {
     ip: req.headers.get('x-nf-client-connection-ip') ?? context?.ip,
     db: await getDb(),
   });
-  return new Response(JSON.stringify(out.body), {
-    status: out.status,
-    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
-  });
+  const res = toHttp(out, { method: req.method, path: url.pathname, ifNoneMatch: req.headers.get('if-none-match') });
+  return new Response(res.body, { status: res.status, headers: res.headers });
 };
 
 export const config = { path: '/api/*' };

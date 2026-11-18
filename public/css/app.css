@@ -96,8 +96,7 @@ main { padding: 4px 16px calc(110px + env(safe-area-inset-bottom)); max-width: 6
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
   display: flex; justify-content: space-around; align-items: center;
   padding: 8px 8px calc(8px + env(safe-area-inset-bottom));
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  backdrop-filter: blur(12px);
+  background: var(--surface);
   border-top: 1px solid var(--border);
 }
 .tabbar a {

@@ -6,6 +6,7 @@ import { extname, isAbsolute, join, normalize, relative, resolve } from 'node:pa
 import { fileURLToPath } from 'node:url';
 import { getDb } from './src/db.mjs';
 import { handle } from './src/handlers.mjs';
+import { toHttp } from './src/http.mjs';
 
 const root = resolve(fileURLToPath(new URL('./public', import.meta.url)));
 const port = Number(process.env.PORT ?? 3000);
@@ -49,8 +50,9 @@ const server = createServer(async (req, res) => {
         ip: req.socket.remoteAddress,
         db: await getDb(),
       });
-      res.writeHead(out.status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
-      return res.end(JSON.stringify(out.body));
+      const http = toHttp(out, { method: req.method, path: url.pathname, ifNoneMatch: req.headers['if-none-match'] });
+      res.writeHead(http.status, http.headers);
+      return res.end(http.body);
     }
 
     const rel = url.pathname === '/' ? '/index.html' : decodeURIComponent(url.pathname);

@@ -151,3 +151,26 @@ test('orden manual sin internet: se ve al instante, un reordenamiento nuevo reem
   assert.deepEqual(rows.map((r) => r.id), ['o2', 'o3', 'o1']);
   assert.deepEqual(day(), ['o2', 'o3', 'o1']); // igual con lo que ya está en el servidor
 });
+
+test('refresh solo avisa a la pantalla cuando lo recibido cambió algo', async () => {
+  await store.refresh(); // deja la copia local al día
+  let avisos = 0;
+  const oyente = () => { avisos += 1; };
+  store.listeners.add(oyente);
+  try {
+    await store.refresh();
+    assert.equal(avisos, 0, 'el mismo estado no redibuja');
+
+    await store.savePerson({ id: 'otra', name: 'Otra persona' }); // mutate() llama a refresh() con datos nuevos
+    assert.ok(avisos > 0, 'un cambio sí avisa');
+
+    const antes = avisos;
+    online = false;
+    await store.refresh();
+    online = true;
+    await store.refresh(); // vuelve la conexión sin cambios de datos: avisa una vez para mostrar el estado de red
+    assert.equal(avisos, antes + 2, 'caer y volver la conexión avisa dos veces (red caída, red recuperada)');
+  } finally {
+    store.listeners.delete(oyente);
+  }
+});
