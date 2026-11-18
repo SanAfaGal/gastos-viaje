@@ -32,7 +32,7 @@ export const KIND_COLOR = { card: '#3b4252', pix: '#2563eb', cash: '#0d8a6a', pe
 
 // Bancos frecuentes con un color sugerido. El nombre del medio es de texto libre (suele ser el banco);
 // si contiene alguno de estos nombres, la tarjeta toma su color cuando no se eligió otro.
-export const BANKS = {
+const BANKS = {
   Bancolombia: '#a8841a',
   Davivienda: '#dc2626',
   BBVA: '#1d4ed8',

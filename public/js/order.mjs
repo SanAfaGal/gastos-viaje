@@ -5,7 +5,7 @@
 // tienen sort_order, van al final del día por su hora de creación.
 
 // Orden dentro de un mismo día.
-export function compareInDay(a, b) {
+function compareInDay(a, b) {
   const ao = a.sort_order ?? null;
   const bo = b.sort_order ?? null;
   if (ao != null && bo != null && ao !== bo) return ao - bo;

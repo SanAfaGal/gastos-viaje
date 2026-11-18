@@ -6,7 +6,7 @@
 //  2. Si falla, Nominatim primero dentro de unos 30 km alrededor de la referencia y, si no hay nada, en todo el mundo.
 // Los resultados cercanos (hasta NEAR_KM) van primero y cada uno trae su distancia.
 
-export const NEAR_KM = 50;
+const NEAR_KM = 50;
 
 const rad = (d) => (d * Math.PI) / 180;
 

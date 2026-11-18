@@ -26,7 +26,7 @@ const MAX_FAILS = 10;
 const MAX_GLOBAL = 300;
 const LOCK_MS = 15 * 60 * 1000;
 
-export function isAuthorized(passcode) {
+function isAuthorized(passcode) {
   const expected = process.env.APP_PASSCODE;
   if (!expected) return true;
   return timingSafeEqual(sha(passcode ?? ''), sha(expected));

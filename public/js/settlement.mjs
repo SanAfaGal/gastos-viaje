@@ -54,7 +54,7 @@ export function computeSettlement(expenses, personIds = [], unit = 1) {
 }
 
 // Mayor deudor paga al mayor acreedor hasta saldar. Deja pocos pagos.
-export function minTransfers(balances) {
+function minTransfers(balances) {
   const creditors = balances.filter((b) => b.net > 0).map((b) => ({ id: b.person_id, left: b.net }));
   const debtors = balances.filter((b) => b.net < 0).map((b) => ({ id: b.person_id, left: -b.net }));
   const byLeft = (a, b) => b.left - a.left || a.id.localeCompare(b.id);

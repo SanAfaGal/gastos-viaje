@@ -10,8 +10,8 @@ import { isValidDate } from '../public/js/money.mjs';
 import { currencyByCode } from '../public/js/currencies.mjs';
 import { NETWORKS, isHexColor } from '../public/js/cards.mjs';
 
-export const BACKUP_APP = 'gastos-viaje';
-export const BACKUP_VERSION = 1;
+const BACKUP_APP = 'gastos-viaje';
+const BACKUP_VERSION = 1;
 const LIMIT = 20000; // filas por tabla: un tope para que un archivo absurdo no atasque el servidor
 const MAX_CENTS = 5e9;
 const TABLES = ['people', 'trips', 'trip_people', 'payment_methods', 'expenses', 'expense_beneficiaries'];

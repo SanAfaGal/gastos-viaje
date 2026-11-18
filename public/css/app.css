@@ -121,7 +121,6 @@ main { padding: 4px 16px calc(110px + env(safe-area-inset-bottom)); max-width: 6
 .hero .big { font-size: 2.1rem; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .hero .sub { opacity: .85; font-size: .9rem; margin-top: 2px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .muted { color: var(--muted); font-size: .85rem; }
 .num { font-variant-numeric: tabular-nums; font-weight: 600; }
 .pos { color: var(--pos); } .neg { color: var(--neg); }

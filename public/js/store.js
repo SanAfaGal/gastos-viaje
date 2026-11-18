@@ -30,7 +30,7 @@ const notify = () => listeners.forEach((fn) => fn());
 
 export const net = { online: true, syncing: false, needsLogin: false, lastSync: 0 };
 
-export const getPass = () => localStorage.getItem(K.pass) ?? '';
+const getPass = () => localStorage.getItem(K.pass) ?? '';
 export function setPass(p) {
   localStorage.setItem(K.pass, p);
   net.needsLogin = false;
