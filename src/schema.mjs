@@ -66,7 +66,8 @@ CREATE TABLE IF NOT EXISTS expenses (
   place TEXT,
   amount_approx INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER,
-  pay_pending INTEGER NOT NULL DEFAULT 0
+  pay_pending INTEGER NOT NULL DEFAULT 0,
+  rate_final INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (

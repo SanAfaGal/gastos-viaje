@@ -302,6 +302,7 @@ test('migración: base de la primera versión (BRL a COP) se conserva', async ()
   old.close();
 
   const db = await openFileDb(file);
+  await db.run('UPDATE expenses SET rate_final = 1'); // día cerrado ya revisado: la prueba no sale a internet
   const st = (await handle({ method: 'GET', path: '/api/state', db })).body;
   // Los datos de un solo viaje pasan a "Viaje 1" (BRL a COP) con todos sus gastos y personas.
   assert.deepEqual(st.trips, [{ id: 'trip-1', name: 'Viaje 1', dest: 'BRL', home: 'COP', people_ids: ['yo'] }]);
@@ -348,6 +349,7 @@ test('migración a varios viajes: conserva las monedas de ajustes y es idempoten
 
   for (let pass = 1; pass <= 2; pass += 1) { // abrir otra vez (otro arranque en frío) no duplica nada
     const db = await openFileDb(file);
+    await db.run('UPDATE expenses SET rate_final = 1'); // día cerrado ya revisado: la prueba no sale a internet
     const st = (await handle({ method: 'GET', path: '/api/state', db })).body;
     assert.equal(st.trips.length, 1, 'pasada ' + pass);
     assert.deepEqual(

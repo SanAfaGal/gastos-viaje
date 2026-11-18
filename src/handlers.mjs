@@ -5,6 +5,7 @@ import { isValidDate, toHome, todayStr } from '../public/js/money.mjs';
 import { currencyByCode } from '../public/js/currencies.mjs';
 import { NETWORKS, isHexColor } from '../public/js/cards.mjs';
 import { rateHistory, refreshRates, resolveRate } from './rates.mjs';
+import { dumpBackup, restoreBackup } from './backup.mjs';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -311,6 +312,12 @@ async function saveExpense(db, id, body) {
     estimated = r.estimated ? 1 : 0;
   }
   const amountHome = rate == null ? null : toHome(cents, rate, homeDigits);
+  // Tasa definitiva: la de un día que ya cerró y con dato exacto. La de hoy se revisa mañana (ver fillPendingRates).
+  const rateFinal = r && !r.estimated && r.rate_date === body.date && body.date < todayStr() ? 1 : 0;
+  // Al deshacer un borrado el gasto vuelve con su hora de creación y su lugar en el día. Se ignoran valores raros.
+  const createdMs = typeof body.created_at === 'string' ? Date.parse(body.created_at) : NaN;
+  const createdAt = Number.isFinite(createdMs) && createdMs <= Date.now() + 86400000 ? new Date(createdMs).toISOString() : new Date().toISOString();
+  const sortOrder = Number.isInteger(body.sort_order) && body.sort_order >= 0 && body.sort_order < 100000 ? body.sort_order : null;
 
   // Ubicación opcional: o vienen lat y lng válidas, o ninguna. Vacío (null, undefined, '') = sin ubicación.
   const blank = (v) => v == null || v === '';
@@ -330,8 +337,8 @@ async function saveExpense(db, id, body) {
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
               rate, rate_date, rate_estimated, rate_manual, amount_home, created_at, trip_id,
-              lat, lng, place, amount_approx, pay_pending)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              lat, lng, place, amount_approx, pay_pending, rate_final, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
@@ -341,10 +348,11 @@ async function saveExpense(db, id, body) {
               lat = excluded.lat, lng = excluded.lng, place = excluded.place,
               amount_approx = excluded.amount_approx,
               pay_pending = excluded.pay_pending,
+              rate_final = excluded.rate_final,
               sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
       args: [id, body.date, cents, description, methodId, rate, rateDate,
-        estimated, 0, amountHome, new Date().toISOString(), trip.id,
-        lat, lng, place, approx, payPending ? 1 : 0],
+        estimated, 0, amountHome, createdAt, trip.id,
+        lat, lng, place, approx, payPending ? 1 : 0, rateFinal, sortOrder],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     ...ids.map((p) => ({
@@ -408,33 +416,42 @@ async function refreshTripRates(db, query) {
     if (e.amount_home === home && e.rate === rate && !e.rate_estimated) { unchanged += 1; continue; }
     changed += 1;
     updates.push({
-      sql: 'UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = 0, amount_home = ? WHERE id = ?',
-      args: [rate, e.date, home, e.id],
+      sql: 'UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = 0, amount_home = ?, rate_final = ? WHERE id = ?',
+      args: [rate, e.date, home, e.date < todayStr() ? 1 : 0, e.id],
     });
   }
   if (!dry && updates.length) await db.batch(updates);
   return { dry, changed, unchanged, no_data: noData, total_before: before, total_after: after };
 }
 
-// Gastos sin tasa (se guardaron sin internet) o con tasa estimada: reintenta conseguirla.
+// Mantiene al día las tasas de los gastos (hasta 8 por consulta, los más recientes primero):
+//  - sin tasa (se guardaron sin internet) o con tasa estimada: reintenta conseguirla;
+//  - de un día que ya cerró y aún sin tasa definitiva (rate_final = 0): la cambia por la del día cerrado. Así lo que
+//    se guardó hoy con el valor provisional de la fuente se corrige solo desde mañana, sin pulsar "Actualizar tasas".
+// Una vez que el día cerrado tiene su tasa exacta, el gasto queda como definitivo y no se vuelve a revisar.
 async function fillPendingRates(db) {
+  const today = todayStr();
   const rows = await db.all(
-    `SELECT e.id, e.date, e.amount_cents, e.amount_home, e.rate_estimated, e.rate_date,
+    `SELECT e.id, e.date, e.amount_cents, e.amount_home, e.rate, e.rate_estimated, e.rate_date, e.rate_final,
             t.dest_currency, t.home_currency
      FROM expenses e JOIN trips t ON t.id = e.trip_id
-     WHERE e.rate_manual = 0 AND (e.amount_home IS NULL OR e.rate_estimated = 1)
+     WHERE e.rate_manual = 0
+       AND (e.amount_home IS NULL OR e.rate_estimated = 1 OR (e.rate_final = 0 AND e.date < ?))
      ORDER BY e.date DESC LIMIT 8`,
+    [today],
   );
   for (const e of rows) {
     const homeDigits = currencyByCode(e.home_currency).digits;
     const r = await resolveRate(db, e.date, { dest: e.dest_currency, home: e.home_currency });
     if (!r) continue;
-    const same = e.amount_home != null && r.estimated === Boolean(e.rate_estimated) && r.rate_date === e.rate_date;
+    const final = !r.estimated && r.rate_date === e.date && e.date < today ? 1 : 0;
+    const same = e.amount_home != null && r.rate === e.rate && r.estimated === Boolean(e.rate_estimated)
+      && r.rate_date === e.rate_date && final === e.rate_final;
     if (same) continue;
     await db.run(
-      `UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = ?, amount_home = ?
+      `UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = ?, amount_home = ?, rate_final = ?
        WHERE id = ?`,
-      [r.rate, r.rate_date, r.estimated ? 1 : 0, toHome(e.amount_cents, r.rate, homeDigits), e.id],
+      [r.rate, r.rate_date, r.estimated ? 1 : 0, toHome(e.amount_cents, r.rate, homeDigits), final, e.id],
     );
   }
 }
@@ -508,6 +525,10 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     }
 
     if (resource === 'order' && method === 'POST') return ok(await saveOrder(db, body));
+
+    // Respaldo: copia cruda de todas las tablas. Restaurar solo agrega lo que falta (con ?dry=1 solo cuenta).
+    if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db));
+    if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail }));
 
     const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense] };
     if (writers[resource]) {

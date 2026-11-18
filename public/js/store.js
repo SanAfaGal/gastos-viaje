@@ -314,4 +314,10 @@ export async function refreshRatesNow(dry) {
 }
 export const ping = () => request('GET', '/api/ping');
 // Respaldo: copia fresca de todo lo que hay en el servidor (viajes, personas, medios de pago y gastos).
-export const backupData = () => request('GET', '/api/state');
+export const backupData = () => request('GET', '/api/backup');
+// Restaurar un respaldo: solo agrega lo que falta. Con dry=true solo cuenta qué entraría.
+export async function restoreBackup(data, dry) {
+  const out = await request('POST', `/api/restore${dry ? '?dry=1' : ''}`, data);
+  if (!dry) await refresh();
+  return out;
+}

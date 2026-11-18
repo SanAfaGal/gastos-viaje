@@ -21,7 +21,8 @@ const esc = (s) =>
 
 // Aviso grande arriba de la pantalla. kind: 'ok' (verde, ✓) o 'error' (naranja/rojo, !, dura más). Se cierra al tocarlo.
 let toastTimer;
-function toast(msg, kind = 'ok') {
+// `action` = { label, run }: agrega un botón al aviso (por ejemplo "Deshacer") y lo deja visible más tiempo.
+function toast(msg, kind = 'ok', action = null) {
   const icon = document.createElement('span');
   icon.className = 'toast-icon';
   icon.setAttribute('aria-hidden', 'true');
@@ -29,12 +30,20 @@ function toast(msg, kind = 'ok') {
   const text = document.createElement('span');
   text.textContent = msg;
   $toast.replaceChildren(icon, text);
+  if (action) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'toast-act';
+    btn.textContent = action.label;
+    btn.addEventListener('click', (ev) => { ev.stopPropagation(); $toast.classList.remove('show'); action.run(); });
+    $toast.append(btn);
+  }
   $toast.className = `toast ${kind}`;
   $toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   void $toast.offsetWidth; // reinicia la animación si ya había un aviso
   $toast.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $toast.classList.remove('show'), kind === 'error' ? 6000 : 3500);
+  toastTimer = setTimeout(() => $toast.classList.remove('show'), kind === 'error' ? 6000 : action ? 8000 : 3500);
 }
 $toast.addEventListener('click', () => $toast.classList.remove('show'));
 
@@ -691,7 +700,23 @@ function viewSettings() {
     const x = CURRENCIES.find((k) => k.code === code);
     return `<option value="${esc(code)}" ${code === sel ? 'selected' : ''}>${esc(x.country)} · ${esc(x.code)} (${esc(x.name)})</option>`;
   };
+  const nTripPeople = c.trip.people_ids.length;
   return `
+    <div class="scope scope-trip"><span class="scope-chip">Este viaje</span><b>${esc(c.trip.name)}</b></div>
+    <div class="card trip-card">
+      <div class="pay row"><span><b>${esc(c.trip.name)}</b>
+        <div class="muted">${esc(c.trip.dest)} → ${esc(c.trip.home)} · ${c.counts[c.trip.id] ?? 0} gasto(s) · ${nTripPeople} persona(s)</div></span>
+        <span><button class="btn secondary small" data-action="edit-trip" data-id="${esc(c.trip.id)}">Editar</button></span></div>
+      <div class="acts">
+        ${actTile('map', 'Mapa de lugares', placed ? `${placed} con ubicación` : 'Sin ubicaciones aún', 'href="#/mapa"', { link: true })}
+        ${actTile('rates', 'Actualizar tasas', rate ? `Hoy: ${fmtRate(rate.rate)}` : 'Sin datos todavía', 'data-action="refresh-rates"')}
+        ${actTile('csv', 'Exportar CSV', `${c.expenses.length} gasto(s)`, 'data-action="csv"')}
+      </div>
+      <p class="muted">Estas acciones solo afectan a este viaje. Para cambiar de viaje usa el selector de arriba.</p>
+    </div>
+
+    <div class="scope scope-all"><span class="scope-chip">Global</span><b>Todos los viajes</b></div>
+    <p class="muted scope-note">Viajes, personas, medios de pago, apariencia y copias de seguridad son comunes a todos los viajes.</p>
     <div class="card"><h2>Viajes</h2>
       ${c.trips.map((x) => `<div class="pay row"><span><b>${esc(x.name)}</b>${x.id === c.trip.id ? ' <span class="tag">Activo</span>' : ''}
         <div class="muted">${esc(x.dest)} → ${esc(x.home)} · ${c.counts[x.id] ?? 0} gasto(s) · ${x.people_ids.length} persona(s)</div></span>
@@ -791,15 +816,14 @@ function viewSettings() {
       </form></dialog>` : ''}` : '<div class="muted">Agrega primero una persona.</div>'}
     </div>
 
-    <div class="card"><h2>Datos</h2>
+    <div class="card"><h2>Datos y acceso</h2>
       <div class="acts">
-        ${actTile('map', 'Mapa de lugares', placed ? `${placed} con ubicación` : 'Sin ubicaciones aún', 'href="#/mapa"', { link: true })}
         ${actTile('sync', 'Sincronizar', syncText, 'data-action="sync-now"')}
-        ${actTile('rates', 'Actualizar tasas', rate ? `Hoy: ${fmtRate(rate.rate)}` : 'Sin datos todavía', 'data-action="refresh-rates"')}
-        ${actTile('csv', 'Exportar CSV', `${c.expenses.length} gasto(s) de este viaje`, 'data-action="csv"')}
-        ${actTile('backup', 'Respaldo', 'Todo en un archivo JSON', 'data-action="backup"')}
+        ${actTile('backup', 'Respaldo', 'Todos los viajes en un JSON', 'data-action="backup"')}
+        ${actTile('restore', 'Restaurar', 'Agrega lo que falte', 'data-action="restore"')}
         ${actTile('key', 'Cambiar código', 'De este dispositivo', 'data-action="logout"', { danger: true })}
       </div>
+      <input id="restore-file" type="file" accept="application/json,.json" hidden>
       <p class="muted">Tarjetas y transferencias solo guardan nombre y últimos 4 dígitos; nunca números completos.</p>
     </div>`;
 }
@@ -811,6 +835,7 @@ const ACT_ICONS = {
   rates: '<path d="M4 17l5-5 4 4 7-8M15 8h5v5"/>',
   csv: '<path d="M6 3h8l4 4v14H6zM14 3v4h4M9 13h6M9 17h6"/>',
   backup: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14"/>',
+  restore: '<path d="M12 20V9M7.5 13.5 12 9l4.5 4.5M5 5h14"/>',
   key: '<circle cx="8" cy="15" r="3.5"/><path d="M10.5 12.5 19 4M16 7l2.5 2.5"/>',
 };
 const actTile = (icon, title, sub, attrs, { danger = false, link = false } = {}) => {
@@ -828,9 +853,46 @@ function agoText(ms) {
   return `hace ${Math.round(s / 86400)} día(s)`;
 }
 
+// Deshacer un borrado: se vuelve a guardar el mismo gasto (mismo id, hora de creación y lugar en el día).
+function undoDelete(e) {
+  const placed = hasLocation(e);
+  store.saveExpense({
+    id: e.id, date: e.date, amount_cents: e.amount_cents, description: e.description ?? '',
+    payment_method_id: e.payment_method_id, beneficiary_ids: e.beneficiary_ids, amount_approx: Boolean(e.amount_approx),
+    lat: placed ? Number(e.lat) : null, lng: placed ? Number(e.lng) : null, place: placed ? (e.place ?? '') : null,
+    created_at: e.created_at, sort_order: e.sort_order ?? undefined, trip_id: e.trip_id,
+  }).then((r) => { if (r?.errors?.length) toast(r.errors[0], 'error'); });
+  toast('Gasto restaurado');
+}
+
+// Restaurar un respaldo: se elige el archivo, se cuenta qué falta y, con confirmación, se agrega. No borra ni pisa nada.
+async function restoreFromFile(file) {
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) return toast('Ese archivo es demasiado grande para ser un respaldo', 'error');
+  let data;
+  try { data = JSON.parse(await file.text()); } catch { return toast('El archivo no es un respaldo válido', 'error'); }
+  await busy(null, async () => {
+    try {
+      const plan = await store.restoreBackup(data, true);
+      const a = plan.add;
+      const parts = [[a.trips, 'viaje(s)'], [a.people, 'persona(s)'], [a.payment_methods, 'medio(s) de pago'], [a.expenses, 'gasto(s)']]
+        .filter(([n]) => n > 0).map(([n, w]) => `${n} ${w}`);
+      if (!parts.length) return toast('No falta nada: todo lo del respaldo ya está en la app');
+      if (!confirm(`Se agregarán ${parts.join(', ')}.
+
+Lo que ya existe no se toca ni se borra. ¿Restaurar?`)) return undefined;
+      await store.restoreBackup(data, false);
+      toast('Respaldo restaurado');
+      return render();
+    } catch (err) {
+      return toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error');
+    }
+  });
+}
+
 function downloadBackup(data) {
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'gastos-viaje', exportado: new Date().toISOString(), ...data }, null, 2)], { type: 'application/json' }));
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
   a.download = `respaldo-gastos-viaje-${todayStr()}.json`;
   a.click();
   URL.revokeObjectURL(a.href);
@@ -1284,9 +1346,10 @@ $view.addEventListener('click', async (ev) => {
     updateConv();
   } else if (action === 'del') {
     if (draft && !coolingDown() && confirm('¿Borrar este gasto?')) {
+      const gone = c.expenses.find((x) => x.id === draft.id);
       store.deleteExpense(draft.id);
       draft = null;
-      toast('Gasto borrado');
+      toast('Gasto borrado', 'ok', gone && { label: 'Deshacer', run: () => undoDelete(gone) });
       location.hash = '#/gastos';
     }
   } else if (action === 'range') {
@@ -1341,7 +1404,8 @@ Se usa la tasa que hoy da la fuente para el día de cada gasto. ¿Actualizar?`;
     await busy(t, async () => { await sync(); toast(store.net.online && !store.pendingCount() ? 'Todo al día' : 'Aún hay gastos por enviar'); render(); }, 'Sincronizando…');
   } else if (action === 'backup') {
     await busy(t, () => guard(async () => { downloadBackup(await store.backupData()); toast('Respaldo descargado'); }), 'Preparando…');
-  } else if (action === 'csv') downloadCsv();
+  } else if (action === 'restore') document.getElementById('restore-file')?.click();
+  else if (action === 'csv') downloadCsv();
   else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
 });
 
@@ -1481,7 +1545,11 @@ $view.addEventListener('input', (ev) => {
 
 $view.addEventListener('change', (ev) => {
   const id = ev.target.id;
-  if (id === 'date') {
+  if (id === 'restore-file') {
+    const file = ev.target.files?.[0];
+    ev.target.value = ''; // permite elegir otra vez el mismo archivo
+    restoreFromFile(file);
+  } else if (id === 'date') {
     if (ev.target.value) { draft.date = ev.target.value; loadRate(); renderChart(); }
   } else if (id === 'f-method') { filters.method = ev.target.value; render(); }
   else if (id === 'f-person') { filters.person = ev.target.value; render(); }

@@ -311,6 +311,7 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 }
 .toast.error { background: var(--toast-err-bg); color: var(--toast-err-text); }
 .toast.show { opacity: 1; transform: translate(-50%, 0); pointer-events: auto; cursor: pointer; }
+.toast-act { margin-left: 12px; padding: 4px 10px; border: 0; border-radius: 99px; background: rgb(255 255 255 / .22); color: inherit; font: inherit; font-weight: 700; cursor: pointer; text-decoration: underline; }
 .toast-icon {
   flex: none; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%;
   background: rgb(255 255 255 / .28); font-size: 1.2rem; font-weight: 800;
@@ -415,3 +416,11 @@ main[aria-busy="true"] button:not(.busy), main[aria-busy="true"] .item, main[ari
 .owner-f { margin: 0 0 8px; gap: 6px; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
 .owner-f::-webkit-scrollbar { display: none; }
 .owner-f .chip { flex: none; padding: 6px 12px; font-size: .85rem; }
+
+/* Ajustes: lo que es de este viaje frente a lo global */
+.scope { display: flex; align-items: center; gap: 10px; margin: 22px 4px 8px; }
+.scope b { font-size: 1.05rem; }
+.scope-chip { padding: 3px 10px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.scope-trip .scope-chip { background: var(--brand); color: var(--brand-ink); }
+.scope-note { margin: -4px 4px 10px; }
+.trip-card { border-left: 4px solid var(--brand); }
