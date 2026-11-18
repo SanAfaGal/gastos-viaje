@@ -6,7 +6,7 @@ import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, detectNet
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
 import { formatCoords, hasLocation, routeFrom } from './places.mjs';
 import { compareChronological, sameOrder } from './order.mjs';
-import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
+import { MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 import { breakdown, byDay, summary } from './stats.mjs';
 import { formatDistance, searchPlaces } from './geosearch.mjs';
@@ -773,10 +773,7 @@ function viewSettings() {
     </div>
 
     <div class="card"><h2>Apariencia</h2>
-      <label>Modo</label>
-      <div class="seg">${MODES.map((m) => `<button type="button" class="chip ${theme.mode === m.id ? 'on' : ''}" data-action="mode" data-id="${esc(m.id)}">${esc(m.name)}</button>`).join('')}</div>
-      <label>Color</label>
-      <div class="seg">${ACCENTS.map((a) => `<button type="button" class="chip ${theme.accent === a.id ? 'on' : ''}" data-action="accent" data-id="${esc(a.id)}"><span class="swatch" style="background:${esc(a.color)}"></span>${esc(a.name)}</button>`).join('')}</div>
+      <div class="seg theme-seg" role="group" aria-label="Tema de la app">${MODES.map((m) => `<button type="button" class="chip ${theme.mode === m.id ? 'on' : ''}" data-action="mode" data-id="${esc(m.id)}" aria-pressed="${theme.mode === m.id}"><svg viewBox="0 0 24 24" aria-hidden="true">${m.icon}</svg>${esc(m.name)}</button>`).join('')}</div>
     </div>
 
     <div class="card"><h2>Personas</h2>
@@ -1414,7 +1411,6 @@ $view.addEventListener('click', async (ev) => {
     try { localStorage.setItem('bg_chartDays', String(chartDays)); } catch { /* sin almacenamiento */ }
     loadHistory();
   } else if (action === 'mode') { setTheme({ mode: id }); render(); }
-  else if (action === 'accent') { setTheme({ accent: id }); render(); }
   else if (action === 'edit-person') { editPerson = id; personOpen = true; render(); }
   else if (action === 'new-person') { editPerson = null; personOpen = true; render(); }
   else if (action === 'cancel-person') document.getElementById('person-dialog')?.close();

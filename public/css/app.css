@@ -28,11 +28,7 @@
   --radius: 16px;
   color-scheme: light;
 }
-/* Colores de acento (modo claro). El modo se fija con data-scheme="dark|light" (ver theme.js). */
-:root[data-accent="azul"] { --brand: #1d4ed8; --brand-2: #3b82f6; }
-:root[data-accent="morado"] { --brand: #6d28d9; --brand-2: #8b5cf6; }
-:root[data-accent="naranja"] { --brand: #c2410c; --brand-2: #f97316; }
-
+/* El modo se fija con data-scheme="dark|light" (ver theme.js). */
 :root[data-scheme="dark"] {
   --bg: #0e1612;
   --surface: #16211b;
@@ -60,9 +56,6 @@
   --shadow: none;
   color-scheme: dark;
 }
-:root[data-scheme="dark"][data-accent="azul"] { --brand: #60a5fa; --brand-2: #3b82f6; --brand-ink: #04101f; }
-:root[data-scheme="dark"][data-accent="morado"] { --brand: #a78bfa; --brand-2: #8b5cf6; --brand-ink: #120626; }
-:root[data-scheme="dark"][data-accent="naranja"] { --brand: #fb923c; --brand-2: #f97316; --brand-ink: #2a1002; }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
 body {
@@ -327,7 +320,8 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 
 .seg { display: flex; flex-wrap: wrap; gap: 8px; }
 .seg .chip { flex: 1 1 auto; text-align: center; }
-.swatch { display: inline-block; width: 14px; height: 14px; border-radius: 50%; margin-right: 8px; vertical-align: -2px; box-shadow: 0 0 0 2px rgb(255 255 255 / .5) inset; }
+.theme-seg .chip { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; }
+.theme-seg svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 
 /* Medios de pago. La tarjeta (.pcard) lleva solo lo que lleva la física: banco, red, chip, número y nombre.
    Tipo y dueño van en el pie (.pcap). Efectivo y transferencia usan la ficha plana (.flat), sin chip ni número.

@@ -11,7 +11,7 @@ Registro de gastos de viajes con amigos o familia. Por cada viaje eliges el paí
 - **Cuentas**: saldo por persona y los pagos que dejan todo en cero.
 - Al borrar un gasto aparece **Deshacer**.
 - Exportar a CSV, **respaldo** completo en JSON y **restaurar** (solo agrega lo que falte).
-- Tema a gusto: modo automático, claro u oscuro y cuatro colores.
+- Tema a gusto: modo automático, claro u oscuro (la app es siempre verde).
 - Funciona en el celular como app instalable y guarda gastos sin internet; los envía al volver la conexión.
 - Sin framework: JavaScript normal en el navegador y Node en el servidor. Única dependencia: `@libsql/client` (solo para la versión en línea). El mapa usa Leaflet, que va incluido en `public/vendor/`.
 

@@ -20,7 +20,6 @@
         var t = JSON.parse(localStorage.getItem('bg_theme') || '{}');
         if (t.mode === 'dark') dark = true;
         else if (t.mode === 'light') dark = false;
-        if (t.accent) r.dataset.accent = t.accent;
       } catch (e) { /* sin almacenamiento: se queda con el modo del teléfono */ }
       r.dataset.scheme = dark ? 'dark' : 'light';
     })();
