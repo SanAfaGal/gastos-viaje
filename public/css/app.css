@@ -17,6 +17,13 @@
   --toast-err-text: #ffffff;
   --warn-bg: #fff4d6;
   --warn-text: #7a5a00;
+  /* Etiquetas de los gastos: cada aviso con su propio color (ámbar = tasa, rojo = falta algo, azul = sin enviar, violeta = aproximado) */
+  --tag-danger-bg: #fde4d8;
+  --tag-danger-text: #9a3412;
+  --tag-info-bg: #dbeafe;
+  --tag-info-text: #1e40af;
+  --tag-approx-bg: #ede4fb;
+  --tag-approx-text: #5b21b6;
   --shadow: 0 1px 2px rgb(20 34 27 / .06), 0 4px 14px rgb(20 34 27 / .06);
   --radius: 16px;
   color-scheme: light;
@@ -44,6 +51,12 @@
   --toast-err-text: #2a0d01;
   --warn-bg: #3a2f0a;
   --warn-text: #f5d36b;
+  --tag-danger-bg: #4a2214;
+  --tag-danger-text: #ffb08a;
+  --tag-info-bg: #14305c;
+  --tag-info-text: #9cc4ff;
+  --tag-approx-bg: #2f2250;
+  --tag-approx-text: #cdb6ff;
   --shadow: none;
   color-scheme: dark;
 }
@@ -128,6 +141,9 @@ main { padding: 4px 16px calc(110px + env(safe-area-inset-bottom)); max-width: 6
 .item .r { text-align: right; white-space: nowrap; }
 .tag { display: inline-block; font-size: .7rem; padding: 1px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); margin: 2px 4px 0 0; }
 .tag.warn { background: var(--warn-bg); color: var(--warn-text); }
+.tag.danger { background: var(--tag-danger-bg); color: var(--tag-danger-text); }
+.tag.info { background: var(--tag-info-bg); color: var(--tag-info-text); }
+.tag.approx { background: var(--tag-approx-bg); color: var(--tag-approx-text); }
 .day { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 4px 6px; font-weight: 600; }
 
 label { display: block; font-size: .85rem; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }

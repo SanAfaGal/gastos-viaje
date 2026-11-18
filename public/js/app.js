@@ -177,12 +177,12 @@ function expenseItem(c, e) {
       ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">📍</button>` : ''}</div>
       <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : esc(methodLabel(m))}</div>
       <span class="tag">${esc(forWho(c, e))}</span>
-      ${e.payment_method_id == null ? '<span class="tag warn">Sin medio de pago</span>' : ''}
-      ${e.pending ? '<span class="tag warn">Sin enviar</span>' : ''}
+      ${e.payment_method_id == null ? '<span class="tag danger">Sin medio de pago</span>' : ''}
+      ${e.pending ? '<span class="tag info">Sin enviar</span>' : ''}
       ${e.amount_home == null ? '<span class="tag warn">Esperando tasa</span>' : ''}
       ${e.rate_estimated ? '<span class="tag warn">Tasa estimada</span>' : ''}
       ${e.rate_manual ? '<span class="tag">Tasa manual</span>' : ''}
-      ${e.amount_approx ? '<span class="tag warn">Monto aproximado</span>' : ''}</div>
+      ${e.amount_approx ? '<span class="tag approx">Monto aproximado</span>' : ''}</div>
     <div class="r"><div class="num">${cop}</div><div class="muted">${fmtDest(e.amount_cents)}</div></div>
   </div>`;
 }
