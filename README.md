@@ -59,7 +59,14 @@ Para llevar los datos que ya tengas en local a Turso: `turso db create gastos-vi
 - `src/handlers.mjs`: la API. `src/db.mjs`: SQLite local (`node:sqlite`) o Turso, con migración de bases antiguas. `src/rates.mjs`: tasas.
 - `server.mjs`: servidor local. `netlify/functions/api.mjs`: la misma API en Netlify.
 
-Todos los montos se guardan como enteros en centésimas. Tasas: `@fawazahmed0/currency-api` (gratis, sin llave, un valor por día). Si un día no tiene dato se usa el anterior y el gasto queda marcado como “Tasa estimada”. También puedes poner la tasa a mano en cada gasto.
+Todos los montos se guardan como enteros en centésimas. Tasas: `@fawazahmed0/currency-api` (gratis, sin llave, un valor por día) con Frankfurter de respaldo. Si un día no tiene dato se usa el anterior y el gasto queda marcado como “Tasa estimada”. No hay tasa manual.
+
+### Decisiones de diseño
+
+- **La tasa es parte del gasto.** Cada gasto guarda la tasa que se usó (`rate`) y el día al que pertenece (`rate_date`), como un recibo. No se consulta en vivo: la tasa de hoy no es definitiva, la fuente gratuita puede variar y la app tiene que mostrar lo mismo sin internet. La tabla `rates` es solo un caché de días cerrados.
+- **Lo calculable no se guarda.** El monto en tu moneda y "tasa estimada" se calculan al leer (`getState`); no son columnas.
+- **Los días cerrados se corrigen solos.** Si un gasto de un día que ya pasó tiene una tasa distinta de la guardada para ese día, se cambia por la del día cerrado (sin internet no se toca). El botón "Actualizar tasas" hace lo mismo a pedido, mostrando antes cuánto cambia.
+- **Respaldo y restauración.** El respaldo JSON es una copia cruda de las tablas. Restaurar solo agrega lo que falta (por id), valida todo antes de escribir y lo hace en una sola transacción: nunca borra ni pisa lo existente.
 
 ## Pruebas
 

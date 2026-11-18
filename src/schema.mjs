@@ -1,5 +1,16 @@
 // Esquema de la base. Va como texto en JS para que funcione empaquetado en Netlify.
-// Montos: enteros en centésimas. amount_cents = moneda del destino; amount_home = tu moneda.
+//
+// Montos: enteros en centésimas. amount_cents = moneda del destino. El monto en tu moneda NO se guarda: se calcula
+// al leer como amount_cents por la tasa del gasto (getState en handlers.mjs).
+//
+// Tasa del gasto (expenses.rate y expenses.rate_date): es un registro del gasto, como el recibo, y no se recalcula
+// en vivo. rate es la tasa que se usó y rate_date el día al que pertenece (si no es el del gasto, la tasa es
+// estimada). Se guarda en el gasto porque la tasa de hoy aún no es definitiva y no está en la tabla rates, porque la
+// fuente gratuita puede dar valores distintos según la hora o cambiar su historial, y porque la app debe mostrar los
+// mismos montos sin internet. La tabla rates es solo un caché de días ya cerrados (se puede borrar y se vuelve a pedir).
+// Un gasto de un día cerrado se corrige solo cuando su tasa difiere de la de rates (fillPendingRates).
+//
+// No usar punto y coma dentro de los comentarios de este archivo: el esquema se parte por punto y coma.
 export default `CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
