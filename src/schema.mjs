@@ -56,9 +56,6 @@ CREATE TABLE IF NOT EXISTS expenses (
   payment_method_id TEXT NOT NULL REFERENCES payment_methods(id),
   rate REAL,
   rate_date TEXT,
-  rate_estimated INTEGER NOT NULL DEFAULT 0,
-  rate_manual INTEGER NOT NULL DEFAULT 0,
-  amount_home INTEGER,
   created_at TEXT NOT NULL,
   trip_id TEXT REFERENCES trips(id),
   lat REAL,
@@ -66,8 +63,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   place TEXT,
   amount_approx INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER,
-  pay_pending INTEGER NOT NULL DEFAULT 0,
-  rate_final INTEGER NOT NULL DEFAULT 0
+  pay_pending INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openMemoryDb } from '../src/db.mjs';
 import { rateHistory, resolveRate, _resetFailures } from '../src/rates.mjs';
 import { handle } from '../src/handlers.mjs';
-import { todayStr } from '../public/js/money.mjs';
+import { todayStr, toHome } from '../public/js/money.mjs';
 
 // Las pruebas no dependen del entorno: Netlify define APP_PASSCODE y TURSO_* al construir.
 delete process.env.APP_PASSCODE;
@@ -302,7 +302,7 @@ test('migración: base de la primera versión (BRL a COP) se conserva', async ()
   old.close();
 
   const db = await openFileDb(file);
-  await db.run('UPDATE expenses SET rate_final = 1'); // día cerrado ya revisado: la prueba no sale a internet
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 586.7]); // día cerrado ya revisado: la prueba no sale a internet
   const st = (await handle({ method: 'GET', path: '/api/state', db })).body;
   // Los datos de un solo viaje pasan a "Viaje 1" (BRL a COP) con todos sus gastos y personas.
   assert.deepEqual(st.trips, [{ id: 'trip-1', name: 'Viaje 1', dest: 'BRL', home: 'COP', people_ids: ['yo'] }]);
@@ -349,7 +349,7 @@ test('migración a varios viajes: conserva las monedas de ajustes y es idempoten
 
   for (let pass = 1; pass <= 2; pass += 1) { // abrir otra vez (otro arranque en frío) no duplica nada
     const db = await openFileDb(file);
-    await db.run('UPDATE expenses SET rate_final = 1'); // día cerrado ya revisado: la prueba no sale a internet
+    await db.run('INSERT OR REPLACE INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['MXN-EUR', '2026-11-14', 0.05]); // día cerrado ya revisado: la prueba no sale a internet
     const st = (await handle({ method: 'GET', path: '/api/state', db })).body;
     assert.equal(st.trips.length, 1, 'pasada ' + pass);
     assert.deepEqual(
@@ -358,6 +358,11 @@ test('migración a varios viajes: conserva las monedas de ajustes y es idempoten
     );
     assert.equal(st.expenses[0].trip_id, 'trip-1');
     assert.equal(st.expenses[0].amount_home, 250);
+    assert.equal(st.expenses[0].rate_estimated, 0);
+    // Las columnas calculables ya no existen en la tabla; el servidor las calcula al leer.
+    const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
+    for (const gone of ['amount_home', 'rate_estimated', 'rate_manual']) assert.ok(!cols.includes(gone), `${gone} debería haberse borrado (pasada ${pass})`);
+    assert.ok(cols.includes('rate') && cols.includes('rate_date'));
   }
 });
 
@@ -524,7 +529,8 @@ test('actualizar tasas: primero cuenta lo que cambiaría, luego corrige solo lo 
   await withDatedRates({ '2026-11-14': 587, '2026-11-13': 600 }, async () => {
     const base = { amount_cents: 10000, description: '', payment_method_id: 'efe', beneficiary_ids: ['yo'] };
     for (const [id, date] of [['a', '2026-11-14'], ['b', '2026-11-13'], ['c', '2026-11-12']]) await call('POST', '/api/expenses', { ...base, id, date });
-    const rows = async () => Object.fromEntries((await db.all('SELECT id, rate, amount_home FROM expenses')).map((r) => [r.id, [r.rate, r.amount_home]]));
+    // El monto en pesos ya no se guarda: se calcula con la tasa guardada (COP no tiene decimales).
+    const rows = async () => Object.fromEntries((await db.all('SELECT id, rate, amount_cents FROM expenses')).map((r) => [r.id, [r.rate, r.rate == null ? null : toHome(r.amount_cents, r.rate, 0)]]));
     assert.deepEqual((await rows()).a, [500, 5000000]);
     assert.equal((await rows()).c[0], null); // la fuente no tiene el 12: sin tasa
 
@@ -563,7 +569,8 @@ test('la tasa manual ya no existe: se ignora si llega y siempre se usa la de la 
   await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
   await call('POST', '/api/expenses', { id: 'e', date: '2026-11-14', amount_cents: 1000, payment_method_id: 'efe', beneficiary_ids: ['yo'], rate_manual: 9999 });
   const e = (await call('GET', '/api/state')).body.expenses[0];
-  assert.deepEqual([e.rate, e.rate_manual], [580, 0]);
+  assert.equal(e.rate, 580);
+  assert.equal(e.rate_manual, undefined); // la columna ya no existe
 });
 
 test('medio de pago "por definir": el gasto se guarda sin medio, no cuenta en las cuentas y se puede definir después', async () => {

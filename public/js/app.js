@@ -193,7 +193,6 @@ function expenseItem(c, e, n) {
       ${e.pending ? '<span class="tag info">Sin enviar</span>' : ''}
       ${e.amount_home == null ? '<span class="tag warn">Esperando tasa</span>' : ''}
       ${e.rate_estimated ? '<span class="tag warn">Tasa estimada</span>' : ''}
-      ${e.rate_manual ? '<span class="tag">Tasa manual</span>' : ''}
       ${e.amount_approx ? '<span class="tag approx">Monto aproximado</span>' : ''}</div>
     <div class="r"><div class="num">${cop}</div><div class="muted">${fmtDest(e.amount_cents)}</div></div>
   </div>`;

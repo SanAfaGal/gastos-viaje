@@ -56,7 +56,8 @@ test('gasto sin internet queda en cola, se ve y se envía una sola vez al volver
   assert.equal(store.pendingCount(), 0);
   const rows = await db.all('SELECT * FROM expenses');
   assert.equal(rows.length, 1);
-  assert.equal(rows[0].amount_home, 600000);
+  assert.equal(rows[0].rate, 600); // el monto en pesos ya no se guarda: sale de la tasa (10 BRL * 600 = 6.000 COP)
+  assert.equal((await handle({ method: 'GET', path: '/api/state', db })).body.expenses[0].amount_home, 600000);
   assert.ok(calls > 0);
 });
 

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { openMemoryDb } from '../src/db.mjs';
 import { handle } from '../src/handlers.mjs';
 import { _resetFailures } from '../src/rates.mjs';
-import { todayStr } from '../public/js/money.mjs';
+import { todayStr, toHome } from '../public/js/money.mjs';
 import { compareExpenses } from '../public/js/order.mjs';
 
 // Las pruebas no dependen del entorno: Netlify define APP_PASSCODE y TURSO_* al construir.
@@ -41,37 +41,64 @@ test('tasa definitiva: el valor provisional de un día cerrado se corrige solo y
   const today = todayStr();
   const yesterday = addDays(today, -1);
   const base = { amount_cents: 10000, description: '', payment_method_id: 'efe', beneficiary_ids: ['yo'] };
+  const rateOf = async (id) => {
+    const r = (await db.all('SELECT rate, amount_cents FROM expenses WHERE id = ?', [id]))[0];
+    return { rate: r.rate, amount_home: toHome(r.amount_cents, r.rate, 0) }; // el monto en pesos se calcula, no se guarda
+  };
 
-  // Un gasto de hoy usa la tasa de la fuente y no queda como definitivo: se revisa cuando el día cierre.
+  // Un gasto de hoy usa la tasa de la fuente; la de hoy nunca queda en la tabla rates (solo se guardan días cerrados).
   await withSource({ latest: 585 }, () => call('POST', '/api/expenses', { ...base, id: 'hoy', date: today }));
-  const hoy = (await db.all('SELECT rate, rate_final FROM expenses WHERE id = ?', ['hoy']))[0];
-  assert.deepEqual({ ...hoy }, { rate: 585, rate_final: 0 });
+  assert.equal((await rateOf('hoy')).rate, 585);
+  assert.equal((await db.all('SELECT * FROM rates WHERE date = ?', [today])).length, 0);
 
-  // Ayer quedó guardado con el valor provisional (585) y sin marca de definitivo.
+  // Ayer quedó guardado con el valor provisional (585) y la tabla rates no tiene ese día.
   await db.run(
-    `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, rate_estimated, rate_manual,
-       amount_home, created_at, trip_id, rate_final) VALUES ('ayer', ?, 10000, '', 'efe', 585, ?, 0, 0, 5850000, ?, 'trip-1', 0)`,
+    `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, created_at, trip_id)
+       VALUES ('ayer', ?, 10000, '', 'efe', 585, ?, ?, 'trip-1')`,
     [yesterday, yesterday, new Date().toISOString()],
   );
   await db.run('INSERT INTO expense_beneficiaries VALUES (?, ?)', ['ayer', 'yo']);
 
-  // Al pedir el estado se cambia por la tasa del día cerrado y queda definitivo.
+  // Al pedir el estado se cambia por la tasa del día cerrado, que queda guardada en rates.
   await withSource({ [yesterday]: 573.33 }, () => call('GET', '/api/state'));
-  const ayer = async () => ({ ...(await db.all('SELECT rate, amount_home, rate_final FROM expenses WHERE id = ?', ['ayer']))[0] });
-  assert.deepEqual(await ayer(), { rate: 573.33, amount_home: 5733300, rate_final: 1 });
+  assert.deepEqual({ ...(await rateOf('ayer')) }, { rate: 573.33, amount_home: 5733300 });
+  assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', [yesterday]))[0].rate, 573.33);
 
-  // Ya definitivo: no sale a internet ni cambia aunque la fuente diga otra cosa.
+  // Ya coincide con rates: no sale a internet ni cambia aunque la fuente diga otra cosa.
   const real = globalThis.fetch;
   globalThis.fetch = async () => { throw new TypeError('no debería consultar la fuente'); };
   try { await call('GET', '/api/state'); } finally { globalThis.fetch = real; }
   await withSource({ [yesterday]: 999 }, () => call('GET', '/api/state'));
-  assert.equal((await ayer()).rate, 573.33);
+  assert.equal((await rateOf('ayer')).rate, 573.33);
   // El de hoy sigue intacto: todavía no cierra el día.
-  assert.equal((await db.all('SELECT rate FROM expenses WHERE id = ?', ['hoy']))[0].rate, 585);
+  assert.equal((await rateOf('hoy')).rate, 585);
 
-  // Guardar un gasto de un día cerrado con tasa exacta ya lo deja definitivo.
+  // Un gasto guardado hoy para un día cerrado ya queda igual a rates y no se vuelve a revisar.
   await withSource({ [yesterday]: 573.33 }, () => call('POST', '/api/expenses', { ...base, id: 'otro', date: yesterday }));
-  assert.equal((await db.all('SELECT rate_final FROM expenses WHERE id = ?', ['otro']))[0].rate_final, 1);
+  globalThis.fetch = async () => { throw new TypeError('no debería consultar la fuente'); };
+  try { await call('GET', '/api/state'); } finally { globalThis.fetch = real; }
+  assert.equal((await rateOf('otro')).rate, 573.33);
+});
+
+test('tasa definitiva: sin internet no se cambia una tasa exacta por una más vieja', async () => {
+  _resetFailures();
+  const db = await openMemoryDb();
+  const call = caller(db);
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
+  await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  const day = addDays(todayStr(), -2);
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', addDays(day, -5), 500]); // una tasa vieja que serviría de respaldo
+  await db.run(
+    `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, created_at, trip_id)
+       VALUES ('x', ?, 10000, '', 'efe', 585, ?, ?, 'trip-1')`,
+    [day, day, new Date().toISOString()],
+  );
+  await db.run('INSERT INTO expense_beneficiaries VALUES (?, ?)', ['x', 'yo']);
+  const real = globalThis.fetch;
+  globalThis.fetch = async () => { throw new TypeError('sin red'); };
+  try { await call('GET', '/api/state'); } finally { globalThis.fetch = real; }
+  const x = (await db.all('SELECT rate, rate_date FROM expenses WHERE id = ?', ['x']))[0];
+  assert.deepEqual({ ...x }, { rate: 585, rate_date: day });
 });
 
 test('deshacer un borrado: el gasto vuelve con su hora de creación y su lugar en el día', async () => {

@@ -216,7 +216,6 @@ export function getState() {
       trip_id: t.id,
       pending: true,
       rate: r?.rate ?? null,
-      rate_manual: 0,
       rate_estimated: r?.estimated ? 1 : 0,
       amount_home: r ? toHome(x.amount_cents, r.rate, currencyByCode(t.home).digits) : null,
     });

@@ -50,7 +50,6 @@ async function upgradeTrips(db) {
     ['amount_approx', 'INTEGER NOT NULL DEFAULT 0'],
     ['sort_order', 'INTEGER'], // orden manual dentro del día (vacío = por hora de creación, al final)
     ['pay_pending', 'INTEGER NOT NULL DEFAULT 0'], // 1 = medio de pago por definir (payment_method_id es solo relleno)
-    ['rate_final', 'INTEGER NOT NULL DEFAULT 0'], // 1 = la tasa es la del día ya cerrado (no se vuelve a revisar)
   ];
   for (const [col, type] of extra) {
     if (!cols.includes(col)) await db.run(`ALTER TABLE expenses ADD COLUMN ${col} ${type}`);
@@ -73,10 +72,21 @@ async function upgradeTrips(db) {
   await db.run('UPDATE expenses SET trip_id = ? WHERE trip_id IS NULL', [(await first())[0].id]);
 }
 
+// Columnas que eran calculables y ya no se guardan: el monto en tu moneda (amount_home) sale de amount_cents y la tasa;
+// "tasa estimada" (rate_estimated) es que el día de la tasa no sea el del gasto; y rate_manual ya no existe (siempre 0).
+// Solo se borran del esquema; el servidor las calcula al leer. Es idempotente.
+async function dropDerivedColumns(db) {
+  const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
+  for (const col of ['rate_estimated', 'rate_manual', 'amount_home']) {
+    if (cols.includes(col)) await db.run(`ALTER TABLE expenses DROP COLUMN ${col}`);
+  }
+}
+
 async function open(adapter) {
   await migrate(adapter);
   await adapter.batch(statements.map((sql) => ({ sql })));
   await upgradeTrips(adapter);
+  await dropDerivedColumns(adapter);
   return adapter;
 }
 

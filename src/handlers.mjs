@@ -300,20 +300,15 @@ async function saveExpense(db, id, body) {
   if (found.length !== ids.length) fail(400, 'Alguna persona no existe');
   if (ids.some((p) => !going.has(p))) fail(400, 'Alguna persona no va en este viaje');
 
-  const homeDigits = currencyByCode(settings.home).digits;
-  // La tasa siempre sale de la fuente (ya no hay tasa manual). La columna rate_manual queda en 0.
+  // La tasa siempre sale de la fuente. Solo se guarda la tasa y el día al que pertenece: el monto en tu moneda y si
+  // la tasa es estimada (su día no es el del gasto) se calculan al leer, ver getState.
   let rate = null;
   let rateDate = null;
-  let estimated = 0;
   const r = await resolveRate(db, body.date, settings);
   if (r) {
     rate = r.rate;
     rateDate = r.rate_date;
-    estimated = r.estimated ? 1 : 0;
   }
-  const amountHome = rate == null ? null : toHome(cents, rate, homeDigits);
-  // Tasa definitiva: la de un día que ya cerró y con dato exacto. La de hoy se revisa mañana (ver fillPendingRates).
-  const rateFinal = r && !r.estimated && r.rate_date === body.date && body.date < todayStr() ? 1 : 0;
   // Al deshacer un borrado el gasto vuelve con su hora de creación y su lugar en el día. Se ignoran valores raros.
   const createdMs = typeof body.created_at === 'string' ? Date.parse(body.created_at) : NaN;
   const createdAt = Number.isFinite(createdMs) && createdMs <= Date.now() + 86400000 ? new Date(createdMs).toISOString() : new Date().toISOString();
@@ -336,23 +331,19 @@ async function saveExpense(db, id, body) {
   await db.batch([
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
-              rate, rate_date, rate_estimated, rate_manual, amount_home, created_at, trip_id,
-              lat, lng, place, amount_approx, pay_pending, rate_final, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              rate, rate_date, created_at, trip_id,
+              lat, lng, place, amount_approx, pay_pending, sort_order)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
               rate = excluded.rate, rate_date = excluded.rate_date,
-              rate_estimated = excluded.rate_estimated, rate_manual = excluded.rate_manual,
-              amount_home = excluded.amount_home,
               lat = excluded.lat, lng = excluded.lng, place = excluded.place,
               amount_approx = excluded.amount_approx,
               pay_pending = excluded.pay_pending,
-              rate_final = excluded.rate_final,
               sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
-      args: [id, body.date, cents, description, methodId, rate, rateDate,
-        estimated, 0, amountHome, createdAt, trip.id,
-        lat, lng, place, approx, payPending ? 1 : 0, rateFinal, sortOrder],
+      args: [id, body.date, cents, description, methodId, rate, rateDate, createdAt, trip.id,
+        lat, lng, place, approx, payPending ? 1 : 0, sortOrder],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     ...ids.map((p) => ({
@@ -387,7 +378,7 @@ async function refreshTripRates(db, query) {
   const settings = tripPair(trip);
   const digits = currencyByCode(settings.home).digits;
   const rows = await db.all(
-    'SELECT id, date, amount_cents, amount_home, rate, rate_estimated FROM expenses WHERE trip_id = ? AND rate_manual = 0',
+    'SELECT id, date, amount_cents, rate, rate_date FROM expenses WHERE trip_id = ?',
     [trip.id],
   );
   const dates = [...new Set(rows.map((r) => r.date))].sort().slice(-120);
@@ -405,54 +396,46 @@ async function refreshTripRates(db, query) {
   const updates = [];
   for (const e of rows) {
     const rate = fresh.get(e.date);
-    before += e.amount_home ?? 0;
+    const current = e.rate == null ? 0 : toHome(e.amount_cents, e.rate, digits);
+    before += current;
     if (rate == null) { // la fuente no trae ese día (o hoy aún no lo publica): no se toca
       noData += 1;
-      after += e.amount_home ?? 0;
+      after += current;
       continue;
     }
-    const home = toHome(e.amount_cents, rate, digits);
-    after += home;
-    if (e.amount_home === home && e.rate === rate && !e.rate_estimated) { unchanged += 1; continue; }
+    after += toHome(e.amount_cents, rate, digits);
+    if (e.rate === rate && e.rate_date === e.date) { unchanged += 1; continue; }
     changed += 1;
-    updates.push({
-      sql: 'UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = 0, amount_home = ?, rate_final = ? WHERE id = ?',
-      args: [rate, e.date, home, e.date < todayStr() ? 1 : 0, e.id],
-    });
+    updates.push({ sql: 'UPDATE expenses SET rate = ?, rate_date = ? WHERE id = ?', args: [rate, e.date, e.id] });
   }
   if (!dry && updates.length) await db.batch(updates);
   return { dry, changed, unchanged, no_data: noData, total_before: before, total_after: after };
 }
 
 // Mantiene al día las tasas de los gastos (hasta 8 por consulta, los más recientes primero):
-//  - sin tasa (se guardaron sin internet) o con tasa estimada: reintenta conseguirla;
-//  - de un día que ya cerró y aún sin tasa definitiva (rate_final = 0): la cambia por la del día cerrado. Así lo que
-//    se guardó hoy con el valor provisional de la fuente se corrige solo desde mañana, sin pulsar "Actualizar tasas".
-// Una vez que el día cerrado tiene su tasa exacta, el gasto queda como definitivo y no se vuelve a revisar.
+//  - sin tasa (se guardaron sin internet) o con tasa estimada (la del día de la tasa no es la del gasto): reintenta
+//    conseguirla;
+//  - de un día que ya cerró, cuya tasa no coincide con la guardada en la tabla rates para ese día: la cambia por la del
+//    día cerrado. Así lo que se guardó hoy con el valor provisional de la fuente se corrige solo desde mañana, sin
+//    pulsar "Actualizar tasas". No hace falta una marca aparte: la tabla rates solo guarda días cerrados, así que
+//    "la tasa del gasto es la de rates" ya significa "es la definitiva", y deja de revisarse sola.
 async function fillPendingRates(db) {
-  const today = todayStr();
   const rows = await db.all(
-    `SELECT e.id, e.date, e.amount_cents, e.amount_home, e.rate, e.rate_estimated, e.rate_date, e.rate_final,
-            t.dest_currency, t.home_currency
+    `SELECT e.id, e.date, e.rate, e.rate_date, t.dest_currency, t.home_currency
      FROM expenses e JOIN trips t ON t.id = e.trip_id
-     WHERE e.rate_manual = 0
-       AND (e.amount_home IS NULL OR e.rate_estimated = 1 OR (e.rate_final = 0 AND e.date < ?))
+     WHERE e.rate IS NULL OR e.rate_date <> e.date
+        OR (e.date < ? AND NOT EXISTS (SELECT 1 FROM rates r
+            WHERE r.pair = t.dest_currency || '-' || t.home_currency AND r.date = e.date AND r.rate = e.rate))
      ORDER BY e.date DESC LIMIT 8`,
-    [today],
+    [todayStr()],
   );
   for (const e of rows) {
-    const homeDigits = currencyByCode(e.home_currency).digits;
     const r = await resolveRate(db, e.date, { dest: e.dest_currency, home: e.home_currency });
     if (!r) continue;
-    const final = !r.estimated && r.rate_date === e.date && e.date < today ? 1 : 0;
-    const same = e.amount_home != null && r.rate === e.rate && r.estimated === Boolean(e.rate_estimated)
-      && r.rate_date === e.rate_date && final === e.rate_final;
-    if (same) continue;
-    await db.run(
-      `UPDATE expenses SET rate = ?, rate_date = ?, rate_estimated = ?, amount_home = ?, rate_final = ?
-       WHERE id = ?`,
-      [r.rate, r.rate_date, r.estimated ? 1 : 0, toHome(e.amount_cents, r.rate, homeDigits), final, e.id],
-    );
+    // Sin red o sin dato de ese día, la tasa exacta del gasto no se cambia por una más vieja (solo se mejora una estimada).
+    if (r.estimated && e.rate != null && e.rate_date === e.date) continue;
+    if (r.rate === e.rate && r.rate_date === e.rate_date) continue;
+    await db.run('UPDATE expenses SET rate = ?, rate_date = ? WHERE id = ?', [r.rate, r.rate_date, e.id]);
   }
 }
 
@@ -471,6 +454,7 @@ async function getState(db) {
     if (!byExpense.has(l.expense_id)) byExpense.set(l.expense_id, []);
     byExpense.get(l.expense_id).push(l.person_id);
   }
+  const homeDigits = new Map(trips.map((t) => [t.id, currencyByCode(t.home_currency)?.digits ?? 2]));
   const byTrip = new Map();
   for (const l of tripLinks) {
     if (!byTrip.has(l.trip_id)) byTrip.set(l.trip_id, []);
@@ -482,8 +466,13 @@ async function getState(db) {
     people,
     payment_methods: methods,
     // Con medio por definir (pay_pending) el relleno interno no sale: payment_method_id llega como null.
+    // El monto en tu moneda y si la tasa es estimada no se guardan: salen de la tasa y de la fecha de cada gasto.
     expenses: expenses.map(({ pay_pending: pp, ...e }) => ({
-      ...e, payment_method_id: pp ? null : e.payment_method_id, beneficiary_ids: byExpense.get(e.id) ?? [],
+      ...e,
+      rate_estimated: e.rate != null && e.rate_date !== e.date ? 1 : 0,
+      amount_home: e.rate == null ? null : toHome(e.amount_cents, e.rate, homeDigits.get(e.trip_id) ?? 2),
+      payment_method_id: pp ? null : e.payment_method_id,
+      beneficiary_ids: byExpense.get(e.id) ?? [],
     })),
   };
 }
