@@ -138,13 +138,15 @@ main { padding: 4px 16px calc(110px + env(safe-area-inset-bottom)); max-width: 6
 .pin:active { background: var(--surface-2); }
 .hint { margin: 0 4px 6px; font-size: .8rem; }
 .item .t { font-weight: 600; }
+.ord { display: inline-grid; place-items: center; min-width: 20px; height: 20px; margin-right: 8px; padding: 0 5px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: .72rem; font-weight: 700; font-variant-numeric: tabular-nums; vertical-align: 1px; }
 .item .r { text-align: right; white-space: nowrap; }
 .tag { display: inline-block; font-size: .7rem; padding: 1px 8px; border-radius: 99px; background: var(--surface-2); color: var(--muted); margin: 2px 4px 0 0; }
 .tag.warn { background: var(--warn-bg); color: var(--warn-text); }
 .tag.danger { background: var(--tag-danger-bg); color: var(--tag-danger-text); }
 .tag.info { background: var(--tag-info-bg); color: var(--tag-info-text); }
 .tag.approx { background: var(--tag-approx-bg); color: var(--tag-approx-text); }
-.day { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 4px 6px; font-weight: 600; }
+.day { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 18px 4px 6px; font-weight: 600; }
+.day-tot { text-transform: none; letter-spacing: 0; font-weight: 500; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 label { display: block; font-size: .85rem; color: var(--muted); margin: 14px 0 6px; font-weight: 600; }
 input, select, textarea {
@@ -220,10 +222,13 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .pay { padding: 10px 0; border-bottom: 1px solid var(--border); }
 .pay:last-child { border-bottom: 0; }
 .pay b { font-weight: 700; }
-.filters { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 8px; }
-.filters input { grid-column: 1 / -1; }
+.filters { margin-bottom: 8px; }
+.filt-bar { display: flex; gap: 8px; align-items: stretch; }
+.filt-bar input { flex: 1; min-width: 0; }
+.filt-btn { flex: none; white-space: nowrap; }
+.filt-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px; }
+.filt-panel[hidden] { display: none; }
 .filters select, .filters input { padding: 10px 12px; }
-.filters .chip { justify-self: start; }
 
 /* Ubicación del gasto: vacía (invitación con dos botones), guardada (tarjeta con nombre y coordenadas) o buscando. */
 .loc-box { display: grid; gap: 10px; padding: 12px; border: 1.5px dashed var(--border); border-radius: 14px; background: transparent; }
@@ -276,7 +281,17 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .stop span { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); border: 3px solid #fff; box-shadow: 0 2px 6px rgb(0 0 0 / .45); font: 700 .9rem/1 system-ui, sans-serif; font-variant-numeric: tabular-nums; }
 .stop.last span { background: var(--accent); color: #2a1f00; }
 .hero-link { display: inline-block; margin-top: 10px; padding: 7px 12px; border-radius: 99px; background: rgb(255 255 255 / .2); color: inherit; font-size: .9rem; font-weight: 600; text-decoration: none; }
-.map-link { font-size: .9rem; font-weight: 600; color: var(--brand); text-decoration: none; white-space: nowrap; }
+/* Resumen de la lista de gastos: totales en las dos monedas y acceso al mapa */
+.sum-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.sum-top h2 { margin: 0; }
+.pill-link { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px 6px 10px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); font-size: .85rem; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.pill-link svg { width: 16px; height: 16px; fill: none; stroke: var(--brand); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pill-link:active { transform: scale(.95); filter: brightness(.92); }
+.sum-vals { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.sum-vals .big { font-size: 1.35rem; font-weight: 700; letter-spacing: -.01em; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.sum-vals .big.alt { color: var(--muted); }
+.sum-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+.filt-chips { grid-column: 1 / -1; }
 .map.pick { height: 48dvh; min-height: 260px; }
 .pick-search { display: flex; gap: 8px; margin: 4px 0 8px; }
 .pick-search input { flex: 1; min-width: 0; padding: 10px 12px; }

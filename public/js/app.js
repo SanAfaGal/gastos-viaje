@@ -169,11 +169,12 @@ const setupCard = () => {
   return `<div class="card"><h2>Primero lo primero</h2><p>${text}</p><a class="btn small" href="#/ajustes">Ir a Ajustes</a></div>`;
 };
 
-function expenseItem(c, e) {
+// `n`: posición del gasto dentro de su día (solo en la lista, cuando el día tiene varios gastos).
+function expenseItem(c, e, n) {
   const m = c.methodsById[e.payment_method_id];
   const cop = e.amount_home == null ? 'Por convertir' : fmtHome(e.amount_home);
   return `<div class="item" data-action="edit" data-id="${esc(e.id)}">
-    <div><div class="t">${esc(e.description || 'Gasto')}${hasLocation(e)
+    <div><div class="t">${n ? `<span class="ord" title="Orden dentro del día">${n}</span>` : ''}${esc(e.description || 'Gasto')}${hasLocation(e)
       ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">📍</button>` : ''}</div>
       <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : esc(methodLabel(m))}</div>
       <span class="tag">${esc(forWho(c, e))}</span>
@@ -223,41 +224,86 @@ function viewHome() {
     </div>`;
 }
 
-const filters = { q: '', method: '', person: '', approx: false };
+const FILTERS_OFF = { q: '', method: '', person: '', payer: '', day: '', approx: false, noloc: false, rate: false };
+const filters = { ...FILTERS_OFF };
+const resetFilters = () => Object.assign(filters, FILTERS_OFF);
+let filtersOpen = false; // panel de filtros plegado por defecto: casi no se usa
+
+const MAP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/></svg>';
 
 function viewList() {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
+  const dayList = [...new Set(c.expenses.map((e) => e.date))]; // días con gastos, del más nuevo al más viejo
+  if (filters.day && !dayList.includes(filters.day)) filters.day = '';
   const q = filters.q.trim().toLowerCase();
   const list = c.expenses.filter((e) =>
     (!q || e.description.toLowerCase().includes(q)) &&
     (!filters.method || (filters.method === PENDING ? e.payment_method_id == null : e.payment_method_id === filters.method)) &&
     (!filters.person || e.beneficiary_ids.includes(filters.person)) &&
-    (!filters.approx || e.amount_approx));
+    (!filters.payer || c.methodsById[e.payment_method_id]?.owner_person_id === filters.payer) &&
+    (!filters.day || e.date === filters.day) &&
+    (!filters.approx || e.amount_approx) &&
+    (!filters.noloc || !hasLocation(e)) &&
+    (!filters.rate || e.amount_home == null || e.rate_estimated));
   const approxCount = c.expenses.filter((e) => e.amount_approx).length;
+  const nolocCount = c.expenses.filter((e) => !hasLocation(e)).length;
+  const rateCount = c.expenses.filter((e) => e.amount_home == null || e.rate_estimated).length;
+  const owners = [...new Set(c.expenses.map((e) => c.methodsById[e.payment_method_id]?.owner_person_id).filter(Boolean))];
+  const filtered = Object.keys(FILTERS_OFF).some((k) => (typeof FILTERS_OFF[k] === 'boolean' ? filters[k] : String(filters[k]).trim() !== ''));
+  const activeCount = ['method', 'person', 'payer', 'day', 'approx', 'noloc', 'rate'].filter((k) => filters[k]).length; // la búsqueda se ve aparte
   // Solo se puede ordenar viendo el día completo: con un filtro puesto faltarían gastos y el orden saldría torcido.
-  const sortable = !q && !filters.method && !filters.person && !filters.approx;
-  const total = list.reduce((a, e) => a + (e.amount_home ?? 0), 0);
+  const sortable = !filtered;
+  const sumHome = (items) => items.reduce((a, e) => a + (e.amount_home ?? 0), 0);
+  const sumDest = (items) => items.reduce((a, e) => a + e.amount_cents, 0);
+  const unconverted = list.filter((e) => e.amount_home == null).length;
+  const cur = currencies();
+  // Número de cada gasto dentro de su día completo (no cambia al filtrar). c.expenses ya viene en el orden del día.
+  const perDay = {};
+  for (const e of c.expenses) perDay[e.date] = (perDay[e.date] ?? 0) + 1;
+  const seen = {};
+  const orderOf = new Map(c.expenses.map((e) => [e.id, perDay[e.date] > 1 ? (seen[e.date] = (seen[e.date] ?? 0) + 1) : 0]));
   const days = [];
   for (const e of list) {
     if (days.at(-1)?.date !== e.date) days.push({ date: e.date, items: [] });
     days.at(-1).items.push(e);
   }
   return `
+    <div class="card sum">
+      <div class="sum-top"><h2>${filtered ? 'Con filtros' : 'Todos los gastos'}</h2>
+        <a class="pill-link" href="#/mapa">${MAP_ICON}Mapa</a></div>
+      <div class="sum-vals">
+        <div><div class="big">${fmtHome(sumHome(list))}</div><div class="muted">en ${esc(cur.home.code)}</div></div>
+        <div><div class="big alt">${fmtDest(sumDest(list))}</div><div class="muted">en ${esc(cur.dest.code)}, lo que se pagó</div></div>
+      </div>
+      <div class="sum-foot"><span class="muted">${list.length} gasto(s)${unconverted ? ` · ${unconverted} sin convertir` : ''}</span>
+        ${filtered ? '<button type="button" class="chip small" data-action="f-clear">Quitar filtros</button>' : ''}</div>
+    </div>
     <div class="filters">
-      <input id="f-q" type="search" placeholder="Buscar descripción" value="${esc(filters.q)}">
-      <select id="f-method"><option value="">Todos los medios</option>
+      <div class="filt-bar">
+        <input id="f-q" type="search" placeholder="Buscar descripción" value="${esc(filters.q)}">
+        <button type="button" class="chip filt-btn ${filtersOpen || activeCount ? 'on' : ''}" data-action="f-toggle" aria-expanded="${filtersOpen}" aria-controls="f-panel">Filtros${activeCount ? ` · ${activeCount}` : ''} <span aria-hidden="true">${filtersOpen ? '▴' : '▾'}</span></button>
+      </div>
+      <div class="filt-panel" id="f-panel" ${filtersOpen ? '' : 'hidden'}>
+      <select id="f-day" aria-label="Día"><option value="">Todos los días</option>
+        ${dayList.map((d) => `<option value="${esc(d)}" ${filters.day === d ? 'selected' : ''}>${esc(dayLabel(d))} · ${c.expenses.filter((e) => e.date === d).length}</option>`).join('')}</select>
+      <select id="f-method" aria-label="Medio de pago"><option value="">Todos los medios</option>
         ${c.payMethods.map((m) => `<option value="${esc(m.id)}" ${filters.method === m.id ? 'selected' : ''}>${esc(methodLabel(m))}</option>`).join('')}
         ${c.expenses.some((e) => e.payment_method_id == null) ? `<option value="${PENDING}" ${filters.method === PENDING ? 'selected' : ''}>Por definir</option>` : ''}</select>
-      <select id="f-person"><option value="">Para cualquiera</option>
+      <select id="f-person" aria-label="Para quién"><option value="">Para cualquiera</option>
         ${c.people.map((p) => `<option value="${esc(p.id)}" ${filters.person === p.id ? 'selected' : ''}>${esc(personName(c, p.id))}</option>`).join('')}</select>
-      ${approxCount ? `<button type="button" class="chip ${filters.approx ? 'on' : ''}" data-action="f-approx" aria-pressed="${filters.approx}">Aproximados (${approxCount})</button>` : ''}
+      ${owners.length > 1 ? `<select id="f-payer" aria-label="Quién pagó"><option value="">Pagó cualquiera</option>
+        ${owners.map((o) => `<option value="${esc(o)}" ${filters.payer === o ? 'selected' : ''}>Pagó ${esc(personName(c, o))}</option>`).join('')}</select>` : ''}
+      <div class="chips filt-chips">
+        ${approxCount ? `<button type="button" class="chip ${filters.approx ? 'on' : ''}" data-action="f-approx" aria-pressed="${filters.approx}">Aproximados (${approxCount})</button>` : ''}
+        ${nolocCount ? `<button type="button" class="chip ${filters.noloc ? 'on' : ''}" data-action="f-noloc" aria-pressed="${filters.noloc}">Sin ubicación (${nolocCount})</button>` : ''}
+        ${rateCount ? `<button type="button" class="chip ${filters.rate ? 'on' : ''}" data-action="f-rate" aria-pressed="${filters.rate}">Tasa pendiente (${rateCount})</button>` : ''}
+      </div>
+      </div>
     </div>
-    <div class="row" style="margin:0 4px 4px"><span class="muted">${list.length} gasto(s) · ${fmtHome(total)}</span>
-      <a class="map-link" href="#/mapa">🗺 Ver mapa</a></div>
     ${sortable && days.some((d) => d.items.length > 1) ? '<div class="muted hint">Mantén presionado un gasto y arrástralo para ordenarlo dentro de su día.</div>' : ''}
-    ${days.length ? days.map((d) => `<div class="day">${esc(dayLabel(d.date))}</div>
-      <div class="card day-card" ${sortable ? `data-day="${esc(d.date)}"` : ''} style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e)).join('')}</div>`).join('')
+    ${days.length ? days.map((d) => `<div class="day"><span>${esc(dayLabel(d.date))}</span><span class="day-tot">${fmtHome(sumHome(d.items))} · ${fmtDest(sumDest(d.items))}</span></div>
+      <div class="card day-card" ${sortable ? `data-day="${esc(d.date)}"` : ''} style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e, orderOf.get(e.id))).join('')}</div>`).join('')
       : '<div class="empty">No hay gastos con ese filtro.</div>'}`;
 }
 
@@ -1138,8 +1184,7 @@ function switchTrip(id) {
     store.setActiveTrip(id);
     draft = null; // el borrador y los filtros eran del otro viaje
     convRate = null;
-    filters.method = '';
-    filters.person = '';
+    resetFilters();
     if (/^#\/nuevo\/.+/.test(location.hash)) location.hash = '#/gastos'; // el gasto que se editaba era del otro viaje
     else render();
   }
@@ -1229,6 +1274,10 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'pick-map') openPicker();
   else if (action === 'unlocate') { draft.lat = null; draft.lng = null; draft.place = ''; paintLoc(); }
   else if (action === 'f-approx') { filters.approx = !filters.approx; render(); }
+  else if (action === 'f-toggle') { filtersOpen = !filtersOpen; render(); }
+  else if (action === 'f-noloc') { filters.noloc = !filters.noloc; render(); }
+  else if (action === 'f-rate') { filters.rate = !filters.rate; render(); }
+  else if (action === 'f-clear') { resetFilters(); render(); }
   else if (action === 'bene-all') {
     draft.benes = new Set(c.people.map((p) => p.id));
     document.querySelectorAll('#benes .chip[data-id]').forEach((b) => b.classList.add('on'));
@@ -1436,6 +1485,8 @@ $view.addEventListener('change', (ev) => {
     if (ev.target.value) { draft.date = ev.target.value; loadRate(); renderChart(); }
   } else if (id === 'f-method') { filters.method = ev.target.value; render(); }
   else if (id === 'f-person') { filters.person = ev.target.value; render(); }
+  else if (id === 'f-payer') { filters.payer = ev.target.value; render(); }
+  else if (id === 'f-day') { filters.day = ev.target.value; render(); }
   else if (id === 'm-kind') {
     const isCard = ev.target.value === 'card';
     document.getElementById('card-fields').hidden = !isCard;

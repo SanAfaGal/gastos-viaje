@@ -1,6 +1,6 @@
 // Service worker: guarda la app en el celular para que abra sin internet.
 // Los datos (API) NO pasan por aquí: los maneja store.js con su copia local y su cola.
-const CACHE = 'gastos-viaje-v21';
+const CACHE = 'gastos-viaje-v24';
 const SHELL = [
   '/', '/index.html', '/css/app.css', '/js/app.js', '/js/store.js', '/js/money.mjs', '/js/cards.mjs', '/js/places.mjs', '/js/order.mjs',
   '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css',
