@@ -8,6 +8,8 @@ import { formatCoords, hasLocation, routeFrom } from './places.mjs';
 import { compareChronological, sameOrder } from './order.mjs';
 import { ACCENTS, MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
+import { breakdown, byDay, summary } from './stats.mjs';
+import { formatDistance, searchPlaces } from './geosearch.mjs';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -199,38 +201,63 @@ function expenseItem(c, e, n) {
 
 // ---------- pantallas ----------
 
-// Los 5 más recientes (día más nuevo y, dentro del día, el último en haberse creado), sin importar el orden
-// que tenga la lista.
-const recentExpenses = (c) => [...c.expenses]
-  .sort((a, b) => b.date.localeCompare(a.date) || String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')))
-  .slice(0, 5);
+// Resumen general: cifras clave y gráficos. El detalle de cada gasto está en Gastos y los saldos en Cuentas.
+let homeBars = []; // días del gráfico (para la lectura al tocar una barra)
+
+const shortDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' });
+const barRead = (d) => `${dayLabel(d.date)} · ${d.count ? `${fmtHome(d.home)} · ${d.count} gasto(s)` : 'sin gastos'}`;
+
+function hbarsHtml(rows) {
+  return rows.map((r) => `<div class="hbar">
+      <div class="hbar-top"><span class="hbar-l">${esc(r.label)}</span><b>${fmtHome(r.home)}</b></div>
+      <div class="hbar-track" aria-hidden="true"><span style="width:${Math.max(r.pct, 1.5).toFixed(1)}%"></span></div>
+      <div class="muted hbar-sub">${r.pct.toFixed(r.pct < 10 ? 1 : 0)} % · ${r.count} gasto(s)</div></div>`).join('');
+}
 
 function viewHome() {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
-  const s = settlementOf(c);
-  const totalCop = c.expenses.reduce((a, e) => a + (e.amount_home ?? 0), 0);
-  const totalBrl = c.expenses.reduce((a, e) => a + e.amount_cents, 0);
-  const rate = store.localRate(todayStr());
+  const today = todayStr();
+  const rate = store.localRate(today);
   const waiting = c.expenses.filter((e) => e.amount_home == null).length;
   const placed = c.expenses.filter(hasLocation).length;
   const unsent = store.pendingCount();
+  const cur = currencies();
+  const s = summary(c.expenses, today);
+  const totalDest = c.expenses.reduce((a, e) => a + e.amount_cents, 0);
+  homeBars = byDay(c.expenses, { today, days: 14 });
+  const peak = homeBars.reduce((m, d) => (d.home > m.home ? d : m), homeBars[0] ?? { home: 0 });
+  const methodRows = breakdown(c.expenses, (e) => {
+    if (e.payment_method_id == null) return { id: PENDING, label: 'Por definir' };
+    const m = c.methodsById[e.payment_method_id];
+    return { id: e.payment_method_id, label: m ? `${m.name}${m.last4 ? ` ••${m.last4}` : ''}` : 'Medio borrado' };
+  });
+  const payerRows = breakdown(c.expenses, (e) => {
+    const owner = c.methodsById[e.payment_method_id]?.owner_person_id;
+    return owner ? { id: owner, label: personName(c, owner) } : null;
+  });
   return `
     ${unsent ? `<div class="banner">${unsent} gasto(s) sin enviar. Se envían solos cuando haya internet.</div>` : ''}
     ${waiting ? `<div class="banner">${waiting} gasto(s) esperando la tasa del día.</div>` : ''}
     <div class="card hero"><h2>Total gastado</h2>
-      <div class="big">${fmtHome(totalCop)}</div>
-      <div class="sub">${fmtDest(totalBrl)} · ${c.expenses.length} gasto(s)</div>
+      <div class="big">${fmtHome(s?.total ?? 0)}</div>
+      <div class="sub">${fmtDest(totalDest)} · ${c.expenses.length} gasto(s)</div>
       <div class="sub">${rate ? `Hoy: ${fmtRate(rate.rate)}${rate.estimated ? ' (última conocida)' : ''}` : 'Tasa de hoy: sin datos todavía'}</div>
       <a class="hero-link" href="#/mapa">🗺 Ver mapa${placed ? ` · ${placed} con ubicación` : ''}</a>
     </div>
-    <div class="card"><h2>Saldo por persona</h2>
-      ${s.balances.map((b) => `<div class="pay row"><span><b>${esc(personName(c, b.person_id))}</b><div class="muted">Le tocan ${fmtHome(b.consumed)}</div></span>
-        <span class="num ${b.net < 0 ? 'neg' : 'pos'}">${b.net < 0 ? '−' : b.net > 0 ? '+' : ''}${fmtHome(Math.abs(b.net))}</span></div>`).join('')}
+    ${s ? `
+    <div class="kpis">
+      <div class="kpi"><span class="muted">Hoy</span><b>${fmtHome(s.today)}</b></div>
+      <div class="kpi"><span class="muted">Promedio por día</span><b>${fmtHome(s.perDay)}</b><span class="muted">${s.span} día(s)</span></div>
+      <div class="kpi"><span class="muted">Gasto mayor</span><b>${s.top ? fmtHome(s.top.amount_home) : '—'}</b><span class="muted kpi-d">${s.top ? esc(s.top.description || dayLabel(s.top.date)) : ''}</span></div>
     </div>
-    <div class="card"><h2>Últimos gastos</h2>
-      ${c.expenses.length ? recentExpenses(c).map((e) => expenseItem(c, e)).join('') : '<div class="empty">Aún no hay gastos. Toca el + para agregar.</div>'}
-    </div>`;
+    <div class="card"><h2>Gasto por día · en ${esc(cur.home.code)}</h2>
+      <div class="bar-read" id="bar-read" aria-live="polite">${esc(barRead(homeBars.at(-1)))}</div>
+      <div class="bars" role="group" aria-label="Gasto de cada uno de los últimos días">${homeBars.map((d, i) => `<button type="button" class="bar ${d.home ? '' : 'zero'} ${i === homeBars.length - 1 ? 'sel' : ''} ${d === peak && d.home ? 'peak' : ''}" data-action="bar" data-i="${i}" style="--h:${peak.home ? ((d.home / peak.home) * 100).toFixed(1) : 0}%" aria-label="${esc(barRead(d))}"></button>`).join('')}</div>
+      <div class="bar-axis"><span>${esc(shortDate(homeBars[0].date))}</span><span>${peak.home ? `Máx. ${fmtHome(peak.home)}` : ''}</span><span>${esc(dayLabel(homeBars.at(-1).date))}</span></div>
+    </div>
+    <div class="card"><h2>Por medio de pago</h2>${hbarsHtml(methodRows)}</div>
+    ${payerRows.length > 1 ? `<div class="card"><h2>Quién pagó</h2>${hbarsHtml(payerRows)}</div>` : ''}` : '<div class="card"><div class="empty">Aún no hay gastos. Toca el + para agregar.</div></div>'}`;
 }
 
 const FILTERS_OFF = { q: '', method: '', person: '', payer: '', day: '', approx: false, noloc: false, rate: false };
@@ -1038,6 +1065,8 @@ async function openPicker() {
   pickName = '';
   $pick.pickFor = target;
   $pickOk.disabled = true;
+  clearTimeout(searchTimer);
+  searchCtl?.abort();
   $pickResults.hidden = true;
   $pickResults.innerHTML = '';
   document.getElementById('pick-q').value = '';
@@ -1063,50 +1092,72 @@ async function openPicker() {
   if (target.lat != null) { pickMap.setView([target.lat, target.lng], 16); setPickPoint({ lat: target.lat, lng: target.lng }); }
   else if (last) pickMap.setView([last.lat, last.lng], 13);
   else pickMap.setView([20, 0], 2);
+  // Sin gasto con ubicación donde centrarse: se usa dónde estás (si das permiso) para centrar el mapa y ordenar las búsquedas.
+  if (target.lat == null && !last && navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition((pos) => {
+      geoRef = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      if (pickMap && !pickPoint && pickMap.getZoom() < 8) pickMap.setView([geoRef.lat, geoRef.lng], 14);
+    }, () => {}, { timeout: 6000, maximumAge: 600000 });
+  }
   pickMap.on('click', (ev) => setPickPoint(ev.latlng));
   pickMap.invalidateSize();
 }
 
-// Búsqueda por nombre con Nominatim (el buscador de OpenStreetMap). Solo al enviar, nunca letra por letra
-// (su política lo prohíbe); prefiere resultados cerca de lo que se ve en el mapa.
-let searching = false;
-document.getElementById('pick-search').addEventListener('submit', async (ev) => {
-  ev.preventDefault();
-  const q = document.getElementById('pick-q').value.trim();
-  if (!q || searching || !pickMap) return;
-  searching = true;
-  const btn = ev.target.querySelector('button');
-  btn.disabled = true;
+// Búsqueda por nombre: sugerencias mientras escribes (con una pausa corta) y también al enviar. Prefiere lo que está cerca
+// de tu ubicación o de lo que se ve en el mapa (ver geosearch.mjs): "Foco" encuentra el de tu ciudad, no uno de otro país.
+let geoRef = null; // última ubicación del dispositivo, si dio permiso
+let searchSeq = 0;
+let searchCtl = null;
+let searchTimer = null;
+
+// Punto de referencia para ordenar los resultados: lo que se ve en el mapa (si ya está cerca de algo) o tu ubicación.
+function searchRef() {
+  const c = pickMap?.getCenter();
+  if (c && pickMap.getZoom() >= 8) return { lat: c.lat, lng: c.lng };
+  if (pickPoint) return { ...pickPoint };
+  return geoRef;
+}
+
+async function runSearch(q) {
+  if (!pickMap) return;
+  const text = q.trim();
+  searchCtl?.abort();
+  if (text.length < 2) { $pickResults.hidden = true; return; }
+  const seq = (searchSeq += 1);
+  searchCtl = new AbortController();
   $pickResults.hidden = false;
-  $pickResults.innerHTML = '<div class="muted">Buscando…</div>';
+  if (!$pickResults.childElementCount) $pickResults.innerHTML = '<div class="muted">Buscando…</div>';
   try {
-    const b = pickMap.getBounds();
-    const url = 'https://nominatim.openstreetmap.org/search?' + new URLSearchParams({
-      q, format: 'jsonv2', limit: '6', 'accept-language': 'es',
-      viewbox: [b.getWest(), b.getNorth(), b.getEast(), b.getSouth()].join(','),
-    });
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('búsqueda');
-    const found = (await res.json()).filter((r) => Number.isFinite(Number(r.lat)) && Number.isFinite(Number(r.lon)));
-    $pickResults.innerHTML = found.length
-      ? found.map((r, i) => `<button type="button" class="pick-res" role="option" data-i="${i}">
-          <b>${esc(r.name || r.display_name.split(',')[0])}</b><span class="muted">${esc(r.display_name)}</span></button>`).join('')
+    const { results } = await searchPlaces(text, { ref: searchRef(), signal: searchCtl.signal });
+    if (seq !== searchSeq) return;
+    $pickResults.found = results;
+    $pickResults.innerHTML = results.length
+      ? results.map((r, i) => `<button type="button" class="pick-res" role="option" data-i="${i}">
+          <span class="pick-line"><b>${esc(r.name)}</b>${r.km == null ? '' : `<span class="pick-km">${esc(formatDistance(r.km))}</span>`}</span>
+          <span class="muted">${esc(r.detail)}</span></button>`).join('')
       : '<div class="muted">No se encontró. Prueba con otro nombre o agrega la ciudad.</div>';
-    $pickResults.found = found;
-  } catch {
+  } catch (err) {
+    if (err?.name === 'AbortError' || seq !== searchSeq) return;
     $pickResults.innerHTML = '<div class="muted">No se pudo buscar. Revisa tu conexión o toca el mapa.</div>';
-  } finally {
-    searching = false;
-    btn.disabled = false;
   }
+}
+
+document.getElementById('pick-search').addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  clearTimeout(searchTimer);
+  runSearch(document.getElementById('pick-q').value);
+});
+document.getElementById('pick-q').addEventListener('input', (ev) => {
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => runSearch(ev.target.value), 450);
 });
 
 $pickResults.addEventListener('click', (ev) => {
   const b = ev.target.closest('.pick-res');
   const r = b && $pickResults.found?.[Number(b.dataset.i)];
   if (!r || !pickMap) return;
-  const at = { lat: Number(r.lat), lng: Number(r.lon) };
-  setPickPoint(at, r.name || r.display_name.split(',')[0]);
+  const at = { lat: r.lat, lng: r.lng };
+  setPickPoint(at, r.name);
   pickMap.setView(at, 17);
   $pickResults.hidden = true;
 });
@@ -1335,6 +1386,13 @@ $view.addEventListener('click', async (ev) => {
   } else if (action === 'locate') locate();
   else if (action === 'pick-map') openPicker();
   else if (action === 'unlocate') { draft.lat = null; draft.lng = null; draft.place = ''; paintLoc(); }
+  else if (action === 'bar') {
+    const d = homeBars[Number(id ?? t.dataset.i)];
+    if (d) {
+      document.getElementById('bar-read').textContent = barRead(d);
+      document.querySelectorAll('.bars .bar').forEach((b) => b.classList.toggle('sel', b === t));
+    }
+  }
   else if (action === 'f-approx') { filters.approx = !filters.approx; render(); }
   else if (action === 'f-toggle') { filtersOpen = !filtersOpen; render(); }
   else if (action === 'f-noloc') { filters.noloc = !filters.noloc; render(); }
