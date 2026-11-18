@@ -429,7 +429,8 @@ main[aria-busy="true"] button:not(.busy), main[aria-busy="true"] .item, main[ari
 .scope-chip { padding: 3px 10px; border-radius: 99px; background: var(--surface-2); color: var(--muted); font-size: .72rem; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .scope-trip .scope-chip { background: var(--brand); color: var(--brand-ink); }
 .scope-note { margin: -4px 4px 10px; }
-.trip-card { border-left: 4px solid var(--brand); }
+/* Borde completo del color de la marca (un borde solo a la izquierda se curva en la esquina y queda como media luna) */
+.trip-card { border-color: color-mix(in srgb, var(--brand) 60%, var(--border)); }
 
 /* Inicio: cifras clave y gráficos */
 .kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
