@@ -28,7 +28,7 @@ export const uuid = () =>
 export const listeners = new Set();
 const notify = () => listeners.forEach((fn) => fn());
 
-export const net = { online: true, syncing: false, needsLogin: false };
+export const net = { online: true, syncing: false, needsLogin: false, lastSync: 0 };
 
 export const getPass = () => localStorage.getItem(K.pass) ?? '';
 export function setPass(p) {
@@ -177,6 +177,7 @@ export async function refresh() {
     server = await request('GET', '/api/state');
     applySettings();
     write(K.state, server);
+    net.lastSync = Date.now();
     rememberRates(server.expenses);
     notify();
     return true;
@@ -312,3 +313,5 @@ export async function refreshRatesNow(dry) {
   return out;
 }
 export const ping = () => request('GET', '/api/ping');
+// Respaldo: copia fresca de todo lo que hay en el servidor (viajes, personas, medios de pago y gastos).
+export const backupData = () => request('GET', '/api/state');

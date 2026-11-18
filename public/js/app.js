@@ -623,6 +623,10 @@ function viewSettings() {
   const t = editTrip ? (c.trips.find((x) => x.id === editTrip) ?? {}) : {};
   const tripLocked = Boolean(t.id) && (c.counts[t.id] ?? 0) > 0;
   const going = new Set(t.id ? t.people_ids : c.allPeople.map((x) => x.id)); // viaje nuevo: todos marcados
+  const placed = c.expenses.filter(hasLocation).length;
+  const rate = store.localRate(todayStr());
+  const unsent = store.pendingCount();
+  const syncText = store.net.online ? (unsent ? `${unsent} por enviar` : `Al día · ${agoText(store.net.lastSync)}`) : `Sin conexión${unsent ? ` · ${unsent} por enviar` : ''}`;
   const option = (code, sel) => {
     const x = CURRENCIES.find((k) => k.code === code);
     return `<option value="${esc(code)}" ${code === sel ? 'selected' : ''}>${esc(x.country)} · ${esc(x.code)} (${esc(x.name)})</option>`;
@@ -728,12 +732,48 @@ function viewSettings() {
     </div>
 
     <div class="card"><h2>Datos</h2>
-      <a class="btn secondary" href="#/mapa">Mapa de lugares</a>
-      <button class="btn secondary" data-action="refresh-rates">Actualizar tasas de este viaje</button>
-      <button class="btn secondary" data-action="csv">Descargar gastos (CSV)</button>
-      <button class="btn secondary" data-action="logout">Cambiar código de acceso</button>
+      <div class="acts">
+        ${actTile('map', 'Mapa de lugares', placed ? `${placed} con ubicación` : 'Sin ubicaciones aún', 'href="#/mapa"', { link: true })}
+        ${actTile('sync', 'Sincronizar', syncText, 'data-action="sync-now"')}
+        ${actTile('rates', 'Actualizar tasas', rate ? `Hoy: ${fmtRate(rate.rate)}` : 'Sin datos todavía', 'data-action="refresh-rates"')}
+        ${actTile('csv', 'Exportar CSV', `${c.expenses.length} gasto(s) de este viaje`, 'data-action="csv"')}
+        ${actTile('backup', 'Respaldo', 'Todo en un archivo JSON', 'data-action="backup"')}
+        ${actTile('key', 'Cambiar código', 'De este dispositivo', 'data-action="logout"', { danger: true })}
+      </div>
       <p class="muted">Tarjetas y transferencias solo guardan nombre y últimos 4 dígitos; nunca números completos.</p>
     </div>`;
+}
+
+// Acciones de la tarjeta Datos: son botones (no registros), en cuadrícula de dos columnas con icono, nombre y una línea de estado.
+const ACT_ICONS = {
+  map: '<path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/>',
+  sync: '<path d="M20 11a8 8 0 0 0-14-4M4 5v3h3M4 13a8 8 0 0 0 14 4M20 19v-3h-3"/>',
+  rates: '<path d="M4 17l5-5 4 4 7-8M15 8h5v5"/>',
+  csv: '<path d="M6 3h8l4 4v14H6zM14 3v4h4M9 13h6M9 17h6"/>',
+  backup: '<path d="M12 4v11M7.5 10.5 12 15l4.5-4.5M5 19h14"/>',
+  key: '<circle cx="8" cy="15" r="3.5"/><path d="M10.5 12.5 19 4M16 7l2.5 2.5"/>',
+};
+const actTile = (icon, title, sub, attrs, { danger = false, link = false } = {}) => {
+  const inner = `<svg viewBox="0 0 24 24" aria-hidden="true">${ACT_ICONS[icon]}</svg><b>${esc(title)}</b><span>${esc(sub)}</span>`;
+  const cls = `act${danger ? ' danger' : ''}`;
+  return link ? `<a class="${cls}" ${attrs}>${inner}</a>` : `<button type="button" class="${cls}" ${attrs}>${inner}</button>`;
+};
+
+function agoText(ms) {
+  if (!ms) return 'sin sincronizar todavía';
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return 'hace un momento';
+  if (s < 3600) return `hace ${Math.round(s / 60)} min`;
+  if (s < 86400) return `hace ${Math.round(s / 3600)} h`;
+  return `hace ${Math.round(s / 86400)} día(s)`;
+}
+
+function downloadBackup(data) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify({ app: 'gastos-viaje', exportado: new Date().toISOString(), ...data }, null, 2)], { type: 'application/json' }));
+  a.download = `respaldo-gastos-viaje-${todayStr()}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
 }
 
 // --- mapa de lugares ---
@@ -1232,6 +1272,10 @@ Se usa la tasa que hoy da la fuente para el día de cada gasto. ¿Actualizar?`;
       const done = await store.refreshRatesNow(false);
       return toast(`${done.changed} gasto(s) actualizados`);
     }), 'Revisando…');
+  } else if (action === 'sync-now') {
+    await busy(t, async () => { await sync(); toast(store.net.online && !store.pendingCount() ? 'Todo al día' : 'Aún hay gastos por enviar'); render(); }, 'Sincronizando…');
+  } else if (action === 'backup') {
+    await busy(t, () => guard(async () => { downloadBackup(await store.backupData()); toast('Respaldo descargado'); }), 'Preparando…');
   } else if (action === 'csv') downloadCsv();
   else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
 });
