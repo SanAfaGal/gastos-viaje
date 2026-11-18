@@ -41,12 +41,26 @@ function toast(msg, kind = 'ok', action = null) {
     $toast.append(btn);
   }
   $toast.className = `toast ${kind}`;
-  $toast.setAttribute('role', kind === 'error' ? 'alert' : 'status');
   void $toast.offsetWidth; // reinicia la animación si ya había un aviso
   $toast.classList.add('show');
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => $toast.classList.remove('show'), kind === 'error' ? 6000 : action ? 8000 : 3500);
+  toastMs = kind === 'error' ? 8000 : action ? 12000 : 4000;
+  armToast();
+  announce(action ? `${msg}. ${action.label} disponible` : msg, kind === 'error');
 }
+// El aviso visible no es una región en vivo (cambiar el role después de poner el texto no se anuncia de forma fiable):
+// el texto se repite en dos regiones fijas ocultas, una amable (status) y una urgente (alert).
+function announce(msg, urgent = false) {
+  const live = document.getElementById(urgent ? 'live-alert' : 'live-status');
+  live.textContent = '';
+  setTimeout(() => { live.textContent = msg; }, 50);
+}
+let toastMs = 4000;
+const armToast = () => { clearTimeout(toastTimer); toastTimer = setTimeout(() => $toast.classList.remove('show'), toastMs); };
+// Mientras el puntero o el foco están sobre el aviso no se cierra solo (WCAG 2.2.1).
+$toast.addEventListener('pointerenter', () => clearTimeout(toastTimer));
+$toast.addEventListener('pointerleave', () => { if ($toast.classList.contains('show')) armToast(); });
+$toast.addEventListener('focusin', () => clearTimeout(toastTimer));
+$toast.addEventListener('focusout', () => { if ($toast.classList.contains('show')) armToast(); });
 $toast.addEventListener('click', () => $toast.classList.remove('show'));
 
 // ---------- datos derivados ----------
@@ -127,6 +141,7 @@ function paintPreview() {
   // En automático, el selector muestra el color que se está usando (el del banco o el del tipo de medio).
   if (!m.color) g('m-color-pick').value = cardColor(m);
   g('m-auto').classList.toggle('on', !m.color);
+  g('m-auto').setAttribute('aria-pressed', String(!m.color));
 }
 
 // Los primeros dígitos solo sirven para reconocer la red; no se envían ni se guardan.
@@ -185,7 +200,7 @@ function expenseItem(c, e, n) {
   const m = c.methodsById[e.payment_method_id];
   const cop = e.amount_home == null ? 'Por convertir' : fmtHome(e.amount_home);
   return `<div class="item" data-action="edit" data-id="${esc(e.id)}">
-    <div><div class="t">${n ? `<span class="ord" title="Orden dentro del día">${n}</span>` : ''}${esc(e.description || 'Gasto')}${hasLocation(e)
+    <div><div class="t">${n ? `<span class="ord" title="Orden dentro del día">${n}</span>` : ''}<button type="button" class="item-open" data-action="edit" data-id="${esc(e.id)}" aria-label="${esc(`Editar: ${e.description || 'Gasto'}, ${cop}`)}">${esc(e.description || 'Gasto')}</button>${hasLocation(e)
       ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">📍</button>` : ''}</div>
       <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : esc(methodLabel(m))}</div>
       <span class="tag">${esc(forWho(c, e))}</span>
@@ -316,7 +331,7 @@ function viewList() {
     </div>
     <div class="filters">
       <div class="filt-bar">
-        <input id="f-q" type="search" placeholder="Buscar descripción" value="${esc(filters.q)}">
+        <input id="f-q" type="search" aria-label="Buscar en la descripción" placeholder="Buscar descripción" value="${esc(filters.q)}">
         <button type="button" class="chip filt-btn ${filtersOpen || activeCount ? 'on' : ''}" data-action="f-toggle" aria-expanded="${filtersOpen}" aria-controls="f-panel">Filtros${activeCount ? ` · ${activeCount}` : ''} <span aria-hidden="true">${filtersOpen ? '▴' : '▾'}</span></button>
       </div>
       <div class="filt-panel" id="f-panel" ${filtersOpen ? '' : 'hidden'}>
@@ -336,7 +351,7 @@ function viewList() {
       </div>
       </div>
     </div>
-    ${sortable && days.some((d) => d.items.length > 1) ? '<div class="muted hint">Mantén presionado un gasto y arrástralo para ordenarlo dentro de su día.</div>' : ''}
+    ${sortable && days.some((d) => d.items.length > 1) ? '<div class="muted hint">Mantén presionado un gasto y arrástralo para ordenarlo dentro de su día. Con teclado: Alt + ↑ o ↓ sobre el gasto.</div>' : ''}
     ${days.length ? days.map((d) => `<div class="day"><span>${esc(dayLabel(d.date))}</span><span class="day-tot">${fmtHome(sumHome(d.items))} · ${fmtDest(sumDest(d.items))}</span></div>
       <div class="card day-card" ${sortable ? `data-day="${esc(d.date)}"` : ''} style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e, orderOf.get(e.id))).join('')}</div>`).join('')
       : '<div class="empty">No hay gastos con ese filtro.</div>'}`;
@@ -483,21 +498,21 @@ function viewForm(editId) {
       <label for="date">Día del gasto</label>
       <input id="date" type="date" max="${todayStr()}" value="${esc(draft.date)}">
 
-      <div class="lab-row"><label id="cards-l">Pagado con</label>${infoBtn('pay', 'Pagado con')}</div>
+      <div class="lab-row"><span class="label" id="cards-l">Pagado con</span>${infoBtn('pay', 'Pagado con')}</div>
       ${ownerFilterHtml(c)}
       <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">${cardsHtml(c)}</div>
 
-      <div class="lab-row"><label>¿Para quién es?</label>${infoBtn('who', 'Para quién es')}</div>
-      <div class="chips" id="benes">
-        ${c.people.map((p) => `<button type="button" class="chip ${draft.benes.has(p.id) ? 'on' : ''}" data-action="bene" data-id="${esc(p.id)}">${esc(personName(c, p.id))}</button>`).join('')}
+      <div class="lab-row"><span class="label" id="benes-l">¿Para quién es?</span>${infoBtn('who', 'Para quién es')}</div>
+      <div class="chips" id="benes" role="group" aria-labelledby="benes-l">
+        ${c.people.map((p) => `<button type="button" class="chip ${draft.benes.has(p.id) ? 'on' : ''}" data-action="bene" data-id="${esc(p.id)}" aria-pressed="${draft.benes.has(p.id)}">${esc(personName(c, p.id))}</button>`).join('')}
         <button type="button" class="chip ghost" data-action="bene-all">Todos</button>
       </div>
 
       <label for="desc">Descripción</label>
       <input id="desc" maxlength="120" placeholder="Almuerzo, Uber, entradas…" value="${esc(draft.desc)}">
 
-      <div class="lab-row"><label>Ubicación</label>${infoBtn('loc', 'Ubicación')}</div>
-      <div id="loc" class="loc">${locHtml()}</div>
+      <div class="lab-row"><span class="label" id="loc-l">Ubicación</span>${infoBtn('loc', 'Ubicación')}</div>
+      <div id="loc" class="loc" role="group" aria-labelledby="loc-l">${locHtml()}</div>
 
       <button class="btn" type="submit" data-then="list">${draft.id ? 'Guardar cambios' : 'Guardar'}</button>
       ${draft.id ? '' : '<button class="btn secondary" type="submit" data-then="again">Guardar y agregar otro</button>'}
@@ -761,8 +776,8 @@ function viewSettings() {
           <label for="t-home">Tu moneda (la que usas para pagar al final)</label>
           <select id="t-home" ${tripLocked ? 'disabled' : ''}>${CURRENCIES.map((x) => option(x.code, t.home ?? DEFAULT_SETTINGS.home)).join('')}</select>
           ${tripLocked ? '<p class="muted">Este viaje ya tiene gastos, por eso no se puede cambiar el país ni la moneda.</p>' : ''}
-          <label>Quiénes van</label>
-          <div class="chips" id="t-people">
+          <span class="label" id="t-people-l">Quiénes van</span>
+          <div class="chips" id="t-people" role="group" aria-labelledby="t-people-l">
             ${c.allPeople.map((x) => `<button type="button" class="chip ${going.has(x.id) ? 'on' : ''}" aria-pressed="${going.has(x.id)}" data-action="trip-person" data-id="${esc(x.id)}">${esc(x.name)}</button>`).join('') || '<span class="muted">Primero agrega personas (más abajo).</span>'}
           </div>
         </div>
@@ -825,7 +840,7 @@ function viewSettings() {
         <input id="m-color" type="hidden" value="${isHexColor(m.color) ? esc(m.color) : ''}">
         <div class="colorrow">
           <input id="m-color-pick" type="color" value="${esc(cardColor(m))}">
-          <button type="button" id="m-auto" class="chip ${isHexColor(m.color) ? '' : 'on'}" data-action="auto-color">Automático</button>
+          <button type="button" id="m-auto" class="chip ${isHexColor(m.color) ? '' : 'on'}" data-action="auto-color" aria-pressed="${!isHexColor(m.color)}">Automático</button>
         </div>
         <label for="m-owner">De quién es (obligatorio)</label>
         <select id="m-owner" required>
@@ -1128,7 +1143,7 @@ async function runSearch(q) {
     if (seq !== searchSeq) return;
     $pickResults.found = results;
     $pickResults.innerHTML = results.length
-      ? results.map((r, i) => `<button type="button" class="pick-res" role="option" data-i="${i}">
+      ? results.map((r, i) => `<button type="button" class="pick-res" data-i="${i}">
           <span class="pick-line"><b>${esc(r.name)}</b>${r.km == null ? '' : `<span class="pick-km">${esc(formatDistance(r.km))}</span>`}</span>
           <span class="muted">${esc(r.detail)}</span></button>`).join('')
       : '<div class="muted">No se encontró. Prueba con otro nombre o agrega la ciudad.</div>';
@@ -1176,7 +1191,7 @@ $pick.addEventListener('close', () => { pickMap?.remove(); pickMap = null; pickM
 function viewLogin() {
   return `<form id="login" class="login card"><h2>Código de acceso</h2>
     <p class="muted">Esta app está protegida. Escribe el código para entrar.</p>
-    <input id="code" type="password" autocomplete="current-password" placeholder="Código" required>
+    <input id="code" type="password" aria-label="Código de acceso" autocomplete="current-password" placeholder="Código" required>
     <button class="btn" type="submit">Entrar</button></form>`;
 }
 
@@ -1240,6 +1255,16 @@ function updateStatus() {
   $status.className = cls;
 }
 
+let lastHash = null;
+// Selector del elemento enfocado dentro de la pantalla, para devolverle el foco tras redibujar.
+function focusKey() {
+  const el = document.activeElement;
+  if (!el || !$view.contains(el) || el === $view) return null;
+  if (el.id) return `#${CSS.escape(el.id)}`;
+  const { action, id } = el.dataset;
+  return action ? `${el.localName}[data-action="${CSS.escape(action)}"]${id ? `[data-id="${CSS.escape(id)}"]` : ''}` : null;
+}
+
 function render() {
   updateStatus();
   $tripBtn.hidden = store.net.needsLogin;
@@ -1257,10 +1282,18 @@ function render() {
   if (!isFormRoute()) draft = null;
   if (r.tab !== 'ajustes') { methodOpen = false; tripOpen = false; personOpen = false; }
   $title.textContent = r.title;
-  document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === r.tab));
+  document.title = r.tab === 'home' ? 'Gastos de viaje' : `${r.title} · Gastos de viaje`;
+  document.querySelectorAll('.tabbar a').forEach((a) => {
+    const here = a.dataset.tab === r.tab;
+    a.classList.toggle('active', here);
+    if (here) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
+  });
   if (!r.map && leafletMap) { leafletMap.remove(); leafletMap = null; }
   if (!r.map) lastNonMap = location.hash || '#/';
+  const keep = location.hash === lastHash ? focusKey() : null;
+  lastHash = location.hash;
   $view.innerHTML = r.view(m);
+  if (keep) $view.querySelector(keep)?.focus({ preventScroll: true }); // el redibujo no le quita el foco a quien navega con teclado
   if (r.map) initMap();
   if (isFormRoute() && draft) { updateConv(); renderChart(); centerPicked(); }
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
@@ -1315,7 +1348,8 @@ store.listeners.add(() => {
   else if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName) && $view.contains(document.activeElement)) updateStatus();
   else render();
 });
-window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); });
+// Al cambiar de pantalla el foco pasa al contenido (si no, queda en un enlace que ya no está donde se esperaba).
+window.addEventListener('hashchange', () => { render(); window.scrollTo(0, 0); $view.focus({ preventScroll: true }); });
 
 // Acción en curso: mientras una acción que tarda (red) no termina se ignoran los demás toques, y el botón
 // muestra un giro y su texto de "trabajando". Así no se ejecuta nada dos veces.
@@ -1374,6 +1408,7 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'bene') {
     draft.benes.has(id) ? draft.benes.delete(id) : draft.benes.add(id);
     t.classList.toggle('on', draft.benes.has(id));
+    t.setAttribute('aria-pressed', String(draft.benes.has(id)));
     updateConv();
   } else if (action === 'approx') {
     draft.approx = !draft.approx;
@@ -1396,7 +1431,7 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'f-clear') { resetFilters(); render(); }
   else if (action === 'bene-all') {
     draft.benes = new Set(c.people.map((p) => p.id));
-    document.querySelectorAll('#benes .chip[data-id]').forEach((b) => b.classList.add('on'));
+    document.querySelectorAll('#benes .chip[data-id]').forEach((b) => { b.classList.add('on'); b.setAttribute('aria-pressed', 'true'); });
     updateConv();
   } else if (action === 'del') {
     if (draft && !coolingDown() && confirm('¿Borrar este gasto?')) {
@@ -1562,6 +1597,22 @@ for (const type of ['pointerup', 'pointercancel']) {
 $view.addEventListener('click', (ev) => {
   if (suppressClick || movedAway) { movedAway = false; ev.stopPropagation(); ev.preventDefault(); }
 }, true);
+
+// Reordenar con teclado: Alt + ↑ / ↓ sobre un gasto lo sube o baja dentro de su día.
+$view.addEventListener('keydown', (ev) => {
+  if (!ev.altKey || (ev.key !== 'ArrowUp' && ev.key !== 'ArrowDown')) return;
+  const item = ev.target.closest?.('.item-open')?.closest('.item[data-id]');
+  const card = item?.closest('.day-card[data-day]');
+  if (!card) return;
+  ev.preventDefault();
+  const ids = [...card.querySelectorAll('.item[data-id]')].map((el) => el.dataset.id);
+  const from = ids.indexOf(item.dataset.id);
+  const to = from + (ev.key === 'ArrowUp' ? -1 : 1);
+  if (to < 0 || to >= ids.length) return;
+  [ids[from], ids[to]] = [ids[to], ids[from]];
+  store.saveOrder(ids, `${store.activeTrip().id}:${card.dataset.day}`);
+  announce(`Movido a la posición ${to + 1} de ${ids.length}`);
+});
 
 // Recorrer el gráfico con el dedo, el mouse o las flechas del teclado.
 function scrubTo(ev) {
