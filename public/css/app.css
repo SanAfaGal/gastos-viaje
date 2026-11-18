@@ -161,7 +161,8 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); out
 .switch.on .track { background: var(--warn-text); }
 .switch.on .track::after { transform: translateX(14px); }
 .amount { font-size: 1.8rem; font-weight: 700; text-align: left; font-variant-numeric: tabular-nums; }
-.conv { margin-top: 8px; padding: 10px 12px; border-radius: 12px; background: var(--surface-2); font-size: .9rem; min-height: 42px; }
+.conv-row { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.conv { flex: 1; min-width: 0; font-size: .95rem; min-height: 1.4em; }
 /* Acciones de Ajustes → Datos: botones en cuadrícula, claramente distintos de las filas de registros */
 .acts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 4px; }
 .act { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; min-width: 0; padding: 14px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); color: var(--text); font: inherit; text-align: left; text-decoration: none; cursor: pointer; transition: transform .12s ease, filter .12s ease; }
@@ -173,6 +174,17 @@ input:focus, select:focus, textarea:focus { outline: 2px solid var(--brand); out
 .act:disabled { opacity: .5; }
 .act.danger svg { stroke: var(--neg); }
 @media (prefers-reduced-motion: reduce) { .act { transition: none; } }
+.info-btn { flex: none; width: 24px; height: 24px; padding: 0; border-radius: 50%; border: 1.5px solid var(--border); background: transparent; color: var(--muted); font: italic 700 .8rem/1 Georgia, serif; cursor: pointer; display: inline-grid; place-items: center; }
+.lab-tools { display: inline-flex; align-items: center; gap: 8px; flex: none; }
+/* Borrar queda lejos de Guardar, separado y más discreto, para no tocarlo por error. */
+.form-danger { margin-top: 40px; padding-top: 16px; border-top: 1px solid var(--border); text-align: center; }
+.icon-del { width: 44px; height: 44px; padding: 0; border-radius: 50%; border: 1px solid var(--border); background: transparent; color: var(--neg); cursor: pointer; display: inline-grid; place-items: center; }
+.icon-del svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.icon-del:active { transform: scale(.92); filter: brightness(.9); }
+.icon-del:focus-visible { outline: 3px solid var(--brand); outline-offset: 2px; }
+dialog.info { width: min(100%, 440px); }
+dialog.info .sheet-body { padding-bottom: calc(20px + env(safe-area-inset-bottom)); font-size: .95rem; color: var(--muted); }
+dialog.info .chart { margin-top: 12px; }
 .chart { margin-top: 10px; padding: 12px; border-radius: 12px; background: var(--surface-2); }
 .chart:empty { display: none; }
 .chart-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 8px; }

@@ -294,7 +294,7 @@ function locHtml() {
   }
   if (draft.lat == null) {
     return `<div class="loc-box">
-      <div class="loc-empty"><span class="loc-ico" aria-hidden="true">📍</span><span>Sin ubicación. Sirve para ver en el mapa dónde gastaste.</span></div>
+      <div class="loc-empty"><span class="loc-ico" aria-hidden="true">📍</span><span>Sin ubicación</span></div>
       <div class="loc-btns">
         <button type="button" class="btn secondary small" data-action="locate">📍 Estoy aquí</button>
         <button type="button" class="btn secondary small" data-action="pick-map">🗺 Buscar en el mapa</button>
@@ -372,6 +372,13 @@ function paintCards() {
   if (f) f.outerHTML = ownerFilterHtml(c);
 }
 
+// Icono ⓘ que abre o cierra una explicación corta (ver la acción 'info'). Mantiene el formulario limpio.
+// La explicación sale en un diálogo (hoja desde abajo en celular), así no mueve ni deforma el formulario.
+const infoBtn = (id, label) => `<button type="button" class="info-btn" data-action="info" data-id="${id}" aria-haspopup="dialog" aria-label="Más información: ${esc(label)}">i</button>`;
+const infoDialog = (id, title, html) => `<dialog id="info-${id}" class="sheet info" aria-labelledby="info-${id}-t">
+  <header class="sheet-head"><h2 id="info-${id}-t">${esc(title)}</h2><button type="button" class="sheet-x" data-action="info-close" aria-label="Cerrar">×</button></header>
+  <div class="sheet-body">${html}</div></dialog>`;
+
 function viewForm(editId) {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
@@ -386,36 +393,39 @@ function viewForm(editId) {
     <form id="exp-form" autocomplete="off" novalidate>
       <div class="lab-row">
         <label for="amount">Monto en ${esc(currencies().dest.name.toLowerCase())} (${esc(currencies().dest.code)})</label>
-        <button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx"
-          title="Márcalo si el monto es redondeado y hay que ajustarlo después"><span class="track" aria-hidden="true"></span>Aproximado</button>
+        <span class="lab-tools"><button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx"><span class="track" aria-hidden="true"></span>Aproximado</button>
+          ${infoBtn('approx', 'Monto aproximado')}</span>
       </div>
       <input id="amount" class="amount" inputmode="decimal" placeholder="0,00" value="${esc(draft.amountText)}">
-      <div class="conv" id="conv"></div>
-      <div class="chart" id="chart" role="img"></div>
+      <div class="conv-row"><div class="conv" id="conv"></div>${infoBtn('rate', 'Tasa de cambio e historial')}</div>
 
       <label for="date">Día del gasto</label>
       <input id="date" type="date" max="${todayStr()}" value="${esc(draft.date)}">
 
-      <label id="cards-l">Pagado con</label>
+      <div class="lab-row"><label id="cards-l">Pagado con</label>${infoBtn('pay', 'Pagado con')}</div>
       ${ownerFilterHtml(c)}
       <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">${cardsHtml(c)}</div>
-      <div class="muted hint">¿No sabes con qué se pagó? Elige "Por definir" y lo completas después; ese gasto no entra en las cuentas hasta entonces.</div>
 
-      <label>¿Para quién es? (se divide en partes iguales)</label>
+      <div class="lab-row"><label>¿Para quién es?</label>${infoBtn('who', 'Para quién es')}</div>
       <div class="chips" id="benes">
         ${c.people.map((p) => `<button type="button" class="chip ${draft.benes.has(p.id) ? 'on' : ''}" data-action="bene" data-id="${esc(p.id)}">${esc(personName(c, p.id))}</button>`).join('')}
         <button type="button" class="chip ghost" data-action="bene-all">Todos</button>
       </div>
 
-      <label for="desc">Descripción (opcional)</label>
+      <label for="desc">Descripción</label>
       <input id="desc" maxlength="120" placeholder="Almuerzo, Uber, entradas…" value="${esc(draft.desc)}">
 
-      <label>Ubicación (opcional)</label>
+      <div class="lab-row"><label>Ubicación</label>${infoBtn('loc', 'Ubicación')}</div>
       <div id="loc" class="loc">${locHtml()}</div>
 
       <button class="btn" type="submit" data-then="list">${draft.id ? 'Guardar cambios' : 'Guardar'}</button>
-      ${draft.id ? '<button class="btn danger" type="button" data-action="del">Borrar gasto</button>'
-        : '<button class="btn secondary" type="submit" data-then="again">Guardar y agregar otro</button>'}
+      ${draft.id ? '' : '<button class="btn secondary" type="submit" data-then="again">Guardar y agregar otro</button>'}
+      ${draft.id ? '<div class="form-danger"><button class="icon-del" type="button" data-action="del" aria-label="Borrar este gasto" title="Borrar este gasto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>' : ''}
+      ${infoDialog('rate', 'Tasa de cambio', '<div class="muted" id="conv-detail"></div><div class="chart" id="chart" role="img"></div>')}
+      ${infoDialog('pay', 'Pagado con', 'Elige con qué se pagó. Si no lo sabes, elige «Por definir» y lo completas después; ese gasto no entra en las cuentas hasta entonces.')}
+      ${infoDialog('who', '¿Para quién es?', 'El gasto se divide en partes iguales entre las personas marcadas. «Todos» marca a todas las del viaje.')}
+      ${infoDialog('approx', 'Monto aproximado', 'Márcalo si el monto es redondeado y hay que ajustarlo después. El gasto queda con la etiqueta «Monto aproximado» y puedes filtrarlos.')}
+      ${infoDialog('loc', 'Ubicación', 'Opcional. Sirve para ver en el mapa dónde gastaste.')}
     </form>`;
 }
 
@@ -525,21 +535,25 @@ function resetReadout() {
 function updateConv(loaded = false) {
   const el = document.getElementById('conv');
   if (!el || !draft) return;
+  const det = document.getElementById('conv-detail'); // detalle de la tasa, dentro del ⓘ
   if (chartGeo) paintReadout(chartIdx, !document.getElementById('c-cross')?.hidden);
   const cents = parseAmount(draft.amountText);
   const r = convRate;
   const c = ctx();
-  if (!cents) { el.textContent = 'Escribe el monto para ver la conversión.'; return; }
+  if (!cents) { el.textContent = 'Escribe el monto para ver la conversión.'; if (det) det.textContent = ''; return; }
   if (!r) {
     el.textContent = loaded ? 'Sin tasa por ahora. Se guardará y se convertirá cuando haya internet.' : 'Buscando la tasa…';
+    if (det) det.textContent = '';
     return;
   }
   const cop = toHome(cents, r.rate, currencies().home.digits);
   const n = Math.max(draft.benes.size, 1);
   const each = Object.values(splitEqual(cop, [...draft.benes].length ? [...draft.benes] : ['x']))[0];
-  el.innerHTML = `<b>${fmtDest(cents)} ≈ ${fmtHome(cop)}</b><br>
-    <span class="muted">${fmtRate(r.rate)}${r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
-    ${n > 1 ? ` · ${n} personas: ${fmtHome(each)} c/u` : ''}</span>`;
+  el.innerHTML = `<b>${fmtDest(cents)} ≈ ${fmtHome(cop)}</b>`;
+  if (det) {
+    det.innerHTML = `${fmtRate(r.rate)}${r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
+    ${n > 1 ? ` · ${n} personas: ${fmtHome(each)} c/u` : ''}`;
+  }
   void c;
 }
 
@@ -1106,7 +1120,7 @@ $view.addEventListener('close', (ev) => {
   else if (ev.target.id === 'trip-dialog') { tripOpen = false; editTrip = null; }
   else if (ev.target.id === 'person-dialog') { personOpen = false; editPerson = null; }
 }, true);
-$view.addEventListener('click', (ev) => { if (['method-dialog', 'trip-dialog', 'person-dialog'].includes(ev.target.id)) ev.target.close(); });
+$view.addEventListener('click', (ev) => { if (['method-dialog', 'trip-dialog', 'person-dialog'].includes(ev.target.id) || ev.target.matches?.('dialog.info')) ev.target.close(); });
 
 // Selector de viaje (arriba, en todas las pantallas).
 function openTripSwitch() {
@@ -1201,6 +1215,8 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'show-place') location.hash = `#/mapa/${encodeURIComponent(id)}`;
   else if (action === 'map-stop') focusStop(id);
   else if (action === 'pm-owner') { draft.owner = id; paintCards(); }
+  else if (action === 'info') document.getElementById(`info-${id}`)?.showModal();
+  else if (action === 'info-close') t.closest('dialog')?.close();
   else if (action === 'bene') {
     draft.benes.has(id) ? draft.benes.delete(id) : draft.benes.add(id);
     t.classList.toggle('on', draft.benes.has(id));
