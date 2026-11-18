@@ -9,6 +9,8 @@
 // fuente gratuita puede dar valores distintos según la hora o cambiar su historial, y porque la app debe mostrar los
 // mismos montos sin internet. La tabla rates es solo un caché de días ya cerrados (se puede borrar y se vuelve a pedir).
 // Un gasto de un día cerrado se corrige solo cuando su tasa difiere de la de rates (fillPendingRates).
+// Trazabilidad: cada tasa guarda de qué fuente salió (rates.source y expenses.rate_source) y rates.fetched_at, cuándo se
+// consultó. Vacío = guardada antes de que se registrara la fuente.
 //
 // No usar punto y coma dentro de los comentarios de este archivo: el esquema se parte por punto y coma.
 export default `CREATE TABLE IF NOT EXISTS settings (
@@ -56,6 +58,8 @@ CREATE TABLE IF NOT EXISTS rates (
   pair TEXT NOT NULL,
   date TEXT NOT NULL,
   rate REAL NOT NULL,
+  source TEXT,
+  fetched_at TEXT,
   PRIMARY KEY (pair, date)
 );
 
@@ -67,6 +71,7 @@ CREATE TABLE IF NOT EXISTS expenses (
   payment_method_id TEXT NOT NULL REFERENCES payment_methods(id),
   rate REAL,
   rate_date TEXT,
+  rate_source TEXT,
   created_at TEXT NOT NULL,
   trip_id TEXT REFERENCES trips(id),
   lat REAL,

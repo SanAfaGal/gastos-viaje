@@ -50,9 +50,15 @@ async function upgradeTrips(db) {
     ['amount_approx', 'INTEGER NOT NULL DEFAULT 0'],
     ['sort_order', 'INTEGER'], // orden manual dentro del día (vacío = por hora de creación, al final)
     ['pay_pending', 'INTEGER NOT NULL DEFAULT 0'], // 1 = medio de pago por definir (payment_method_id es solo relleno)
+    ['rate_source', 'TEXT'], // fuente de la tasa del gasto (vacío = guardada antes de registrarla)
   ];
   for (const [col, type] of extra) {
     if (!cols.includes(col)) await db.run(`ALTER TABLE expenses ADD COLUMN ${col} ${type}`);
+  }
+  // Fuente y momento de consulta de cada tasa guardada.
+  const rateCols = (await db.all('PRAGMA table_info(rates)')).map((c) => c.name);
+  for (const col of ['source', 'fetched_at']) {
+    if (!rateCols.includes(col)) await db.run(`ALTER TABLE rates ADD COLUMN ${col} TEXT`);
   }
 
   const first = () => db.all('SELECT id FROM trips ORDER BY rowid LIMIT 1');

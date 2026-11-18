@@ -71,7 +71,7 @@ El esquema se actualiza solo: la primera petición después de desplegar corre l
 - `src/handlers.mjs`: la API. `src/db.mjs`: SQLite local (`node:sqlite`) o Turso, con migración de bases antiguas. `src/rates.mjs`: tasas. `src/backup.mjs`: respaldo y restauración.
 - `server.mjs`: servidor local. `netlify/functions/api.mjs`: la misma API en Netlify.
 
-Todos los montos se guardan como enteros en centésimas. Tasas: `@fawazahmed0/currency-api` (gratis, sin llave, un valor por día) con Frankfurter de respaldo. Si un día no tiene dato se usa el anterior y el gasto queda marcado como “Tasa estimada”. No hay tasa manual.
+Todos los montos se guardan como enteros en centésimas. Las tasas vienen de fuentes gratuitas y cada una guarda de cuál salió (ver "Tasas de cambio" más abajo). Si un día no tiene dato se usa el anterior y el gasto queda marcado como “Tasa estimada”. No hay tasa manual.
 
 ### Servicios externos
 
@@ -81,9 +81,19 @@ Solo se usan desde el navegador o el servidor para lo siguiente, y ninguno recib
 - Mapa: teselas de OpenStreetMap.
 - Búsqueda de lugares: Photon (`photon.komoot.io`) y, si falla, Nominatim (`nominatim.openstreetmap.org`). Reciben el texto que buscas y tu ubicación aproximada o el centro del mapa para poner primero lo cercano.
 
+### Tasas de cambio: fuentes y límites
+
+- **Fuente principal:** `@fawazahmed0/currency-api` (gratis, sin llave, un valor por día), pedida a `cdn.jsdelivr.net` y, si falla, a `currency-api.pages.dev` (es el mismo dato). **Respaldo:** Frankfurter (`api.frankfurter.dev`), que se usa si la principal falla o aún no publicó el día. Se queda con la primera que trae exactamente el día pedido; si ninguna lo trae, con la más reciente.
+- **Trazabilidad:** cada tasa guardada lleva su fuente (`rates.source`, `expenses.rate_source`: `fawazahmed0` o `frankfurter`) y cuándo se consultó (`rates.fetched_at`). La pantalla del gasto muestra la fuente, el CSV exporta la fecha y la fuente de la tasa, y el respaldo JSON las conserva. Las tasas guardadas antes de que existiera este registro quedan con la fuente vacía ("No registrada"): no se adivina.
+- **Un valor por día, con desfase:** la fuente fecha cada valor con el cierre del día anterior, o eso indican las comparaciones. Al contrastar 6 días de noviembre de 2026 con el histórico de Google (BRL→COP), la tasa de la app del día N coincidió con el cierre de Google del día hábil anterior con una diferencia media del 0,08 %; comparando la misma fecha, hasta un 2 %. Por eso puede no coincidir con Google día por día. Es una observación hecha a mano con pocos datos, no una garantía.
+- **Fines de semana y feriados:** la fuente trae valores también esos días (aproximados), no solo de días hábiles.
+- **La tasa de hoy es provisional:** se pregunta cada vez y no se guarda; solo los días cerrados quedan en caché.
+- **No es la tasa de tu banco:** el banco o la tarjeta aplican su propio margen, así que ninguna fuente de mercado va a coincidir con lo que realmente te cobraron.
+- **Sin mezclar a escondidas:** si una fuente falla y entra la otra, queda anotado en cada gasto. Google no ofrece una API gratuita oficial de tasas (la Finance API se cerró en 2012; `GOOGLEFINANCE` solo funciona dentro de Google Sheets), por eso no se usa.
+
 ### Decisiones de diseño
 
-- **La tasa es parte del gasto.** Cada gasto guarda la tasa que se usó (`rate`) y el día al que pertenece (`rate_date`), como un recibo. No se consulta en vivo: la tasa de hoy no es definitiva, la fuente gratuita puede variar y la app tiene que mostrar lo mismo sin internet. La tabla `rates` es solo un caché de días cerrados.
+- **La tasa es parte del gasto.** Cada gasto guarda la tasa que se usó (`rate`) y el día al que pertenece (`rate_date`) y la fuente de la que salió (`rate_source`), como un recibo. No se consulta en vivo: la tasa de hoy no es definitiva, la fuente gratuita puede variar y la app tiene que mostrar lo mismo sin internet. La tabla `rates` es solo un caché de días cerrados.
 - **Lo calculable no se guarda.** El monto en tu moneda y "tasa estimada" se calculan al leer (`getState`); no son columnas.
 - **Los días cerrados se corrigen solos.** Si un gasto de un día que ya pasó tiene una tasa distinta de la guardada para ese día, se cambia por la del día cerrado (sin internet no se toca). El botón "Actualizar tasas" hace lo mismo a pedido, mostrando antes cuánto cambia.
 - **Respaldo y restauración.** El respaldo JSON es una copia cruda de las tablas. Restaurar solo agrega lo que falta (por id), valida todo antes de escribir y lo hace en una sola transacción: nunca borra ni pisa lo existente.

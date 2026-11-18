@@ -136,9 +136,10 @@ export async function restoreBackup(db, data, { dry, fail }) {
     const lng = optNum(e.lng, -180, 180);
     const description = str(e.description, 120);
     const place = str(e.place, 120);
+    const rateSource = str(e.rate_source, 40);
     const flags = [e.amount_approx, e.pay_pending].map(flag);
     if (!isValidDate(e.date) || !Number.isInteger(cents) || cents <= 0 || cents > MAX_CENTS) bad('gasto', e.id);
-    if (rate === undefined || lat === undefined || lng === undefined || description === null || place === null || flags.includes(undefined)) bad('gasto', e.id);
+    if (rate === undefined || lat === undefined || lng === undefined || description === null || place === null || rateSource === null || flags.includes(undefined)) bad('gasto', e.id);
     if (e.rate_date != null && !isValidDate(e.rate_date)) bad('gasto', e.id);
     if ((lat == null) !== (lng == null)) bad('gasto', e.id);
     if (e.sort_order != null && !Number.isInteger(e.sort_order)) bad('gasto', e.id);
@@ -146,10 +147,10 @@ export async function restoreBackup(db, data, { dry, fail }) {
     if (!known('payment_methods')(e.payment_method_id)) bad('el medio de pago de un gasto no existe', e.id);
     if (!links.get(e.id)?.size) bad('un gasto sin personas', e.id);
     stmts.expenses.push({
-      sql: `INSERT OR IGNORE INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date,
+      sql: `INSERT OR IGNORE INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, rate_source,
               created_at, trip_id, lat, lng, place, amount_approx, sort_order, pay_pending)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [e.id, e.date, cents, description, e.payment_method_id, rate, rate == null ? null : (e.rate_date ?? e.date),
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [e.id, e.date, cents, description, e.payment_method_id, rate, rate == null ? null : (e.rate_date ?? e.date), rate == null ? null : (rateSource || null),
         str(e.created_at, 40) || new Date().toISOString(), e.trip_id, lat, lng, place || null, flags[0], e.sort_order ?? null, flags[1]],
     });
     for (const p of links.get(e.id)) {

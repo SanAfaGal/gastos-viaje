@@ -35,12 +35,14 @@ test('tasa: exacta, guarda en caché y usa día anterior si falta', async () => 
   const db = await openMemoryDb();
   const opts = { fetchFn: fakeFetch({ '2026-11-10': 1000, '2026-11-12': 1100 }), today: '2026-11-16' };
 
-  assert.deepEqual(await resolveRate(db, '2026-11-12', PAIR, opts), { rate: 1100, rate_date: '2026-11-12', estimated: false });
-  assert.equal((await db.all('SELECT * FROM rates')).length, 1);
+  assert.deepEqual(await resolveRate(db, '2026-11-12', PAIR, opts), { rate: 1100, rate_date: '2026-11-12', estimated: false, source: 'fawazahmed0' });
+  const guardada = (await db.all('SELECT * FROM rates'))[0];
+  assert.equal(guardada.source, 'fawazahmed0'); // la tasa guardada dice de dónde salió y cuándo se consultó
+  assert.ok(!Number.isNaN(Date.parse(guardada.fetched_at)));
 
   // 13 no existe en la fuente; usa el 12 y queda marcada como estimada
   const r = await resolveRate(db, '2026-11-13', PAIR, opts);
-  assert.deepEqual(r, { rate: 1100, rate_date: '2026-11-12', estimated: true });
+  assert.deepEqual(r, { rate: 1100, rate_date: '2026-11-12', estimated: true, source: 'fawazahmed0' });
 });
 
 test('tasa: red caída usa la última guardada, o null si no hay', async () => {
@@ -51,7 +53,7 @@ test('tasa: red caída usa la última guardada, o null si no hay', async () => {
   _resetFailures();
   await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-10', 990]);
   const r = await resolveRate(db, '2026-11-14', PAIR, down);
-  assert.deepEqual(r, { rate: 990, rate_date: '2026-11-10', estimated: true });
+  assert.deepEqual(r, { rate: 990, rate_date: '2026-11-10', estimated: true, source: null }); // guardada sin fuente registrada
 });
 
 test('API: personas, medios, gasto compartido, idempotencia y cuentas', async () => {
@@ -438,13 +440,13 @@ test('tasa de hoy: no se guarda, se vuelve a preguntar y avisa si la fuente aún
     today,
   });
   // La fuente ya publicó hoy: tasa exacta y no queda guardada.
-  assert.deepEqual(await resolveRate(db, today, PAIR, live(580, today)), { rate: 580, rate_date: today, estimated: false });
+  assert.deepEqual(await resolveRate(db, today, PAIR, live(580, today)), { rate: 580, rate_date: today, estimated: false, source: 'fawazahmed0' });
   assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', [today]))[0].rate, 999); // la fila vieja no se tocó
   // Mismo día más tarde: la fuente cambió y se ve el cambio (no hay caché de hoy).
   assert.equal((await resolveRate(db, today, PAIR, live(585, today))).rate, 585);
   // La fuente aún trae la de ayer: se usa como estimada, con su fecha real, y queda guardada en el día de ayer.
   const stale = await resolveRate(db, today, PAIR, live(570, yesterday));
-  assert.deepEqual(stale, { rate: 570, rate_date: yesterday, estimated: true });
+  assert.deepEqual(stale, { rate: 570, rate_date: yesterday, estimated: true, source: 'fawazahmed0' });
   assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', [yesterday]))[0].rate, 570);
   // Un día cerrado sí sale de la base sin preguntar de nuevo.
   const offline = { fetchFn: async () => { throw new Error('sin red'); }, today };
@@ -462,7 +464,7 @@ test('tasa: si la fuente principal falla o va atrasada se usa Frankfurter', asyn
     return { ok: false, status: 500, json: async () => ({}) }; // la principal está caída
   };
   const r = await resolveRate(db, '2026-11-14', PAIR, { fetchFn: fetchFn({ date: '2026-11-14', base: 'BRL', quote: 'COP', rate: 587.01 }), today });
-  assert.deepEqual(r, { rate: 587.01, rate_date: '2026-11-14', estimated: false });
+  assert.deepEqual(r, { rate: 587.01, rate_date: '2026-11-14', estimated: false, source: 'frankfurter' });
   assert.ok(urls.some((u) => u.includes('frankfurter.dev/v2/rate/BRL/COP?date=2026-11-14')));
   assert.equal((await db.all('SELECT rate FROM rates WHERE date = ?', ['2026-11-14']))[0].rate, 587.01);
 
@@ -471,7 +473,7 @@ test('tasa: si la fuente principal falla o va atrasada se usa Frankfurter', asyn
   const both = async (url) => (url.includes('frankfurter')
     ? { ok: true, status: 200, json: async () => ({ date: today, rate: 578.36 }) }
     : { ok: true, status: 200, json: async () => ({ date: '2026-11-15', brl: { cop: 585.03 } }) });
-  assert.deepEqual(await resolveRate(db, today, PAIR, { fetchFn: both, today }), { rate: 578.36, rate_date: today, estimated: false });
+  assert.deepEqual(await resolveRate(db, today, PAIR, { fetchFn: both, today }), { rate: 578.36, rate_date: today, estimated: false, source: 'frankfurter' });
 });
 
 test('API: orden manual de los gastos de un día (idempotente, ignora ids que no existen, se reinicia al cambiar de día)', async () => {

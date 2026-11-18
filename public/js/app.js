@@ -218,6 +218,10 @@ function expenseItem(c, e, n) {
 // Resumen general: cifras clave y gráficos. El detalle de cada gasto está en Gastos y los saldos en Cuentas.
 let homeBars = []; // días del gráfico (para la lectura al tocar una barra)
 
+// Fuente de una tasa, como se muestra. Vacía = se guardó antes de que la app registrara la fuente.
+const RATE_SOURCES = { fawazahmed0: 'fawazahmed0/currency-api', frankfurter: 'Frankfurter' };
+const rateSourceLabel = (source) => RATE_SOURCES[source] ?? (source || 'No registrada');
+
 const shortDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' });
 const barRead = (d) => `${dayLabel(d.date)} · ${d.count ? `${fmtHome(d.home)} · ${d.count} gasto(s)` : 'sin gastos'}`;
 
@@ -360,7 +364,7 @@ function viewList() {
 // --- formulario de gasto ---
 
 let draft = null;
-let convRate = null; // { rate, estimated } para la fecha del formulario
+let convRate = null; // { rate, estimated, rate_date, source, local } para la fecha del formulario
 let lastBenes = JSON.parse(localStorage.getItem('bg_lastBenes') ?? '[]');
 
 function newDraft(c, date = todayStr()) {
@@ -517,7 +521,9 @@ function viewForm(editId) {
       <button class="btn" type="submit" data-then="list">${draft.id ? 'Guardar cambios' : 'Guardar'}</button>
       ${draft.id ? '' : '<button class="btn secondary" type="submit" data-then="again">Guardar y agregar otro</button>'}
       ${draft.id ? '<div class="form-danger"><button class="icon-del" type="button" data-action="del" aria-label="Borrar este gasto" title="Borrar este gasto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>' : ''}
-      ${infoDialog('rate', 'Tasa de cambio', '<div class="muted" id="conv-detail"></div><div class="chart" id="chart" role="img"></div>')}
+      ${infoDialog('rate', 'Tasa de cambio', `<div class="muted" id="conv-detail"></div>
+      <p class="muted">La tasa sale de una fuente gratuita que publica un valor por día. Suele ser el cierre del día anterior, así que puede diferir un poco de lo que muestra Google, y tu banco o tarjeta además aplica su propio margen. La de hoy es provisional hasta que cierre el día.</p>
+      <div class="chart" id="chart" role="group"></div>`)}
       ${infoDialog('pay', 'Pagado con', 'Elige con qué se pagó. Si no lo sabes, elige «Por definir» y lo completas después; ese gasto no entra en las cuentas hasta entonces.')}
       ${infoDialog('who', '¿Para quién es?', 'El gasto se divide en partes iguales entre las personas marcadas. «Todos» marca a todas las del viaje.')}
       ${infoDialog('approx', 'Monto aproximado', 'Márcalo si el monto es redondeado y hay que ajustarlo después. El gasto queda con la etiqueta «Monto aproximado» y puedes filtrarlos.')}
@@ -531,8 +537,7 @@ async function loadRate() {
   updateConv();
   const r = await store.fetchRate(date);
   if (draft && draft.date === date) {
-    convRate = r ? { rate: r.rate, estimated: Boolean(r.estimated) } : null;
-    convRate ??= null;
+    convRate = r ? { rate: r.rate, estimated: Boolean(r.estimated), rate_date: r.rate_date, source: r.source, local: r.local } : null;
     updateConv(true);
   }
 }
@@ -647,8 +652,10 @@ function updateConv(loaded = false) {
   const each = Object.values(splitEqual(cop, [...draft.benes].length ? [...draft.benes] : ['x']))[0];
   el.innerHTML = `<b>${fmtDest(cents)} ≈ ${fmtHome(cop)}</b>`;
   if (det) {
+    const provisional = !r.estimated && (r.rate_date ?? draft.date) === todayStr(); // la tasa de hoy aún puede cambiar
     det.innerHTML = `${fmtRate(r.rate)}${r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
-    ${n > 1 ? ` · ${n} personas: ${fmtHome(each)} c/u` : ''}`;
+    ${n > 1 ? ` · ${n} personas: ${fmtHome(each)} c/u` : ''}
+    <div>Fuente: ${esc(r.local ? 'guardada en este teléfono' : rateSourceLabel(r.source))}${provisional ? ' · provisional hasta que cierre el día' : ''}</div>`;
   }
   void c;
 }
@@ -1198,12 +1205,12 @@ function viewLogin() {
 function downloadCsv() {
   const c = ctx();
   const cur = currencies();
-  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', cur.dest.code, 'Tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
+  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', cur.dest.code, 'Tasa', 'Fecha de la tasa', 'Fuente de la tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
   for (const e of [...c.expenses].sort(compareChronological)) {
     const m = c.methodsById[e.payment_method_id];
     rows.push([e.date, e.description, e.payment_method_id == null ? 'Por definir' : methodLabel(m), m ? personName(c, m.owner_person_id) : '',
       e.beneficiary_ids.map((id) => personName(c, id)).join(' + '),
-      (e.amount_cents / 100).toFixed(2), e.rate ?? '', e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
+      (e.amount_cents / 100).toFixed(2), e.rate ?? '', e.rate == null ? '' : e.rate_date ?? e.date, e.rate == null ? '' : rateSourceLabel(e.rate_source), e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
       e.amount_approx ? 'Sí' : '', hasLocation(e) ? e.lat : '', hasLocation(e) ? e.lng : '', e.place ?? '']);
   }
   // Un texto que empieza con = + - @ se interpretaría como fórmula en Excel; se le antepone un apóstrofo.

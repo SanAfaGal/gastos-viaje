@@ -304,10 +304,12 @@ async function saveExpense(db, id, body) {
   // la tasa es estimada (su día no es el del gasto) se calculan al leer, ver getState.
   let rate = null;
   let rateDate = null;
+  let rateSource = null;
   const r = await resolveRate(db, body.date, settings);
   if (r) {
     rate = r.rate;
     rateDate = r.rate_date;
+    rateSource = r.source;
   }
   // Al deshacer un borrado el gasto vuelve con su hora de creación y su lugar en el día. Se ignoran valores raros.
   const createdMs = typeof body.created_at === 'string' ? Date.parse(body.created_at) : NaN;
@@ -331,18 +333,18 @@ async function saveExpense(db, id, body) {
   await db.batch([
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
-              rate, rate_date, created_at, trip_id,
+              rate, rate_date, rate_source, created_at, trip_id,
               lat, lng, place, amount_approx, pay_pending, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
-              rate = excluded.rate, rate_date = excluded.rate_date,
+              rate = excluded.rate, rate_date = excluded.rate_date, rate_source = excluded.rate_source,
               lat = excluded.lat, lng = excluded.lng, place = excluded.place,
               amount_approx = excluded.amount_approx,
               pay_pending = excluded.pay_pending,
               sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
-      args: [id, body.date, cents, description, methodId, rate, rateDate, createdAt, trip.id,
+      args: [id, body.date, cents, description, methodId, rate, rateDate, rateSource, createdAt, trip.id,
         lat, lng, place, approx, payPending ? 1 : 0, sortOrder],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
@@ -378,7 +380,7 @@ async function refreshTripRates(db, query) {
   const settings = tripPair(trip);
   const digits = currencyByCode(settings.home).digits;
   const rows = await db.all(
-    'SELECT id, date, amount_cents, rate, rate_date FROM expenses WHERE trip_id = ?',
+    'SELECT id, date, amount_cents, rate, rate_date, rate_source FROM expenses WHERE trip_id = ?',
     [trip.id],
   );
   const dates = [...new Set(rows.map((r) => r.date))].sort().slice(-120);
@@ -395,7 +397,8 @@ async function refreshTripRates(db, query) {
   let after = 0;
   const updates = [];
   for (const e of rows) {
-    const rate = fresh.get(e.date);
+    const got = fresh.get(e.date);
+    const rate = got?.rate;
     const current = e.rate == null ? 0 : toHome(e.amount_cents, e.rate, digits);
     before += current;
     if (rate == null) { // la fuente no trae ese día (o hoy aún no lo publica): no se toca
@@ -404,9 +407,14 @@ async function refreshTripRates(db, query) {
       continue;
     }
     after += toHome(e.amount_cents, rate, digits);
-    if (e.rate === rate && e.rate_date === e.date) { unchanged += 1; continue; }
+    if (e.rate === rate && e.rate_date === e.date) {
+      unchanged += 1;
+      // Mismo valor: no cuenta como cambio, pero se anota la fuente si faltaba.
+      if (got.source && e.rate_source !== got.source) updates.push({ sql: 'UPDATE expenses SET rate_source = ? WHERE id = ?', args: [got.source, e.id] });
+      continue;
+    }
     changed += 1;
-    updates.push({ sql: 'UPDATE expenses SET rate = ?, rate_date = ? WHERE id = ?', args: [rate, e.date, e.id] });
+    updates.push({ sql: 'UPDATE expenses SET rate = ?, rate_date = ?, rate_source = ? WHERE id = ?', args: [rate, e.date, got.source ?? null, e.id] });
   }
   if (!dry && updates.length) await db.batch(updates);
   return { dry, changed, unchanged, no_data: noData, total_before: before, total_after: after };
@@ -421,7 +429,7 @@ async function refreshTripRates(db, query) {
 //    "la tasa del gasto es la de rates" ya significa "es la definitiva", y deja de revisarse sola.
 async function fillPendingRates(db) {
   const rows = await db.all(
-    `SELECT e.id, e.date, e.rate, e.rate_date, t.dest_currency, t.home_currency
+    `SELECT e.id, e.date, e.rate, e.rate_date, e.rate_source, t.dest_currency, t.home_currency
      FROM expenses e JOIN trips t ON t.id = e.trip_id
      WHERE e.rate IS NULL OR e.rate_date <> e.date
         OR (e.date < ? AND NOT EXISTS (SELECT 1 FROM rates r
@@ -434,8 +442,8 @@ async function fillPendingRates(db) {
     if (!r) continue;
     // Sin red o sin dato de ese día, la tasa exacta del gasto no se cambia por una más vieja (solo se mejora una estimada).
     if (r.estimated && e.rate != null && e.rate_date === e.date) continue;
-    if (r.rate === e.rate && r.rate_date === e.rate_date) continue;
-    await db.run('UPDATE expenses SET rate = ?, rate_date = ? WHERE id = ?', [r.rate, r.rate_date, e.id]);
+    if (r.rate === e.rate && r.rate_date === e.rate_date && (!r.source || r.source === e.rate_source)) continue;
+    await db.run('UPDATE expenses SET rate = ?, rate_date = ?, rate_source = ? WHERE id = ?', [r.rate, r.rate_date, r.source ?? null, e.id]);
   }
 }
 
