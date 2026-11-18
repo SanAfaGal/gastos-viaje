@@ -1470,8 +1470,11 @@ function dragFollow() {
   const mid = (el) => { const b = el.getBoundingClientRect(); return b.top + b.height / 2; };
   if (prev?.matches('.item') && st.y < mid(prev)) card.insertBefore(item, prev);
   else if (next?.matches('.item') && st.y > mid(next)) next.after(item);
+  // El gasto sigue al dedo, pero solo dentro de la tarjeta de su día: no puede salirse hacia otros días.
   const nat = item.getBoundingClientRect();
-  item.style.transform = `translateY(${st.y - st.grab - nat.top}px)`;
+  const box = card.getBoundingClientRect();
+  const top = Math.min(Math.max(st.y - st.grab, box.top), Math.max(box.top, box.bottom - nat.height));
+  item.style.transform = `translateY(${top - nat.top}px)`;
 }
 
 $view.addEventListener('pointerdown', (ev) => {
