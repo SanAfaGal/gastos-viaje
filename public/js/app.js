@@ -227,18 +227,23 @@ const rateSourceLabel = (source) => RATE_SOURCES[source] ?? (source || 'No regis
 const shortDate = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('es-CO', { day: 'numeric', month: 'short' });
 const barRead = (d) => `${dayLabel(d.date)} · ${d.count ? `${fmtHome(d.home)} · ${d.count} gasto(s)` : 'sin gastos'}`;
 
-function hbarsHtml(rows) {
-  return rows.map((r) => `<div class="hbar">
-      <div class="hbar-top"><span class="hbar-l">${esc(r.label)}</span><b>${fmtHome(r.home)}</b></div>
-      <div class="hbar-track" aria-hidden="true"><span style="width:${Math.max(r.pct, 1.5).toFixed(1)}%"></span></div>
-      <div class="muted hbar-sub">${r.pct.toFixed(r.pct < 10 ? 1 : 0)} % · ${r.count} gasto(s)</div></div>`).join('');
+// Una barra horizontal apilada al 100 %: cada tramo es una parte del total (su ancho es el porcentaje). Los montos ya están en Cuentas; aquí
+// solo se ve qué parte del gasto fue de cada uno. La leyenda dice el nombre y el porcentaje de cada tramo (los tramos pequeños no caben).
+const STACK_COLORS = ['var(--seg-1)', 'var(--seg-2)', 'var(--seg-3)', 'var(--seg-4)', 'var(--seg-5)'];
+const pctText = (p) => `${p.toFixed(p < 10 ? 1 : 0).replace('.', ',')} %`;
+
+function stackHtml(title, rows, colorOf) {
+  const colors = rows.map((r, i) => colorOf(r, i));
+  const aria = rows.map((r) => `${r.label} ${pctText(r.pct)}`).join(', ');
+  return `<div class="stack-block"><div class="stack-title">${esc(title)}</div>
+    <div class="stack" role="img" aria-label="${esc(`${title}: ${aria}`)}">${rows.map((r, i) => `<span class="stack-seg" style="flex:${Math.max(r.pct, 0.8).toFixed(2)};background:${colors[i]}"></span>`).join('')}</div>
+    <ul class="stack-legend">${rows.map((r, i) => `<li><span class="stack-dot" style="background:${colors[i]}" aria-hidden="true"></span><span class="stack-name">${esc(r.label)}</span><b>${pctText(r.pct)}</b></li>`).join('')}</ul></div>`;
 }
 
 function viewHome() {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
   const today = todayStr();
-  const rate = store.localRate(today);
   const waiting = c.expenses.filter((e) => e.amount_home == null).length;
   const placed = c.expenses.filter(hasLocation).length;
   const unsent = store.pendingCount();
@@ -256,13 +261,14 @@ function viewHome() {
     const owner = c.methodsById[e.payment_method_id]?.owner_person_id;
     return owner ? { id: owner, label: personName(c, owner) } : null;
   });
+  const rateCard = `<div class="card"><h2>Tasa de cambio · ${esc(cur.dest.code)} → ${esc(cur.home.code)}</h2>
+      <div class="chart" id="chart" role="group"></div></div>`;
   return `
     ${unsent ? `<div class="banner">${unsent} gasto(s) sin enviar. Se envían solos cuando haya internet.</div>` : ''}
     ${waiting ? `<div class="banner">${waiting} gasto(s) esperando la tasa del día.</div>` : ''}
     <div class="card hero"><h2>Total gastado</h2>
       <div class="big">${fmtHome(s?.total ?? 0)}</div>
       <div class="sub">${fmtDest(totalDest)} · ${c.expenses.length} gasto(s)</div>
-      <div class="sub">${rate ? `Hoy: ${fmtRate(rate.rate)}${rate.estimated ? ' (última conocida)' : ''}` : 'Tasa de hoy: sin datos todavía'}</div>
       <a class="hero-link" href="#/mapa">🗺 Ver mapa${placed ? ` · ${placed} con ubicación` : ''}</a>
     </div>
     ${s ? `
@@ -276,8 +282,11 @@ function viewHome() {
       <div class="bars" role="group" aria-label="Gasto de cada uno de los últimos días">${homeBars.map((d, i) => `<button type="button" class="bar ${d.home ? '' : 'zero'} ${i === homeBars.length - 1 ? 'sel' : ''} ${d === peak && d.home ? 'peak' : ''}" data-action="bar" data-i="${i}" style="--h:${peak.home ? ((d.home / peak.home) * 100).toFixed(1) : 0}%" aria-label="${esc(barRead(d))}"></button>`).join('')}</div>
       <div class="bar-axis"><span>${esc(shortDate(homeBars[0].date))}</span><span>${peak.home ? `Máx. ${fmtHome(peak.home)}` : ''}</span><span>${esc(dayLabel(homeBars.at(-1).date))}</span></div>
     </div>
-    <div class="card"><h2>Por medio de pago</h2>${hbarsHtml(methodRows)}</div>
-    ${payerRows.length > 1 ? `<div class="card"><h2>Quién pagó</h2>${hbarsHtml(payerRows)}</div>` : ''}` : '<div class="card"><div class="empty">Aún no hay gastos. Toca el + para agregar.</div></div>'}`;
+    ${rateCard}
+    <div class="card"><h2>Cómo se pagó · en porcentaje</h2>
+      ${stackHtml('Por medio de pago', methodRows, (r, i) => (r.id === '__otros' || r.id === PENDING ? 'var(--seg-other)' : STACK_COLORS[i % STACK_COLORS.length]))}
+      ${payerRows.length > 1 ? stackHtml('Quién pagó', payerRows, (r, i) => (r.id === '__otros' ? 'var(--seg-other)' : STACK_COLORS[i % STACK_COLORS.length])) : ''}
+    </div>` : `<div class="card"><div class="empty">Aún no hay gastos. Toca el + para agregar.</div></div>${rateCard}`}`;
 }
 
 const FILTERS_OFF = { q: '', method: '', person: '', payer: '', day: '', approx: false, noloc: false, rate: false };
@@ -538,7 +547,6 @@ const infoDialog = (id, title, html) => `<dialog id="info-${id}" class="sheet in
 
 function viewForm(editId) {
   const c = ctx();
-    loadHistory();
   if (needsSetup(c)) return setupCard();
   if (!draft || (editId ? draft.id !== editId : draft.id)) {
     draft = editId ? draftFrom(c, editId) : newDraft(c);
@@ -580,7 +588,7 @@ function viewForm(editId) {
       ${draft.id ? '<div class="form-danger"><button class="icon-del" type="button" data-action="del" aria-label="Borrar este gasto" title="Borrar este gasto"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg></button></div>' : ''}
       ${infoDialog('rate', 'Tasa de cambio', `<div class="muted" id="conv-detail"></div>
       <p class="muted">La tasa sale de una fuente gratuita que publica un valor por día. Suele ser el cierre del día anterior, así que puede diferir un poco de lo que muestra Google, y tu banco o tarjeta además aplica su propio margen. La de hoy es provisional hasta que cierre el día.</p>
-      <div class="chart" id="chart" role="group"></div>`)}
+      <p class="muted">El gráfico con el historial de la tasa está en <a href="#/">Inicio</a>.</p>`)}
       ${infoDialog('pay', 'Pagado con', 'Elige con qué se pagó. Si no lo sabes, elige «Por definir» y lo completas después; ese gasto no entra en las cuentas hasta entonces.')}
       ${infoDialog('who', '¿Para quién es?', 'El gasto se divide en partes iguales entre las personas marcadas. «Todos» marca a todas las del viaje.')}
       ${infoDialog('approx', 'Monto aproximado', 'Márcalo si el monto es redondeado y hay que ajustarlo después. El gasto queda con la etiqueta «Monto aproximado» y puedes filtrarlos.')}
@@ -607,8 +615,16 @@ let history = null; // [{ date, rate }] o null mientras carga
 let chartGeo = null; // posiciones de los puntos (en %) del gráfico dibujado
 let chartIdx = 0; // punto mostrado en la lectura
 
+let historyKey = ''; // viaje y período del historial cargado: evita pedirlo de nuevo en cada sincronización
+const chartKey = () => `${store.activeTrip().id}|${chartDays}`;
+
+function homeChart() {
+  if (history === null || historyKey !== chartKey()) loadHistory(); else renderChart();
+}
+
 async function loadHistory() {
   const days = chartDays;
+  historyKey = chartKey();
   history = null;
   renderChart();
   let points;
@@ -628,16 +644,16 @@ const dayShort = (d) => new Date(`${d}T12:00:00`).toLocaleDateString('es-CO', { 
 
 function renderChart() {
   const el = document.getElementById('chart');
-  if (!el || !draft) return;
+  if (!el) return;
   const tabs = `<div class="mini-tabs" role="group" aria-label="Período del gráfico">${RANGES.map((d) =>
     `<button type="button" class="mini-tab ${d === chartDays ? 'on' : ''}" data-action="range" data-id="${d}" aria-pressed="${d === chartDays}">${d} d</button>`).join('')}</div>`;
-  const g = history ? sparkline(history, draft.date) : null;
+  const g = history ? sparkline(history, draft?.date ?? null) : null;
   if (!g) {
     chartGeo = null;
     el.removeAttribute('aria-label');
     el.innerHTML = history === null
       ? `<div class="chart-top"><div class="chart-read"><div class="chart-meta">Cargando tasas…</div></div>${tabs}</div>`
-      : '';
+      : '<div class="chart-meta">Todavía no hay historial de esta tasa.</div>';
     return;
   }
   chartGeo = g;
@@ -666,9 +682,9 @@ function paintReadout(i, scrubbing) {
   chartIdx = i;
   const p = history[i];
   const cur = currencies();
-  val.textContent = `${numFmt(p.rate)} ${cur.home.code}`;
+  val.textContent = `1 ${cur.dest.code} = ${numFmt(p.rate)} ${cur.home.code}`;
   const isSel = !scrubbing && chartGeo.selectedIndex === i;
-  document.getElementById('c-meta').textContent = `${isSel ? 'Día del gasto' : dayShort(p.date)} · ${pctFmt(changeAt(history, i))} en ${history.length} días`;
+  document.getElementById('c-meta').textContent = `${isSel ? 'Día del gasto' : p.date === todayStr() ? 'Hoy' : dayShort(p.date)} · ${pctFmt(changeAt(history, i))} en ${history.length} días`;
   const cents = parseAmount(draft?.amountText);
   document.getElementById('c-conv').textContent = cents ? `${fmtDest(cents)} ese día = ${fmtHome(toHome(cents, p.rate, cur.home.digits))}` : '';
   const cross = document.getElementById('c-cross');
@@ -1880,8 +1896,9 @@ function render() {
   $view.innerHTML = r.view(m);
   if (keep) $view.querySelector(keep)?.focus({ preventScroll: true }); // el redibujo no le quita el foco a quien navega con teclado
   if (r.map) initMap();
-  if (r.tab === 'ajustes') showAppVersion();
-  if (isFormRoute() && draft) { updateConv(); renderChart(); centerPicked(); }
+  if (r.tab === 'ajustes' && !r.map) showAppVersion();
+  if (r.tab === 'home') homeChart();
+  if (isFormRoute() && draft) { updateConv(); centerPicked(); }
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
   if (tripOpen) document.getElementById('trip-dialog')?.showModal();
   if (personOpen) document.getElementById('person-dialog')?.showModal();

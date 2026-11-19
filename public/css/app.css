@@ -10,6 +10,7 @@
   --brand-2: #08784f;
   --brand-ink: #ffffff;
   --accent: #f2b705;
+  --seg-1: #0b6b4a; --seg-2: #e0a800; --seg-3: #2f6fd0; --seg-4: #c2410c; --seg-5: #7a3fd1; --seg-other: #8a9a91; /* tramos de las barras apiladas */
   --pos: #0b6b4a;
   --neg: #c2410c;
   --toast-ok-bg: #15803d;
@@ -31,6 +32,7 @@
 }
 /* El modo se fija con data-scheme="dark|light" (ver theme.js). */
 :root[data-scheme="dark"] {
+  --seg-1: #2fb583; --seg-2: #f2b705; --seg-3: #5b9bff; --seg-4: #ff8a4c; --seg-5: #b48cff; --seg-other: #6d8176;
   --bg: #0e1612;
   --surface: #16211b;
   --surface-2: #1d2b23;
@@ -487,13 +489,6 @@ main[aria-busy="true"] button:not(.busy), main[aria-busy="true"] .item, main[ari
 .bar.sel::before { opacity: 1; }
 .bar:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
 .bar-axis { display: flex; justify-content: space-between; gap: 8px; margin-top: 8px; font-size: .75rem; color: var(--muted); }
-.hbar + .hbar { margin-top: 14px; }
-.hbar-top { display: flex; justify-content: space-between; gap: 10px; font-size: .92rem; }
-.hbar-l { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.hbar-top b { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.hbar-track { height: 8px; margin: 6px 0 4px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
-.hbar-track span { display: block; height: 100%; border-radius: 99px; background: var(--brand); }
-.hbar-sub { font-size: .78rem; }
 @media (prefers-reduced-motion: reduce) { .bar::before { transition: none; } }
 
 /* Foco visible en todo lo que se puede usar con teclado. */
@@ -524,6 +519,17 @@ main:focus-visible { outline: none; }
 .loc-chip-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
 .loc-chip-s { flex: none; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--brand) 16%, var(--surface)); color: var(--brand); font-size: .72rem; font-weight: 700; }
 .pk-tip { margin: 12px 0 0; }
+
+/* Inicio: barras apiladas (medios de pago y quién pagó) y tasa de hoy sobre el gráfico. */
+.stack-block + .stack-block { margin-top: 18px; }
+.stack-title { font-size: .85rem; font-weight: 600; color: var(--muted); margin-bottom: 8px; }
+.stack { display: flex; gap: 2px; height: 22px; border-radius: 99px; overflow: hidden; background: var(--surface-2); }
+.stack-seg { min-width: 4px; }
+.stack-legend { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.stack-legend li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; font-size: .9rem; }
+.stack-dot { width: 12px; height: 12px; border-radius: 50%; }
+.stack-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stack-legend b { font-variant-numeric: tabular-nums; }
 
 /* Pestañas "Cerca del pin" / "Resultados" y bloque "Más lejos" de la búsqueda. */
 .pk-tabs { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
