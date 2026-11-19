@@ -5,6 +5,8 @@ import { openMemoryDb } from '../src/db.mjs';
 import { handle } from '../src/handlers.mjs';
 import { hashCode } from '../src/spaces.mjs';
 import { assertNotForeign, owns, ownedIds } from '../src/scope.mjs';
+import { _resetFailures } from '../src/rates.mjs';
+import { todayStr } from '../public/js/money.mjs';
 
 const CODE_A = 'AAAA-BBBB-CCCC';
 const CODE_B = 'DDDD-EEEE-FFFF';
@@ -271,4 +273,242 @@ test('con APP_PASSCODE definido, un espacio no ve lo del administrador', async (
     // Sin código, nada.
     assert.equal((await llamador(db, undefined)('GET', '/api/state')).status, 401);
   });
+});
+
+// ---------- gastos, abonos, orden y tasas ----------
+
+const DIA = '2026-11-14';
+
+// Fuente simulada de tasas (como withSource de backup.test.mjs, pero con varios pares): `table` va de versión
+// ('latest' o una fecha) a { moneda_origen: { moneda_casa: tasa } }, por ejemplo { [DIA]: { eur: { cop: 4700 } } }.
+const withSource = async (table, fn) => {
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    const version = u.match(/currency-api@([^/]+)\/v1/)?.[1] ?? u.match(/\/\/([^.]+)\.currency-api/)?.[1];
+    const dest = u.match(/currencies\/([a-z]+)\.json/)?.[1];
+    const rates = table[version]?.[dest];
+    if (!version || !rates) return { ok: false, status: 404, json: async () => ({}) };
+    return { ok: true, status: 200, json: async () => ({ date: version === 'latest' ? todayStr() : version, [dest]: rates }) };
+  };
+  try { return await fn(); } finally { globalThis.fetch = real; }
+};
+
+// Todas las filas de las tablas de gastos y abonos, de cualquier espacio, para comparar antes y después.
+const filasDeGastos = async (db) => ({
+  expenses: await db.all('SELECT * FROM expenses ORDER BY id'),
+  beneficiaries: await db.all('SELECT * FROM expense_beneficiaries ORDER BY expense_id, person_id'),
+  payments: await db.all('SELECT * FROM payments ORDER BY id'),
+});
+
+const gasto = (extra) => ({ date: DIA, amount_cents: 10000, description: 'x', beneficiary_ids: ['pa'], payment_method_id: 'ma', ...extra });
+
+// twoSpaces con tasas sembradas (nada sale a internet), una segunda persona en cada espacio, y en cada uno un
+// gasto con beneficiario ('ea', 'eb') y un abono ('ya', 'yb').
+async function conGastos() {
+  const s = await twoSpaces();
+  const { db, A, B } = s;
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['EUR-COP', DIA, 4500]);
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['USD-BRL', DIA, 5.5]);
+  for (const [call, x] of [[A, 'a'], [B, 'b']]) {
+    assert.equal((await call('POST', '/api/people', { id: `${x}2`, name: `Segunda ${x}` })).status, 201);
+    const ok = await call('POST', '/api/expenses', gasto({ id: `e${x}`, trip_id: `t${x}`, payment_method_id: `m${x}`, beneficiary_ids: [`p${x}`] }));
+    assert.equal(ok.status, 201);
+    const ab = await call('POST', '/api/payments', { id: `y${x}`, trip_id: `t${x}`, from_person_id: `p${x}`, to_person_id: `${x}2`, date: DIA, amount_cents: 500 });
+    assert.equal(ab.status, 201);
+  }
+  return s;
+}
+
+test('estado: los gastos, abonos y beneficiarios de A no aparecen en B', async () => {
+  const { db, A, B } = await twoSpaces();
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['EUR-COP', DIA, 4500]);
+  assert.equal((await A('POST', '/api/people', { id: 'a2', name: 'Segunda a' })).status, 201);
+  assert.equal((await A('POST', '/api/expenses', gasto({ id: 'ea', trip_id: 'ta' }))).status, 201);
+  assert.equal((await A('POST', '/api/payments', { id: 'ya', trip_id: 'ta', from_person_id: 'pa', to_person_id: 'a2', date: DIA, amount_cents: 500 })).status, 201);
+
+  const sb = (await B('GET', '/api/state')).body;
+  assert.deepEqual(sb.expenses, []);
+  assert.deepEqual(sb.payments, []);
+  const sa = (await A('GET', '/api/state')).body;
+  assert.deepEqual(ids(sa.expenses), ['ea']);
+  assert.deepEqual(sa.expenses[0].beneficiary_ids, ['pa']);
+  assert.deepEqual(ids(sa.payments), ['ya']);
+});
+
+test('PUT con el id de un gasto o abono de otro espacio da 404 y no lo toca', async () => {
+  const { db, B } = await conGastos();
+  const antes = await filasDeGastos(db);
+  assert.equal(antes.expenses.length, 2);
+  assert.equal(antes.payments.length, 2);
+  assert.equal(antes.beneficiaries.length, 2);
+
+  // Cuerpos válidos en el espacio de B: lo único ajeno es el id, así que solo el 404 puede frenarlos.
+  const cuerpoGasto = gasto({ trip_id: 'tb', payment_method_id: 'mb', beneficiary_ids: ['pb'], description: 'robado', amount_cents: 1 });
+  const cuerpoAbono = { trip_id: 'tb', from_person_id: 'pb', to_person_id: 'b2', date: DIA, amount_cents: 1, note: 'robado' };
+  const respuestas = [
+    await B('PUT', '/api/expenses/ea', cuerpoGasto),
+    await B('POST', '/api/expenses', { ...cuerpoGasto, id: 'ea' }),
+    await B('PUT', '/api/expenses/ea', { ...cuerpoGasto, trip_id: 'ta' }),
+    await B('PUT', '/api/payments/ya', cuerpoAbono),
+    await B('POST', '/api/payments', { ...cuerpoAbono, id: 'ya' }),
+    await B('PUT', '/api/payments/ya', { ...cuerpoAbono, trip_id: 'ta' }),
+  ];
+  for (const r of respuestas) {
+    assert.equal(r.status, 404);
+    assert.equal(r.body.error, 'No encontrado');
+  }
+  assert.deepEqual(await filasDeGastos(db), antes);
+});
+
+test('un gasto con medio de pago, beneficiario o viaje de otro espacio se rechaza', async () => {
+  const { db, B } = await conGastos();
+  const antes = await filasDeGastos(db);
+  const propio = { id: 'eb-nuevo', trip_id: 'tb', payment_method_id: 'mb', beneficiary_ids: ['pb'] };
+
+  const medio = await B('POST', '/api/expenses', gasto({ ...propio, payment_method_id: 'ma' }));
+  assert.equal(medio.status, 400);
+  assert.equal(medio.body.error, 'El medio de pago no existe');
+  const persona = await B('POST', '/api/expenses', gasto({ ...propio, beneficiary_ids: ['pb', 'pa'] }));
+  assert.equal(persona.status, 400);
+  assert.equal(persona.body.error, 'Alguna persona no existe');
+  const personaAdmin = await B('POST', '/api/expenses', gasto({ ...propio, beneficiary_ids: ['p-admin'] }));
+  assert.equal(personaAdmin.status, 400);
+  assert.equal(personaAdmin.body.error, 'Alguna persona no existe');
+  const viaje = await B('POST', '/api/expenses', gasto({ ...propio, trip_id: 'ta' }));
+  assert.equal(viaje.status, 400);
+  assert.equal(viaje.body.error, 'El viaje no existe');
+  // Editar un gasto propio hacia un medio o una persona ajenos tampoco pasa y lo deja como estaba.
+  const editarMedio = await B('PUT', '/api/expenses/eb', gasto({ ...propio, payment_method_id: 'ma' }));
+  assert.equal(editarMedio.status, 400);
+  const editarPersona = await B('PUT', '/api/expenses/eb', gasto({ ...propio, beneficiary_ids: ['pa'] }));
+  assert.equal(editarPersona.status, 400);
+  assert.deepEqual(await filasDeGastos(db), antes);
+
+  // Control: el mismo gasto con todo propio sí se guarda.
+  assert.equal((await B('POST', '/api/expenses', gasto(propio))).status, 201);
+});
+
+test('el medio de relleno de "por definir" sale solo de los medios del espacio', async () => {
+  const { db, B } = await conGastos();
+  await crearEspacio(db, 'space-c', 'Grupo C', CODE_C);
+  const C = llamador(db, CODE_C);
+  assert.equal((await C('POST', '/api/trips', { id: 'tc', name: 'Viaje c', dest: 'USD', home: 'BRL' })).status, 201);
+  assert.equal((await C('POST', '/api/people', { id: 'pc', name: 'Persona c' })).status, 201);
+  // Un dato inconsistente (p. ej. venido de una restauración): la persona de A va en el viaje de C. C no tiene
+  // medios propios, así que el único medio "de alguien del viaje" es el de A, que no debe usarse de relleno.
+  await db.run("INSERT INTO trip_people (trip_id, person_id) VALUES ('tc', 'pa')");
+  const antes = await filasDeGastos(db);
+  const r = await C('POST', '/api/expenses', gasto({ id: 'ec', trip_id: 'tc', payment_method_id: '', beneficiary_ids: ['pc'] }));
+  assert.equal(r.status, 400);
+  assert.equal(r.body.error, 'Agrega un medio de pago de alguien del viaje antes de registrar gastos');
+  assert.deepEqual(await filasDeGastos(db), antes);
+
+  // Control: B, que sí tiene un medio propio, guarda el gasto por definir con su propio medio de relleno.
+  const ok = await B('POST', '/api/expenses', gasto({ id: 'eb-pend', trip_id: 'tb', payment_method_id: '', beneficiary_ids: ['pb'] }));
+  assert.equal(ok.status, 201);
+  assert.deepEqual(await db.all("SELECT payment_method_id, pay_pending FROM expenses WHERE id = 'eb-pend'"), [{ payment_method_id: 'mb', pay_pending: 1 }]);
+});
+
+test('un abono entre personas de otro espacio o en un viaje ajeno se rechaza', async () => {
+  const { db, B } = await conGastos();
+  const antes = await filasDeGastos(db);
+  const base = { trip_id: 'tb', from_person_id: 'pb', to_person_id: 'b2', date: DIA, amount_cents: 700 };
+
+  const deAjena = await B('POST', '/api/payments', { ...base, id: 'yb-x', from_person_id: 'pa' });
+  assert.equal(deAjena.status, 400);
+  assert.equal(deAjena.body.error, 'Alguna persona no va en este viaje');
+  const paraAjena = await B('POST', '/api/payments', { ...base, id: 'yb-x', to_person_id: 'a2' });
+  assert.equal(paraAjena.status, 400);
+  assert.equal(paraAjena.body.error, 'Alguna persona no va en este viaje');
+  const entreAjenas = await B('POST', '/api/payments', { ...base, id: 'yb-x', from_person_id: 'pa', to_person_id: 'a2' });
+  assert.equal(entreAjenas.status, 400);
+  const viajeAjeno = await B('POST', '/api/payments', { ...base, id: 'yb-x', trip_id: 'ta', from_person_id: 'pa', to_person_id: 'a2' });
+  assert.equal(viajeAjeno.status, 400);
+  assert.equal(viajeAjeno.body.error, 'El viaje no existe');
+  const editar = await B('PUT', '/api/payments/yb', { ...base, from_person_id: 'pa' });
+  assert.equal(editar.status, 400);
+  assert.deepEqual(await filasDeGastos(db), antes);
+
+  // Control: el mismo abono entre personas propias sí se guarda.
+  assert.equal((await B('POST', '/api/payments', { ...base, id: 'yb-x' })).status, 201);
+});
+
+test('POST /api/order de B con ids de gastos de A no cambia su orden', async () => {
+  const { db, A, B } = await conGastos();
+  assert.equal((await A('POST', '/api/expenses', gasto({ id: 'ea2', trip_id: 'ta', description: 'otro' }))).status, 201);
+  assert.equal((await A('POST', '/api/order', { ids: ['ea2', 'ea'] })).status, 200);
+  const orden = () => db.all('SELECT id, sort_order FROM expenses ORDER BY id');
+  const antes = await orden();
+  assert.deepEqual(antes, [{ id: 'ea', sort_order: 1 }, { id: 'ea2', sort_order: 0 }, { id: 'eb', sort_order: null }]);
+
+  // Solo ids de A: no cambia nada y la respuesta es la de siempre.
+  const ajenos = await B('POST', '/api/order', { ids: ['ea', 'ea2'] });
+  assert.deepEqual([ajenos.status, ajenos.body], [200, { ok: true }]);
+  assert.deepEqual(await orden(), antes);
+
+  // Mezclados con uno propio y uno inexistente: solo el propio recibe su lugar (el 2.º de la lista).
+  const mezcla = await B('POST', '/api/order', { ids: ['ea', 'eb', 'no-existe', 'ea2'] });
+  assert.deepEqual([mezcla.status, mezcla.body], [200, { ok: true }]);
+  assert.deepEqual(await orden(), [{ id: 'ea', sort_order: 1 }, { id: 'ea2', sort_order: 0 }, { id: 'eb', sort_order: 1 }]);
+});
+
+test('DELETE de un gasto y un abono de A hecho por B no los borra', async () => {
+  const { db, A, B } = await conGastos();
+  const antes = await filasDeGastos(db);
+  assert.equal((await B('DELETE', '/api/expenses/ea')).status, 200);
+  assert.equal((await B('DELETE', '/api/payments/ya')).status, 200);
+  assert.deepEqual(await filasDeGastos(db), antes);
+  const sa = (await A('GET', '/api/state')).body;
+  assert.deepEqual(ids(sa.expenses), ['ea']);
+  assert.deepEqual(sa.expenses[0].beneficiary_ids, ['pa']);
+  assert.deepEqual(ids(sa.payments), ['ya']);
+
+  // Control: el dueño sí los borra, y con ellos sus beneficiarios.
+  assert.equal((await A('DELETE', '/api/expenses/ea')).status, 200);
+  assert.equal((await A('DELETE', '/api/payments/ya')).status, 200);
+  const despues = await filasDeGastos(db);
+  assert.deepEqual(ids(despues.expenses), ['eb']);
+  assert.deepEqual(ids(despues.payments), ['yb']);
+  assert.deepEqual(despues.beneficiaries, [{ expense_id: 'eb', person_id: 'pb' }]);
+});
+
+test('actualizar tasas en B no cambia los gastos de A', async () => {
+  _resetFailures();
+  const { db, A, B } = await conGastos();
+  const fila = async (id) => (await db.all('SELECT rate, rate_date, rate_source, amount_cents FROM expenses WHERE id = ?', [id]))[0];
+  const antesA = await db.all("SELECT * FROM expenses WHERE id = 'ea'");
+  assert.equal(antesA[0].rate, 4500);
+  assert.equal((await fila('eb')).rate, 5.5);
+  // La fuente trae otra tasa para los dos pares: si se mezclaran los espacios, A también cambiaría.
+  const fuente = { [DIA]: { eur: { cop: 4700 }, usd: { brl: 6 } } };
+
+  await withSource(fuente, async () => {
+    // Un viaje ajeno no existe para B.
+    const ajeno = await B('POST', '/api/rates/refresh', undefined, { trip: 'ta' });
+    assert.equal(ajeno.status, 400);
+    assert.equal(ajeno.body.error, 'El viaje no existe');
+    assert.equal((await fila('eb')).rate, 5.5);
+
+    // En seco: cuenta solo el gasto de B y no escribe nada.
+    const seco = await B('POST', '/api/rates/refresh', undefined, { dry: '1' });
+    assert.equal(seco.status, 200);
+    assert.deepEqual([seco.body.dry, seco.body.changed, seco.body.unchanged, seco.body.no_data], [true, 1, 0, 0]);
+    assert.equal((await fila('eb')).rate, 5.5);
+
+    // De verdad: cambia el gasto de B (5,5 a 6) y deja idéntico el de A.
+    const real = await B('POST', '/api/rates/refresh');
+    assert.equal(real.status, 200);
+    assert.deepEqual([real.body.dry, real.body.changed, real.body.unchanged, real.body.no_data], [false, 1, 0, 0]);
+    assert.equal((await fila('eb')).rate, 6);
+    assert.deepEqual(await db.all("SELECT * FROM expenses WHERE id = 'ea'"), antesA);
+  });
+  assert.equal((await db.all("SELECT rate FROM rates WHERE pair = 'EUR-COP' AND date = ?", [DIA]))[0].rate, 4500);
+
+  // Control: A actualiza lo suyo y deja el de B como estaba.
+  await withSource(fuente, async () => {
+    assert.equal((await A('POST', '/api/rates/refresh')).body.changed, 1);
+  });
+  assert.equal((await fila('ea')).rate, 4700);
+  assert.equal((await fila('eb')).rate, 6);
 });
