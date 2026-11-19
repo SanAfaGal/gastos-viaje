@@ -38,7 +38,10 @@ export async function dumpBackup(db) {
 
 // `fail(status, mensaje)` lanza el error HTTP (lo inyecta handlers.mjs para no depender de él).
 // Con dry=true solo cuenta lo que entraría; sin él, lo escribe.
-export async function restoreBackup(db, data, { dry, fail }) {
+// `sp` es el espacio de quien restaura: las personas, viajes y medios de pago nuevos quedan en él (sin espacio
+// no los vería nadie).
+export async function restoreBackup(db, data, { dry, fail, sp }) {
+  if (typeof sp !== 'string' || !sp) throw new Error('Falta el espacio');
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.app !== BACKUP_APP) {
     fail(400, 'Este archivo no es un respaldo de la app');
   }
@@ -103,7 +106,7 @@ export async function restoreBackup(db, data, { dry, fail }) {
   for (const p of people) {
     const name = str(p.name, 80, { required: true });
     if (!name?.trim()) bad('persona', p.id);
-    stmts.people.push({ sql: 'INSERT OR IGNORE INTO people (id, name) VALUES (?, ?)', args: [p.id, name.trim()] });
+    stmts.people.push({ sql: 'INSERT OR IGNORE INTO people (id, name, space_id) VALUES (?, ?, ?)', args: [p.id, name.trim(), sp] });
   }
 
   for (const t of trips) {
@@ -111,8 +114,8 @@ export async function restoreBackup(db, data, { dry, fail }) {
     if (!name?.trim() || !currencyByCode(t.dest_currency) || !currencyByCode(t.home_currency) || t.dest_currency === t.home_currency) bad('viaje', t.id);
     const created = str(t.created_at, 40) || new Date().toISOString();
     stmts.trips.push({
-      sql: 'INSERT OR IGNORE INTO trips (id, name, dest_currency, home_currency, created_at) VALUES (?, ?, ?, ?, ?)',
-      args: [t.id, name.trim(), t.dest_currency, t.home_currency, created],
+      sql: 'INSERT OR IGNORE INTO trips (id, name, dest_currency, home_currency, created_at, space_id) VALUES (?, ?, ?, ?, ?, ?)',
+      args: [t.id, name.trim(), t.dest_currency, t.home_currency, created, sp],
     });
   }
 
@@ -126,9 +129,9 @@ export async function restoreBackup(db, data, { dry, fail }) {
     if (m.color != null && m.color !== '' && !isHexColor(m.color)) bad('medio de pago', m.id);
     if (!known('people')(m.owner_person_id)) bad('el dueño de un medio de pago no existe', m.id);
     stmts.payment_methods.push({
-      sql: `INSERT OR IGNORE INTO payment_methods (id, kind, name, last4, card_type, owner_person_id, color, network)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      args: [m.id, m.kind, name.trim(), last4, m.card_type ?? null, m.owner_person_id, m.color || null, m.network ?? null],
+      sql: `INSERT OR IGNORE INTO payment_methods (id, kind, name, last4, card_type, owner_person_id, color, network, space_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [m.id, m.kind, name.trim(), last4, m.card_type ?? null, m.owner_person_id, m.color || null, m.network ?? null, sp],
     });
   }
 

@@ -175,13 +175,17 @@ test('sin APP_PASSCODE, un código de espacio activo entra a ese espacio', async
 
 test('cambiar APP_PASSCODE conserva el espacio administrador', async () => {
   const db = await openMemoryDb();
+  await crearEspacio(db);
+  const post = (passcode, body) => handle({ method: 'POST', path: '/api/people', body, passcode, ip: '1.1.1.1', db });
   await conPasscode('uno', async () => {
-    const r = await handle({ method: 'POST', path: '/api/people', body: { id: 'p1', name: 'Ana' }, passcode: 'uno', ip: '1.1.1.1', db });
-    assert.equal(r.status, 201);
+    assert.equal((await post('uno', { id: 'p1', name: 'Ana' })).status, 201);
+    assert.equal((await post(CODIGO_DE_PRUEBA, { id: 'p-otro', name: 'Beto' })).status, 201); // en otro espacio
   });
   await conPasscode('dos', async () => {
     assert.equal((await ping(db, 'dos')).body.space.id, 'space-admin');
     const state = await handle({ method: 'GET', path: '/api/state', passcode: 'dos', ip: '1.1.1.1', db });
-    assert.ok(state.body.people.some((p) => p.id === 'p1'));
+    assert.equal(state.body.space.id, 'space-admin');
+    assert.deepEqual(state.body.people.map((p) => p.id), ['p1']); // la suya sí, la del otro espacio no
+    assert.equal((await ping(db, 'uno', '2.2.2.2')).status, 401); // el código anterior ya no entra
   });
 });

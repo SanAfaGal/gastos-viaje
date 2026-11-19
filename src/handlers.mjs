@@ -9,17 +9,19 @@ import { dumpBackup, restoreBackup } from './backup.mjs';
 import { MapLinkError, resolveMapLink } from './maplink.mjs';
 import { HttpError, fail, text } from './errors.mjs';
 import { checkAuth } from './auth.mjs';
+import { assertNotForeign, owns, ownedIds } from './scope.mjs';
 
 // Topes para que un dato absurdo no desborde los cálculos (cents * rate debe quedar bajo 2^53).
 const MAX_CENTS = 5e9;
 
 // ---------- viajes ----------
 
-// Sin id devuelve el primero (el más antiguo): así responden las peticiones viejas que no traen viaje.
-async function getTrip(db, id) {
+// Viaje del espacio `sp`. Sin id devuelve el primero (el más antiguo) de ese espacio: así responden las
+// peticiones viejas que no traen viaje. Un viaje de otro espacio "no existe".
+async function getTrip(db, sp, id) {
   const rows = id
-    ? await db.all('SELECT * FROM trips WHERE id = ?', [id])
-    : await db.all('SELECT * FROM trips ORDER BY rowid LIMIT 1');
+    ? await db.all('SELECT * FROM trips WHERE id = ? AND space_id = ?', [id, sp])
+    : await db.all('SELECT * FROM trips WHERE space_id = ? ORDER BY rowid LIMIT 1', [sp]);
   if (!rows.length) fail(400, 'El viaje no existe');
   return rows[0];
 }
@@ -46,22 +48,21 @@ async function peopleInTripExpenses(db, tripId) {
   return new Set(rows.map((r) => r.p));
 }
 
-async function saveTrip(db, id, body) {
+async function saveTrip(db, sp, id, body) {
+  // Un id que ya es de otro espacio no se toca ni se copia: antes de validar nada, para no escribir nunca.
+  await assertNotForeign(db, 'trips', id, sp);
   const name = text(body.name, 'El nombre del viaje', { max: 40 });
   if (!currencyByCode(body.dest) || !currencyByCode(body.home)) fail(400, 'Moneda no válida');
   if (body.dest === body.home) fail(400, 'El país del viaje y tu moneda deben ser distintos');
 
-  const prev = (await db.all('SELECT * FROM trips WHERE id = ?', [id]))[0];
+  const prev = (await db.all('SELECT * FROM trips WHERE id = ? AND space_id = ?', [id, sp]))[0];
   let ids;
   if (Array.isArray(body.people_ids)) {
     ids = [...new Set(body.people_ids)];
-    if (ids.length) {
-      const found = await db.all(`SELECT id FROM people WHERE id IN (${ids.map(() => '?').join(',')})`, ids);
-      if (found.length !== ids.length) fail(400, 'Alguna persona no existe');
-    }
+    if (ids.length && (await ownedIds(db, 'people', ids, sp)).size !== ids.length) fail(400, 'Alguna persona no existe');
   } else {
-    // Sin lista: viaje nuevo con todas las personas; viaje existente, sin cambios.
-    ids = prev ? [...(await tripPeople(db, id))] : (await db.all('SELECT id FROM people')).map((p) => p.id);
+    // Sin lista: viaje nuevo con todas las personas del espacio; viaje existente, sin cambios.
+    ids = prev ? [...(await tripPeople(db, id))] : (await db.all('SELECT id FROM people WHERE space_id = ?', [sp])).map((p) => p.id);
   }
 
   if (prev) {
@@ -73,26 +74,32 @@ async function saveTrip(db, id, body) {
     const inUse = await peopleInTripExpenses(db, id);
     const names = [];
     for (const p of await tripPeople(db, id)) {
-      if (!keep.has(p) && inUse.has(p)) names.push((await db.all('SELECT name FROM people WHERE id = ?', [p]))[0]?.name ?? '¿?');
+      if (!keep.has(p) && inUse.has(p)) names.push((await db.all('SELECT name FROM people WHERE id = ? AND space_id = ?', [p, sp]))[0]?.name ?? '¿?');
     }
     if (names.length) fail(409, `No se puede quitar a ${names.join(', ')}: tiene gastos en este viaje`);
   }
 
+  // El espacio se fija al crear y nunca cambia; el WHERE del ON CONFLICT es una segunda barrera.
   await db.batch([
     {
-      sql: `INSERT INTO trips (id, name, dest_currency, home_currency, created_at) VALUES (?, ?, ?, ?, ?)
+      sql: `INSERT INTO trips (id, name, dest_currency, home_currency, created_at, space_id) VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET name = excluded.name,
-              dest_currency = excluded.dest_currency, home_currency = excluded.home_currency`,
-      args: [id, name, body.dest, body.home, new Date().toISOString()],
+              dest_currency = excluded.dest_currency, home_currency = excluded.home_currency
+            WHERE trips.space_id = excluded.space_id`,
+      args: [id, name, body.dest, body.home, new Date().toISOString(), sp],
     },
-    { sql: 'DELETE FROM trip_people WHERE trip_id = ?', args: [id] },
-    ...ids.map((p) => ({ sql: 'INSERT INTO trip_people (trip_id, person_id) VALUES (?, ?)', args: [id, p] })),
+    { sql: 'DELETE FROM trip_people WHERE trip_id IN (SELECT id FROM trips WHERE id = ? AND space_id = ?)', args: [id, sp] },
+    ...ids.map((p) => ({
+      sql: 'INSERT INTO trip_people (trip_id, person_id) SELECT id, ? FROM trips WHERE id = ? AND space_id = ?',
+      args: [p, id, sp],
+    })),
   ]);
   return { id, name, dest: body.dest, home: body.home, people_ids: ids };
 }
 
-async function deleteTrip(db, id, withExpenses) {
-  const trips = await db.all('SELECT id FROM trips');
+async function deleteTrip(db, sp, id, withExpenses) {
+  // Solo cuentan los viajes del espacio: un id ajeno no está en la lista y no pasa nada.
+  const trips = await db.all('SELECT id FROM trips WHERE space_id = ?', [sp]);
   if (!trips.some((t) => t.id === id)) return;
   if (trips.length === 1) fail(400, 'No se puede borrar el único viaje');
   const n = (await db.all('SELECT COUNT(*) AS n FROM expenses WHERE trip_id = ?', [id]))[0].n;
@@ -108,26 +115,30 @@ async function deleteTrip(db, id, withExpenses) {
 
 // ---------- personas ----------
 
-async function savePerson(db, id, body) {
+async function savePerson(db, sp, id, body) {
+  await assertNotForeign(db, 'people', id, sp);
   const name = text(body.name, 'El nombre');
-  const isNew = !(await db.all('SELECT id FROM people WHERE id = ?', [id])).length;
+  const isNew = !(await owns(db, 'people', id, sp));
+  // El viaje indicado se revisa antes de escribir: uno que no existe (o es de otro espacio) no deja la persona creada.
+  const trip = isNew && body.trip_id ? await getTrip(db, sp, body.trip_id) : null;
   await db.run(
-    'INSERT INTO people (id, name) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET name = excluded.name',
-    [id, name],
+    `INSERT INTO people (id, name, space_id) VALUES (?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET name = excluded.name WHERE people.space_id = excluded.space_id`,
+    [id, name, sp],
   );
-  // Una persona nueva entra en el viaje indicado; sin viaje, en todos. Al renombrar no se toca nada.
+  // Una persona nueva entra en el viaje indicado; sin viaje, en todos los del espacio. Al renombrar no se toca nada.
   if (isNew) {
-    if (body.trip_id) {
-      const trip = await getTrip(db, body.trip_id);
+    if (trip) {
       await db.run('INSERT OR IGNORE INTO trip_people (trip_id, person_id) VALUES (?, ?)', [trip.id, id]);
     } else {
-      await db.run('INSERT OR IGNORE INTO trip_people (trip_id, person_id) SELECT id, ? FROM trips', [id]);
+      await db.run('INSERT OR IGNORE INTO trip_people (trip_id, person_id) SELECT id, ? FROM trips WHERE space_id = ?', [id, sp]);
     }
   }
   return { id, name };
 }
 
-async function deletePerson(db, id) {
+async function deletePerson(db, sp, id) {
+  if (!(await owns(db, 'people', id, sp))) return; // no existe o es de otro espacio: nada que borrar
   const used = await db.all(
     `SELECT (SELECT COUNT(*) FROM payment_methods WHERE owner_person_id = ?) AS m,
             (SELECT COUNT(*) FROM expense_beneficiaries WHERE person_id = ?) AS b,
@@ -145,7 +156,8 @@ async function deletePerson(db, id) {
 
 // ---------- medios de pago ----------
 
-async function saveMethod(db, id, body) {
+async function saveMethod(db, sp, id, body) {
+  await assertNotForeign(db, 'payment_methods', id, sp);
   const kind = body.kind;
   if (!['card', 'pix', 'cash'].includes(kind)) fail(400, 'Tipo de medio de pago inválido');
   const name = text(body.name, 'El nombre');
@@ -172,21 +184,22 @@ async function saveMethod(db, id, body) {
     color = body.color;
   }
   if (!body.owner_person_id) fail(400, 'Elige de quién es el medio de pago');
-  const owner = await db.all('SELECT id FROM people WHERE id = ?', [body.owner_person_id]);
-  if (!owner.length) fail(400, 'El dueño no existe');
+  if (!(await owns(db, 'people', body.owner_person_id, sp))) fail(400, 'El dueño no existe');
   await db.run(
-    `INSERT INTO payment_methods (id, kind, name, last4, card_type, owner_person_id, color, network)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `INSERT INTO payment_methods (id, kind, name, last4, card_type, owner_person_id, color, network, space_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, name = excluded.name,
        last4 = excluded.last4, card_type = excluded.card_type,
        owner_person_id = excluded.owner_person_id,
-       color = excluded.color, network = excluded.network`,
-    [id, kind, name, last4, cardType, body.owner_person_id, color, network],
+       color = excluded.color, network = excluded.network
+     WHERE payment_methods.space_id = excluded.space_id`,
+    [id, kind, name, last4, cardType, body.owner_person_id, color, network, sp],
   );
   return { id, kind, name, last4, card_type: cardType, owner_person_id: body.owner_person_id, color, network };
 }
 
-async function deleteMethod(db, id) {
+async function deleteMethod(db, sp, id) {
+  if (!(await owns(db, 'payment_methods', id, sp))) return; // no existe o es de otro espacio: nada que borrar
   const used = await db.all('SELECT COUNT(*) AS n FROM expenses WHERE payment_method_id = ?', [id]);
   if (used[0].n > 0) fail(409, 'No se puede borrar: tiene gastos asociados');
   await db.run('DELETE FROM payment_methods WHERE id = ?', [id]);
@@ -194,7 +207,8 @@ async function deleteMethod(db, id) {
 
 // ---------- gastos ----------
 
-async function saveExpense(db, id, body) {
+// Recibe el espacio para buscar el viaje con getTrip; el resto del aislamiento de gastos llega aparte.
+async function saveExpense(db, sp, id, body) {
   if (!isValidDate(body.date)) fail(400, 'Fecha inválida');
   const cents = Number(body.amount_cents);
   if (!Number.isInteger(cents) || cents <= 0) fail(400, 'El monto debe ser mayor a cero');
@@ -204,7 +218,7 @@ async function saveExpense(db, id, body) {
   // Un gasto que ya existe conserva su viaje. Uno nuevo va al viaje indicado; sin viaje (colas guardadas antes
   // de que hubiera varios viajes) va al primero.
   const prevTrip = (await db.all('SELECT trip_id FROM expenses WHERE id = ?', [id]))[0]?.trip_id;
-  const trip = await getTrip(db, prevTrip ?? body.trip_id);
+  const trip = await getTrip(db, sp, prevTrip ?? body.trip_id);
   // Moneda del gasto: la del destino del viaje (se guarda vacía), la de casa o cualquier otra del catálogo.
   const blankCur = body.currency == null || body.currency === '';
   if (!blankCur && !currencyByCode(body.currency)) fail(400, 'Moneda no válida');
@@ -301,7 +315,7 @@ async function saveOrder(db, body) {
   return { ok: true };
 }
 
-async function deleteExpense(db, id) {
+async function deleteExpense(db, _sp, id) {
   await db.batch([
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     { sql: 'DELETE FROM expenses WHERE id = ?', args: [id] },
@@ -313,7 +327,8 @@ async function deleteExpense(db, id) {
 // los totales, solo descuenta del saldo entre las dos. Se guarda en la moneda en que se pagó, con la tasa de
 // su día, igual que los gastos (el monto en tu moneda sale al leer, ver getState).
 
-async function savePayment(db, id, body) {
+// Igual que saveExpense: el espacio sirve por ahora para buscar el viaje con getTrip.
+async function savePayment(db, sp, id, body) {
   if (!isValidDate(body.date)) fail(400, 'Fecha inválida');
   const cents = Number(body.amount_cents);
   if (!Number.isInteger(cents) || cents <= 0) fail(400, 'El monto debe ser mayor a cero');
@@ -321,7 +336,7 @@ async function savePayment(db, id, body) {
   const note = text(body.note, 'La nota', { max: 120, required: false });
 
   const prev = (await db.all('SELECT trip_id, created_at FROM payments WHERE id = ?', [id]))[0];
-  const trip = await getTrip(db, prev?.trip_id ?? body.trip_id);
+  const trip = await getTrip(db, sp, prev?.trip_id ?? body.trip_id);
   const blankCur = body.currency == null || body.currency === '';
   if (!blankCur && !currencyByCode(body.currency)) fail(400, 'Moneda no válida');
   const currency = blankCur || body.currency === trip.dest_currency ? null : body.currency;
@@ -352,14 +367,14 @@ async function savePayment(db, id, body) {
   return { id };
 }
 
-async function deletePayment(db, id) {
+async function deletePayment(db, _sp, id) {
   await db.run('DELETE FROM payments WHERE id = ?', [id]);
 }
 
 // "Actualizar tasas": revisa los gastos del viaje contra la tasa que hoy da la fuente para el día de cada uno.
 // Con ?dry=1 solo cuenta qué cambiaría; sin él corrige las tasas guardadas y los montos de esos gastos.
-async function refreshTripRates(db, query) {
-  const trip = await getTrip(db, query.get('trip'));
+async function refreshTripRates(db, sp, query) {
+  const trip = await getTrip(db, sp, query.get('trip'));
   const dry = query.get('dry') === '1';
   const settings = tripPair(trip);
   const digits = currencyByCode(settings.home).digits;
@@ -423,22 +438,24 @@ async function refreshTripRates(db, query) {
 //    día cerrado. Así lo que se guardó hoy con el valor provisional de la fuente se corrige solo desde mañana, sin
 //    pulsar "Actualizar tasas". No hace falta una marca aparte: la tabla rates solo guarda días cerrados, así que
 //    "la tasa del gasto es la de rates" ya significa "es la definitiva", y deja de revisarse sola.
-async function fillPendingRates(db) {
-  await fillPendingRatesOf(db, 'expenses');
-  await fillPendingRatesOf(db, 'payments'); // los abonos tienen moneda y tasa igual que los gastos
+// Solo revisa filas de los viajes del espacio `sp`.
+async function fillPendingRates(db, sp) {
+  await fillPendingRatesOf(db, sp, 'expenses');
+  await fillPendingRatesOf(db, sp, 'payments'); // los abonos tienen moneda y tasa igual que los gastos
 }
 
 // `table` es siempre una constante del código, nunca un dato de la petición.
-async function fillPendingRatesOf(db, table) {
+async function fillPendingRatesOf(db, sp, table) {
+  if (table !== 'expenses' && table !== 'payments') throw new Error(`Tabla no permitida: ${table}`);
   const rows = await db.all(
     `SELECT e.id, e.date, e.rate, e.rate_date, e.rate_source, COALESCE(e.currency, t.dest_currency) AS cur, t.home_currency
      FROM ${table} e JOIN trips t ON t.id = e.trip_id
-     WHERE COALESCE(e.currency, t.dest_currency) <> t.home_currency
+     WHERE t.space_id = ? AND COALESCE(e.currency, t.dest_currency) <> t.home_currency
        AND (e.rate IS NULL OR e.rate_date <> e.date
         OR (e.date < ? AND NOT EXISTS (SELECT 1 FROM rates r
             WHERE r.pair = COALESCE(e.currency, t.dest_currency) || '-' || t.home_currency AND r.date = e.date AND r.rate = e.rate)))
      ORDER BY e.date DESC LIMIT 8`,
-    [todayStr()],
+    [sp, todayStr()],
   );
   for (const e of rows) {
     const r = await resolveRate(db, e.date, { dest: e.cur, home: e.home_currency });
@@ -450,16 +467,21 @@ async function fillPendingRatesOf(db, table) {
   }
 }
 
-async function getState(db) {
-  await fillPendingRates(db);
+// Todo lo del espacio `sp` y nada más: los gastos, los abonos y los vínculos se filtran por su viaje.
+async function getState(db, sp, space) {
+  await fillPendingRates(db, sp);
   const [trips, tripLinks, people, methods, expenses, links, payments] = await Promise.all([
-    db.all('SELECT * FROM trips ORDER BY rowid'),
-    db.all('SELECT trip_id, person_id FROM trip_people'),
-    db.all('SELECT id, name FROM people ORDER BY name COLLATE NOCASE'),
-    db.all('SELECT id, kind, name, last4, card_type, owner_person_id, color, network FROM payment_methods ORDER BY name COLLATE NOCASE'),
-    db.all('SELECT * FROM expenses ORDER BY date DESC, created_at DESC'),
-    db.all('SELECT expense_id, person_id FROM expense_beneficiaries'),
-    db.all('SELECT * FROM payments ORDER BY date DESC, created_at DESC'),
+    db.all('SELECT * FROM trips WHERE space_id = ? ORDER BY rowid', [sp]),
+    db.all('SELECT tp.trip_id, tp.person_id FROM trip_people tp JOIN trips t ON t.id = tp.trip_id WHERE t.space_id = ?', [sp]),
+    db.all('SELECT id, name FROM people WHERE space_id = ? ORDER BY name COLLATE NOCASE', [sp]),
+    db.all('SELECT id, kind, name, last4, card_type, owner_person_id, color, network FROM payment_methods WHERE space_id = ? ORDER BY name COLLATE NOCASE', [sp]),
+    db.all('SELECT e.* FROM expenses e JOIN trips t ON t.id = e.trip_id WHERE t.space_id = ? ORDER BY e.date DESC, e.created_at DESC', [sp]),
+    db.all(
+      `SELECT eb.expense_id, eb.person_id FROM expense_beneficiaries eb
+       JOIN expenses e ON e.id = eb.expense_id JOIN trips t ON t.id = e.trip_id WHERE t.space_id = ?`,
+      [sp],
+    ),
+    db.all('SELECT p.* FROM payments p JOIN trips t ON t.id = p.trip_id WHERE t.space_id = ? ORDER BY p.date DESC, p.created_at DESC', [sp]),
   ]);
   const byExpense = new Map();
   for (const l of links) {
@@ -475,6 +497,7 @@ async function getState(db) {
   }
   return {
     today: todayStr(),
+    space: { id: space.id, name: space.name, is_admin: Boolean(space.is_admin) },
     trips: trips.map((t) => ({ id: t.id, name: t.name, dest: t.dest_currency, home: t.home_currency, people_ids: byTrip.get(t.id) ?? [] })),
     people,
     payment_methods: methods,
@@ -515,35 +538,35 @@ async function resolvePlaceLink(query) {
 export async function handle({ method, path, query = new URLSearchParams(), body, passcode, ip, db }) {
   try {
     const space = await checkAuth(db, passcode, ip);
-    const sp = space.id; // las funciones todavía no filtran por espacio (llega en las tareas siguientes)
+    const sp = space.id; // toda función de dominio recibe el espacio como segundo parámetro
     const parts = path.replace(/^\/api\/?/, '').split('/').filter(Boolean);
     const [resource, id] = parts;
-    const put = (fn) => fn(db, id ?? body?.id ?? randomUUID(), body ?? {});
+    const put = (fn) => fn(db, sp, id ?? body?.id ?? randomUUID(), body ?? {});
     const ok = (data, status = 200) => ({ status, body: data });
 
     if (resource === 'ping' && method === 'GET') return ok({ ok: true, space });
-    if (resource === 'state' && method === 'GET') return ok(await getState(db));
+    if (resource === 'state' && method === 'GET') return ok(await getState(db, sp, space));
 
     if (resource === 'trips') {
       if (method === 'POST' && !id) return ok(await put(saveTrip), 201);
       if (method === 'PUT' && id) return ok(await put(saveTrip));
       if (method === 'DELETE' && id) {
-        await deleteTrip(db, id, query.get('con_gastos') === '1');
+        await deleteTrip(db, sp, id, query.get('con_gastos') === '1');
         return ok({ ok: true });
       }
     }
 
-    // Las tasas dependen de las monedas del viaje (?trip=); sin viaje se usa el primero.
+    // Las tasas dependen de las monedas del viaje (?trip=); sin viaje se usa el primero del espacio.
     if (resource === 'rates' && id === 'history' && method === 'GET') {
-      return ok(await rateHistory(db, tripPair(await getTrip(db, query.get('trip'))), Number(query.get('days'))));
+      return ok(await rateHistory(db, tripPair(await getTrip(db, sp, query.get('trip'))), Number(query.get('days'))));
     }
 
-    if (resource === 'rates' && id === 'refresh' && method === 'POST') return ok(await refreshTripRates(db, query));
+    if (resource === 'rates' && id === 'refresh' && method === 'POST') return ok(await refreshTripRates(db, sp, query));
 
     if (resource === 'rate' && method === 'GET') {
       const date = query.get('date') ?? todayStr();
       if (!isValidDate(date)) fail(400, 'Fecha inválida');
-      const pair = tripPair(await getTrip(db, query.get('trip')));
+      const pair = tripPair(await getTrip(db, sp, query.get('trip')));
       const cur = query.get('currency'); // moneda del gasto si no es la del destino del viaje
       if (cur) {
         if (!currencyByCode(cur)) fail(400, 'Moneda no válida');
@@ -559,7 +582,7 @@ export async function handle({ method, path, query = new URLSearchParams(), body
 
     // Respaldo: copia cruda de todas las tablas. Restaurar solo agrega lo que falta (con ?dry=1 solo cuenta).
     if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db));
-    if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail }));
+    if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail, sp }));
 
     const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense], payments: [savePayment, deletePayment] };
     if (writers[resource]) {
@@ -567,7 +590,7 @@ export async function handle({ method, path, query = new URLSearchParams(), body
       if (method === 'POST' && !id) return ok(await put(saver), 201);
       if (method === 'PUT' && id) return ok(await put(saver));
       if (method === 'DELETE' && id) {
-        await deleter(db, id);
+        await deleter(db, sp, id);
         return ok({ ok: true });
       }
     }
