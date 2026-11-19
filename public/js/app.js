@@ -10,13 +10,13 @@ import { PENDING, activeCount as countFilters, applyFilters, filtersOff, isFilte
 import { MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 import { breakdown, byDay, summary } from './stats.mjs';
-import { formatDistance, googleMapsUrl, isBareShortPlusCode, isShortMapLink, parseCoordinates, parsePlusCode, reverseAddress, searchPlaces, shortPlusCodeWithPlace } from './geosearch.mjs';
+import { googleMapsUrl, isBareShortPlusCode, isShortMapLink, parseCoordinates, parsePlusCode, reverseAddress, searchPlaces, shortPlusCodeWithPlace } from './geosearch.mjs';
 import { PICK_MIN_ZOOM, TAP_ZOOM, buildList, confirmPlace, selectionSummary } from './picker.mjs';
 import { icon } from './icons.mjs';
 import { initSelects } from './select.mjs';
 import { readPosition, zoomForAccuracy } from './geolocate.mjs';
 import { openDatePicker } from './datepicker.mjs';
-import { knownPlaces, placeIcon, recentPlaces, visitedPlaces } from './nearby.mjs';
+import { knownPlaces, recentPlaces, visitedPlaces } from './nearby.mjs';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -1410,22 +1410,16 @@ const pk = {
 
 const pickSel = () => pk.items.find((i) => i.key === pk.selKey) ?? null;
 
-// Una fila de la lista: número (el mismo del mapa), nombre, detalle, distancia y una marca si es la elegida.
+// Una fila de la lista: número (el mismo del mapa), nombre, detalle y una marca si es la elegida.
 function rowHtml(c, i, attr = 'data-i') {
   const sel = c.key === pk.selKey;
   const point = c.kind === 'point';
   const where = selectionSummary({ ...c, name: '' });
   const name = point ? 'Este punto' : (c.name || 'Sin nombre');
-  const sub = point ? `${where.title} · ${where.sub}`
-    : c.kind === 'known' ? `✓ Ya lo usaste · ${c.count} gasto${c.count === 1 ? '' : 's'}`
-    : `${c.detail || formatCoords(c.lat, c.lng)}${c.approx ? ' · posición aproximada' : ''}`;
-  // El icono del tipo de sitio es HTML y va aparte: el texto se escapa y, si el icono estuviera dentro, saldría escrito como "<svg…".
-  const lead = !point && c.kind !== 'known' && c.kind ? `${placeIcon(c.kind)} ` : '';
-  const badge = point ? `<span class="pk-ico" aria-hidden="true">${icon('mappin')}</span>`
-    : `<span class="stop-n${c.kind === 'known' ? '' : ' last'}" aria-hidden="true">${c.n ?? '•'}</span>`;
-  const km = !point && c.km != null ? `<span class="pick-km">${esc(formatDistance(c.km))}</span>` : '';
-  return `<button type="button" class="pick-res${sel ? ' sel' : ''}${point ? '' : c.kind === 'known' ? ' known' : ' near'}" ${attr}="${i}" aria-pressed="${sel}">${badge}
-    <span class="sug-txt"><b>${esc(name)}</b><span class="muted">${lead}${esc(sub)}</span></span>${km}<span class="pk-tick" aria-hidden="true">✓</span></button>`;
+  const sub = point ? `${where.title} · ${where.sub}` : `✓ Ya lo usaste · ${c.count} gasto${c.count === 1 ? '' : 's'}`;
+  const badge = point ? `<span class="pk-ico" aria-hidden="true">${icon('mappin')}</span>` : `<span class="stop-n" aria-hidden="true">${c.n ?? '•'}</span>`;
+  return `<button type="button" class="pick-res${sel ? ' sel' : ''}${point ? '' : ' known'}" ${attr}="${i}" aria-pressed="${sel}">${badge}
+    <span class="sug-txt"><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span><span class="pk-tick" aria-hidden="true">✓</span></button>`;
 }
 
 function idleHtml() {
@@ -1470,7 +1464,7 @@ function visitedHtml() {
 }
 
 function paintPick() {
-  pk.items = buildList({ anchor: pk.anchor, known: pk.known, nearby: [], typed: pk.typed });
+  pk.items = buildList({ anchor: pk.anchor, known: pk.known, typed: pk.typed });
   if (!pk.items.some((i) => i.key === pk.selKey)) pk.selKey = 'point';
   const top = $pickPanel.scrollTop;
   const mode = pk.visitedOpen ? 'visited' : pk.anchor ? 'anchor' : 'idle';
@@ -1531,9 +1525,9 @@ function selectPick(i) {
 }
 
 // Fija el ancla y arma la lista: "Este punto" y los lugares que ya usaste cerca (al instante, sin red).
-function setAnchor(at, { source, accuracy = null, name = '', approx = false } = {}) {
+function setAnchor(at, { source, name = '' } = {}) {
   Object.assign(pk, {
-    anchor: { lat: at.lat, lng: at.lng, source, accuracy, approx }, typed: name, selKey: 'point', known: knownPlaces(ctx().expenses, at),
+    anchor: { lat: at.lat, lng: at.lng, source }, typed: name, selKey: 'point', known: knownPlaces(ctx().expenses, at),
     note: '', touched: false, visitedOpen: false,
   });
   pk.ctl?.abort();
