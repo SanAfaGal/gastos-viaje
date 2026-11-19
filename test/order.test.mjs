@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { compareChronological, compareExpenses, moveItem, sameOrder } from '../public/js/order.mjs';
+import { compareChronological, compareExpenses, moveItem, newestFirst, sameOrder } from '../public/js/order.mjs';
 
 const e = (id, date, created_at, sort_order) => ({ id, date, created_at, sort_order });
 
@@ -18,6 +18,14 @@ test('orden manual manda sobre la hora; los nuevos sin orden van al final del d�
 test('sin orden manual se respeta la hora de creación y, si empata, el id', () => {
   const list = [e('z', '2026-11-10', '1'), e('y', '2026-11-10', '1')];
   assert.deepEqual([...list].sort(compareExpenses).map((x) => x.id), ['y', 'z']);
+});
+
+test('newestFirst invierte sin tocar el original y se deshace a sí mismo', () => {
+  const stored = ['a', 'b', 'c'];
+  assert.deepEqual(newestFirst(stored), ['c', 'b', 'a']);
+  assert.deepEqual(stored, ['a', 'b', 'c']);
+  assert.deepEqual(newestFirst(newestFirst(stored)), stored);
+  assert.deepEqual(newestFirst([]), []);
 });
 
 test('moveItem y sameOrder', () => {

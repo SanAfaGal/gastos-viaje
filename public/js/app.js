@@ -5,7 +5,7 @@ import { CURRENCIES, DEFAULT_SETTINGS, currencyByCode } from './currencies.mjs';
 import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, isHexColor, suggestColor } from './cards.mjs';
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
 import { formatCoords, hasLocation, routeFrom } from './places.mjs';
-import { compareChronological, sameOrder } from './order.mjs';
+import { compareChronological, newestFirst, sameOrder } from './order.mjs';
 import { MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 import { breakdown, byDay, summary } from './stats.mjs';
@@ -420,6 +420,7 @@ function viewList() {
     if (days.at(-1)?.date !== e.date) days.push({ date: e.date, items: [] });
     days.at(-1).items.push(e);
   }
+  for (const d of days) d.items = newestFirst(d.items); // en pantalla el último gasto del día va arriba
   return `
     <div class="card sum">
       <div class="sum-top"><h2>${filtered ? 'Con filtros' : 'Todos los gastos'}</h2>
@@ -2441,7 +2442,7 @@ function dragEnd(commit) {
   suppressClick = true; // el clic que sigue a soltar no debe abrir el gasto
   setTimeout(() => { suppressClick = false; }, 350);
   const ids = [...st.card.querySelectorAll('.item[data-id]')].map((el) => el.dataset.id);
-  if (commit && !sameOrder(ids, st.ids)) store.saveOrder(ids, `${store.activeTrip().id}:${st.card.dataset.day}`);
+  if (commit && !sameOrder(ids, st.ids)) store.saveOrder(newestFirst(ids),`${store.activeTrip().id}:${st.card.dataset.day}`);
   else render(); // cancelado o sin cambios: se restaura la lista
 }
 
@@ -2531,7 +2532,7 @@ $view.addEventListener('keydown', (ev) => {
   const to = from + (ev.key === 'ArrowUp' ? -1 : 1);
   if (to < 0 || to >= ids.length) return;
   [ids[from], ids[to]] = [ids[to], ids[from]];
-  store.saveOrder(ids, `${store.activeTrip().id}:${card.dataset.day}`);
+  store.saveOrder(newestFirst(ids),`${store.activeTrip().id}:${card.dataset.day}`);
   announce(`Movido a la posición ${to + 1} de ${ids.length}`);
 });
 

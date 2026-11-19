@@ -1,8 +1,9 @@
 // Orden de los gastos. Módulo puro (sin DOM): lo usan el navegador y las pruebas.
 //
-// Los días van del más reciente al más antiguo. Dentro de un día el orden es cronológico: primero el que
-// se hizo antes. Si el día se ordenó a mano (sort_order), manda ese orden; los gastos nuevos, que aún no
+// Los días van del más reciente al más antiguo. Dentro de un día el orden guardado es cronológico: primero el
+// que se hizo antes. Si el día se ordenó a mano (sort_order), manda ese orden; los gastos nuevos, que aún no
 // tienen sort_order, van al final del día por su hora de creación.
+// En pantalla cada día se muestra al revés (el último gasto arriba, el primero abajo): ver `newestFirst`.
 
 // Orden dentro de un mismo día.
 function compareInDay(a, b) {
@@ -18,6 +19,10 @@ export const compareExpenses = (a, b) => (a.date === b.date ? compareInDay(a, b)
 
 // Del más antiguo al más reciente (CSV, mapa).
 export const compareChronological = (a, b) => (a.date === b.date ? compareInDay(a, b) : String(a.date).localeCompare(String(b.date)));
+
+// Orden guardado (cronológico) <-> orden en pantalla (último arriba). Es su propia inversa: sirve para pintar
+// la lista y también para volver a convertir lo que quedó en pantalla antes de guardar el orden.
+export const newestFirst = (list) => [...list].reverse();
 
 // Mueve el elemento de la posición `from` a la posición `to` sin tocar el arreglo original.
 export function moveItem(list, from, to) {
