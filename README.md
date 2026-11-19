@@ -66,7 +66,14 @@ El esquema se actualiza solo: la primera petición después de desplegar corre l
 
 ## Cómo está armado
 
-- `public/`: la app (HTML, CSS, JS, service worker, manifest). `public/js/app.js` son las pantallas y `public/js/store.js` la copia local, la cola de gastos sin enviar y las llamadas a la API.
+- `public/`: la app (HTML, CSS, JS, service worker, manifest). Los estilos están en `css/app.css` (base, formularios, menús) y `css/screens.css` (mapas, selector de lugar, medios de pago, inicio). Ningún archivo pasa de 700 líneas (lo comprueba `test/shell.test.mjs`).
+- `public/js/store.js`: la copia local, la cola de gastos sin enviar y las llamadas a la API.
+- Pantallas y diálogos (módulos con DOM, uno por tema, sin herramienta de empaquetado):
+  - `app.js`: arranque; llama a los `init…` de cada módulo y dibuja la primera pantalla.
+  - `ui.js` (avisos, ayuda, candado de acciones), `shared.js` (contexto del viaje, estado y fila de cada gasto), `router.js` (rutas, `render`, cambio de viaje, sincronización) y `events.js` (clics por acción, escritura y envío de formularios).
+  - `view-home.js` (inicio y gráfico de la tasa), `view-list.js` (gastos, filtros y reordenar arrastrando), `view-form.js` (formulario de gasto), `view-accounts.js` (cuentas y abonos), `view-settings.js` (ajustes), `view-map.js` (mapa del viaje) y `place-picker.js` (diálogo "Lugar del gasto").
+  - Un módulo nuevo debe agregarse a la lista `SHELL` de `sw.js` (si no, falla `test/shell.test.mjs`) y, si se carga al abrir, a la precarga de `index.html`.
+  - El estado que comparten varios módulos (`draft`, `payOpen`…) vive en el módulo que lo declara; quien lo cambia desde otro módulo usa su función `set…`.
 - Módulos sin DOM que usan el navegador y las pruebas: `settlement.mjs` (cuentas), `money.mjs` y `currencies.mjs` (dinero y monedas), `stats.mjs` (resumen del Inicio), `order.mjs` (orden de los gastos), `places.mjs` (recorrido del mapa), `geosearch.mjs` (búsqueda de lugares), `nearby.mjs` (lugares usados y sitios cercanos), `picker.mjs` (lógica del diálogo “Lugar del gasto”), `chart.mjs` (gráfico de la tasa) y `cards.mjs` (aspecto de las tarjetas).
 - `src/handlers.mjs`: la API. `src/db.mjs`: SQLite local (`node:sqlite`) o Turso, con migración de bases antiguas. `src/rates.mjs`: tasas. `src/backup.mjs`: respaldo y restauración.
 - `server.mjs`: servidor local. `netlify/functions/api.mjs`: la misma API en Netlify.
