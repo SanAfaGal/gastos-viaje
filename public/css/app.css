@@ -227,6 +227,25 @@ dialog.info .chart { margin-top: 12px; }
 .amount-hero .switch.on { background: var(--warn-bg); color: var(--warn-text); border-color: transparent; }
 .fcard { padding: 14px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
 .fcard .lab-row { margin: 0 0 10px; }
+/* Fila compacta (Cuándo): la etiqueta a la izquierda y los chips al lado, en una sola línea cuando caben. */
+.fcard.frow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; }
+.fcard.frow .flab { margin: 0; }
+.fcard.frow .chips { flex: 1; min-width: 0; }
+.flab .opt { font-weight: 500; letter-spacing: 0; text-transform: none; }
+/* Error junto al campo: aviso con borde y color de error, que no depende solo del color (lleva texto y el foco va al campo). */
+.ferr { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; border-left: 4px solid var(--neg); background: color-mix(in srgb, var(--neg) 12%, var(--surface)); color: var(--text); font-size: .88rem; font-weight: 600; }
+.ferr[hidden] { display: none; }
+[aria-invalid="true"] { outline: 2px solid var(--neg); outline-offset: 3px; border-radius: 12px; }
+/* Zonas táctiles de 44 px en el formulario (antes 32 a 38 px). */
+.xform .chip, .xform .loc-chip { min-height: 44px; display: inline-flex; align-items: center; justify-content: center; }
+.xform .cur-chips .chip, .xform .date-chips .chip, .xform .owner-f .chip { min-height: 44px; }
+/* Una tarjeta con varias filas (cuándo, descripción, dónde): se separan con una línea fina en vez de ser tarjetas sueltas casi vacías. */
+.fcard .fsub + .fsub { margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border); }
+.fcard .fsub .flab { margin-bottom: 8px; }
+.fcard .fsub .lab-row { margin: 0 0 8px; }
+.fcard .loc-box.empty { padding: 0; border: 0; background: none; gap: 10px; }
+.loc-pick { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; margin: 0; }
+.loc-pick .muted { font-weight: 400; }
 .flab { display: block; margin: 0 0 8px; font-size: .75rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
 .fcard .lab-row .flab { margin: 0; }
 .fcard .loc-box { border-style: solid; border-color: var(--border); background: var(--surface-2); }
@@ -280,8 +299,8 @@ dialog.info .chart { margin-top: 12px; }
 .pay-end { display: flex; align-items: center; gap: 10px; flex: none; }
 .sel-foot .btn.secondary { flex: none; }
 /* Día: Hoy / Ayer / otro día. */
-.date-chips { margin-bottom: 12px; }
-.date-chips .chip { min-height: 38px; display: inline-flex; align-items: center; gap: 4px; }
+.date-chips { margin-bottom: 0; }
+.date-chips .chip { display: inline-flex; align-items: center; gap: 4px; }
 /* ¿Para quién? plegado en una línea. */
 .benes-sum { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .avs { display: flex; flex: none; }

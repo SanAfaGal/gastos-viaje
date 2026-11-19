@@ -541,6 +541,7 @@ function cardsHtml(c) {
 }
 
 function paintCards() {
+  clearFieldError('method');
   const c = ctx();
   const box = document.getElementById('cards');
   if (!box || !draft) return;
@@ -576,32 +577,40 @@ function viewForm(editId) {
           <span class="lab-tools"><button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx"><span class="track" aria-hidden="true"></span>Aproximado</button>
             ${infoBtn('approx', 'Monto aproximado')}</span>
         </div>
-        <input id="amount" class="amount" inputmode="decimal" placeholder="0,00" value="${esc(draft.amountText)}">
+        <input id="amount" class="amount" inputmode="decimal" enterkeyhint="done" placeholder="0,00" value="${esc(draft.amountText)}" aria-describedby="err-amount">
+        <p class="ferr" id="err-amount" role="alert" hidden></p>
         <div class="chips cur-chips" id="cur" role="radiogroup" aria-label="Moneda del gasto">${curHtml()}</div>
         <div class="conv-row"><div class="conv" id="conv"></div>${infoBtn('rate', 'Tasa de cambio e historial')}</div>
       </section>
 
-      <section class="fcard" aria-labelledby="when-l">
-        <div class="lab-row"><span class="flab" id="when-l">Cuándo y dónde</span>${infoBtn('loc', 'Ubicación')}</div>
-        <div class="chips date-chips" id="dates" role="group" aria-label="Día del gasto">${dateHtml()}</div>
-        <div id="loc" class="loc" role="group" aria-label="Lugar del gasto">${locHtml()}</div>
+      <section class="fcard frow" aria-labelledby="when-l">
+        <span class="flab" id="when-l">Cuándo</span>
+        <div class="chips date-chips" id="dates" role="group" aria-labelledby="when-l">${dateHtml()}</div>
       </section>
 
       <section class="fcard" aria-labelledby="cards-l">
         <div class="lab-row"><span class="flab" id="cards-l">Pagado con</span>${infoBtn('pay', 'Pagado con')}</div>
         ${ownerFilterHtml(c)}
-        <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">${cardsHtml(c)}</div>
+        <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l" aria-describedby="err-method">${cardsHtml(c)}</div>
         <div class="cards-dots" id="cards-dots" role="group" aria-label="Medios de pago disponibles"></div>
+        <p class="ferr" id="err-method" role="alert" hidden></p>
       </section>
 
       <section class="fcard" aria-labelledby="benes-l">
         <div class="lab-row"><span class="flab" id="benes-l">¿Para quién es?</span>${infoBtn('who', 'Para quién es')}</div>
-        <div id="benes" role="group" aria-labelledby="benes-l">${benesHtml(c)}</div>
+        <div id="benes" role="group" aria-labelledby="benes-l" aria-describedby="err-benes">${benesHtml(c)}</div>
+        <p class="ferr" id="err-benes" role="alert" hidden></p>
       </section>
 
-      <section class="fcard">
-        <label class="flab" for="desc">Descripción</label>
-        <input id="desc" maxlength="120" placeholder="Almuerzo, Uber, entradas…" value="${esc(draft.desc)}">
+      <section class="fcard" aria-label="Detalles del gasto">
+        <div class="fsub">
+          <label class="flab" for="desc">Descripción <span class="opt">(opcional)</span></label>
+          <input id="desc" maxlength="120" placeholder="Almuerzo, Uber, entradas…" value="${esc(draft.desc)}">
+        </div>
+        <div class="fsub">
+          <div class="lab-row"><span class="flab" id="where-l">Dónde <span class="opt">(opcional)</span></span>${infoBtn('loc', 'Ubicación')}</div>
+          <div id="loc" class="loc" role="group" aria-labelledby="where-l">${locHtml()}</div>
+        </div>
       </section>
 
       <button class="btn" type="submit" data-then="list">${draft.id ? 'Guardar cambios' : 'Guardar'}</button>
@@ -613,7 +622,7 @@ function viewForm(editId) {
       ${infoDialog('pay', 'Pagado con', 'Elige con qué se pagó. Si no lo sabes, elige «Por definir» y lo completas después; ese gasto no entra en las cuentas hasta entonces.')}
       ${infoDialog('who', '¿Para quién es?', 'El gasto se divide en partes iguales entre las personas marcadas. «Todos» marca a todas las del viaje.')}
       ${infoDialog('approx', 'Monto aproximado', 'Márcalo si el monto es redondeado y hay que ajustarlo después. El gasto queda con la etiqueta «Monto aproximado» y puedes filtrarlos.')}
-      ${infoDialog('loc', 'Ubicación', 'Opcional. Sirve para ver en el mapa dónde gastaste.')}
+      ${infoDialog('loc', 'Ubicación', 'Opcional. Sirve para ver en el mapa dónde gastaste. Va al final del formulario para que, mientras llenas lo demás, el celular ya vaya ubicándote y al elegir el lugar tu punto aparezca de una vez.')}
     </form>`;
 }
 
@@ -656,6 +665,7 @@ function benesHtml(c) {
 }
 
 function paintBenes() {
+  clearFieldError('benes');
   const el = document.getElementById('benes');
   if (el && draft) el.innerHTML = benesHtml(ctx());
 }
@@ -829,12 +839,38 @@ function updateConv(loaded = false) {
   void c;
 }
 
+// Error de un campo del formulario: el mensaje sale junto al campo (y lo anuncia el lector de pantalla), el campo se marca como inválido y el foco
+// va a él. Se limpia solo en cuanto el valor cambia (clearFieldError). `target` es el control que recibe el foco.
+const FIELD_ERRORS = { amount: ['amount', '#amount'], method: ['cards', '#cards .pitem.on, #cards .pitem[data-action]'], benes: ['benes', '#benes button'] };
+function fieldError(field, message) {
+  const [boxId, focusSel] = FIELD_ERRORS[field];
+  const msg = document.getElementById(`err-${field}`);
+  if (msg) { msg.textContent = message; msg.hidden = false; }
+  document.getElementById(boxId)?.setAttribute('aria-invalid', 'true');
+  const target = document.querySelector(focusSel);
+  target?.focus();
+  target?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+}
+function clearFieldError(field) {
+  const [boxId] = FIELD_ERRORS[field];
+  const msg = document.getElementById(`err-${field}`);
+  if (msg) { msg.textContent = ''; msg.hidden = true; }
+  document.getElementById(boxId)?.removeAttribute('aria-invalid');
+}
+
 async function submitForm(then) {
   if (!draft) return;
+  for (const f of Object.keys(FIELD_ERRORS)) clearFieldError(f);
   const cents = parseAmount(draft.amountText);
-  if (!cents) return toast('Escribe un monto válido', 'error');
-  if (!draft.method) return toast('Elige con qué se pagó', 'error');
-  if (!draft.benes.size) return toast('Elige para quién es el gasto', 'error');
+  // Se avisan todos los que falten (no solo el primero) y el foco va al primero.
+  const missing = [];
+  if (!cents) missing.push(['amount', 'Escribe un monto válido.']);
+  if (!draft.method) missing.push(['method', 'Elige con qué se pagó, o “Por definir” si no lo sabes.']);
+  if (!draft.benes.size) missing.push(['benes', 'Elige para quién es el gasto.']);
+  if (missing.length) {
+    for (const [f, m] of [...missing].reverse()) fieldError(f, m); // el foco queda en el primero
+    return;
+  }
   const exp = {
     id: draft.id ?? store.uuid(),
     date: draft.date,
@@ -2183,6 +2219,7 @@ $view.addEventListener('click', async (ev) => {
   }
   else if (action === 'pick-method') {
     draft.method = id;
+    clearFieldError('method');
     document.querySelectorAll('#cards .pitem').forEach((b) => {
       const on = b === t;
       b.classList.toggle('on', on);
@@ -2377,7 +2414,7 @@ $view.addEventListener('scroll', (ev) => { // el evento scroll no sube: se escuc
 
 $view.addEventListener('input', (ev) => {
   const id = ev.target.id;
-  if (id === 'amount') { draft.amountText = ev.target.value; updateConv(); }
+  if (id === 'amount') { draft.amountText = ev.target.value; clearFieldError('amount'); updateConv(); }
   else if (id === 'desc') draft.desc = ev.target.value;
   else if (id === 'f-q') { filters.q = ev.target.value; const pos = ev.target.selectionStart; render(); const el = document.getElementById('f-q'); el.focus(); el.setSelectionRange(pos, pos); }
   else if (id.startsWith('m-')) onMethodForm(id);
