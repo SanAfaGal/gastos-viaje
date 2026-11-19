@@ -77,7 +77,7 @@ async function request(method, path, body, extraHeaders = {}) {
 
 // ---------- estado ----------
 
-let server = read(K.state, { today: todayStr(), trips: [], people: [], payment_methods: [], expenses: [] });
+let server = read(K.state, { today: todayStr(), trips: [], people: [], payment_methods: [], expenses: [], payments: [] });
 let serverJson = JSON.stringify(server); // para saber si lo que llega del servidor cambió algo
 // Cola guardada por la primera versión (solo BRL): mismos datos con el nombre de campo nuevo.
 let queue = read(K.queue, []).map((o) => {
@@ -259,7 +259,9 @@ export function getState() {
   const expenses = all.filter((e) => e.trip_id === trip.id);
   expenses.sort(compareExpenses);
   const going = new Set(trip.people_ids);
-  return { ...server, trips, trip, expenses, counts, participants: server.people.filter((p) => going.has(p.id)) };
+  // Abonos del viaje activo, el más reciente primero. Se guardan con internet (como las personas), no pasan por la cola.
+  const payments = (server.payments ?? []).filter((x) => (x.trip_id ?? trips[0].id) === trip.id);
+  return { ...server, trips, trip, expenses, payments, counts, participants: server.people.filter((p) => going.has(p.id)) };
 }
 
 export const pendingCount = () => queue.length;
@@ -334,6 +336,9 @@ export const savePerson = (p) => mutate(p.id ? 'PUT' : 'POST', p.id ? `/api/peop
 export const deletePerson = (id) => mutate('DELETE', `/api/people/${id}`);
 export const saveMethod = (m) => mutate(m.id ? 'PUT' : 'POST', m.id ? `/api/payment-methods/${m.id}` : '/api/payment-methods', m);
 export const deleteMethod = (id) => mutate('DELETE', `/api/payment-methods/${id}`);
+// Abonos entre personas (quién le pagó a quién). Requieren internet: la tasa del día se resuelve en el servidor.
+export const savePayment = (p) => mutate(p.id ? 'PUT' : 'POST', p.id ? `/api/payments/${p.id}` : '/api/payments', { ...p, trip_id: p.trip_id ?? activeTrip().id });
+export const deletePayment = (id) => mutate('DELETE', `/api/payments/${id}`);
 // Botón "Actualizar tasas". Con dry=true solo cuenta qué cambiaría. Al aplicarlo se olvidan las tasas guardadas
 // en el celular de este par y se vuelve a leer todo del servidor.
 export async function refreshRatesNow(dry) {

@@ -130,7 +130,7 @@ test('deshacer un borrado: el gasto vuelve con su hora de creación y su lugar e
   }
 });
 
-// Base con datos para el respaldo: dos personas, dos viajes, dos medios y tres gastos (uno con medio por definir).
+// Base con datos para el respaldo: dos personas, dos viajes, dos medios, tres gastos (uno con medio por definir) y un abono.
 async function seedBackupDb() {
   const db = await openMemoryDb();
   const call = caller(db);
@@ -143,6 +143,7 @@ async function seedBackupDb() {
   await call('POST', '/api/expenses', { ...base, id: 'e1', date: '2026-11-10', description: 'Cena', lat: -8.05, lng: -34.9, place: 'Recife' });
   await call('POST', '/api/expenses', { ...base, id: 'e2', date: '2026-11-11', description: 'Taxi', payment_method_id: 'efe', amount_approx: true });
   await call('POST', '/api/expenses', { ...base, id: 'e3', date: '2026-11-11', description: 'Pendiente', payment_method_id: null });
+  await call('POST', '/api/payments', { id: 'p1', date: '2026-11-11', amount_cents: 10000, from_person_id: 'leo', to_person_id: 'ana', note: 'Pix' });
   await call('POST', '/api/trips', { id: 'trip-2', name: 'México', dest: 'MXN', home: 'COP', people_ids: ['ana'] });
   return { db, call };
 }
@@ -153,7 +154,7 @@ test('respaldo: copia cruda de las tablas, con los gastos por definir', async ()
   assert.equal(res.status, 200);
   const b = res.body;
   assert.deepEqual([b.app, b.version], ['gastos-viaje', 1]);
-  assert.deepEqual([b.people.length, b.trips.length, b.payment_methods.length, b.expenses.length, b.expense_beneficiaries.length], [2, 2, 2, 3, 6]);
+  assert.deepEqual([b.people.length, b.trips.length, b.payment_methods.length, b.expenses.length, b.expense_beneficiaries.length, b.payments.length], [2, 2, 2, 3, 6, 1]);
   assert.equal(b.expenses.find((e) => e.id === 'e3').pay_pending, 1); // el relleno interno viaja en el respaldo
 });
 
@@ -166,7 +167,7 @@ test('restaurar: en una base vacía recupera todo; con dry solo cuenta y no escr
   await db.run('DELETE FROM trips'); // arranque vacío: sin el "Viaje 1" que crea la migración
 
   const dry = (await call('POST', '/api/restore', backup, { dry: '1' })).body;
-  assert.deepEqual(dry.add, { trips: 2, people: 2, payment_methods: 2, expenses: 3 });
+  assert.deepEqual(dry.add, { trips: 2, people: 2, payment_methods: 2, expenses: 3, payments: 1 });
   assert.equal((await db.all('SELECT * FROM expenses')).length, 0);
 
   assert.equal((await call('POST', '/api/restore', backup)).status, 200);
@@ -176,14 +177,32 @@ test('restaurar: en una base vacía recupera todo; con dry solo cuenta y no escr
     trips: st.trips.map((t) => [t.id, t.dest, t.home, [...t.people_ids].sort()]).sort(),
     expenses: st.expenses.map((e) => [e.id, e.amount_cents, e.payment_method_id, e.amount_approx, e.place, [...e.beneficiary_ids].sort()]).sort(),
     methods: st.payment_methods.map((m) => [m.id, m.name, m.last4, m.color]).sort(),
+    payments: st.payments.map((x) => [x.id, x.from_person_id, x.to_person_id, x.amount_cents, x.currency, x.note]).sort(),
   });
   assert.deepEqual(brief(b), brief(a));
   assert.equal(b.expenses.find((e) => e.id === 'e3').payment_method_id, null); // sigue "por definir"
 
   // Repetirlo no duplica ni cambia nada.
   const again = (await call('POST', '/api/restore', backup)).body;
-  assert.deepEqual(again.add, { trips: 0, people: 0, payment_methods: 0, expenses: 0 });
+  assert.deepEqual(again.add, { trips: 0, people: 0, payment_methods: 0, expenses: 0, payments: 0 });
   assert.equal((await db.all('SELECT * FROM expenses')).length, 3);
+  assert.equal((await db.all('SELECT * FROM payments')).length, 1);
+});
+
+test('restaurar: un respaldo anterior, sin la sección de abonos, sigue funcionando', async () => {
+  const { call: from } = await seedBackupDb();
+  const backup = (await from('GET', '/api/backup')).body;
+  delete backup.payments;
+  const db = await openMemoryDb();
+  const call = caller(db);
+  await db.run('DELETE FROM trip_people');
+  await db.run('DELETE FROM trips');
+  const res = await call('POST', '/api/restore', backup);
+  assert.equal(res.status, 200);
+  assert.equal(res.body.add.payments, 0);
+  assert.equal((await db.all('SELECT * FROM expenses')).length, 3);
+  // Una sección de abonos mal formada sí se rechaza.
+  assert.equal((await call('POST', '/api/restore', { ...backup, payments: 'no' })).status, 400);
 });
 
 test('restaurar: solo agrega lo que falta y nunca pisa lo que ya existe', async () => {
@@ -195,8 +214,8 @@ test('restaurar: solo agrega lo que falta y nunca pisa lo que ya existe', async 
   await call('POST', '/api/expenses', { id: 'nuevo', date: '2026-11-10', amount_cents: 100, payment_method_id: 'tar', beneficiary_ids: ['ana'] });
 
   const out = (await call('POST', '/api/restore', backup)).body;
-  assert.deepEqual(out.add, { trips: 0, people: 0, payment_methods: 0, expenses: 1 }); // solo e2, el borrado
-  assert.deepEqual(out.skip, { people: 2, trips: 2, payment_methods: 2, expenses: 2 });
+  assert.deepEqual(out.add, { trips: 0, people: 0, payment_methods: 0, expenses: 1, payments: 0 }); // solo e2, el borrado
+  assert.deepEqual(out.skip, { people: 2, trips: 2, payment_methods: 2, expenses: 2, payments: 1 });
   const rows = Object.fromEntries((await db.all('SELECT id, description, amount_cents FROM expenses')).map((r) => [r.id, r]));
   assert.equal(rows.e1.description, 'Editado'); // lo editado no se pisa
   assert.equal(rows.e1.amount_cents, 9999);

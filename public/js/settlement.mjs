@@ -4,6 +4,10 @@
 //   payer_id = dueño del medio de pago (quien puso la plata).
 //   beneficiary_ids = personas para quienes fue el gasto, en partes iguales.
 // Los gastos sin amount_home (tasa pendiente) no entran al cálculo y se cuentan aparte.
+//
+// Abonos: { from, to, amount_home } = plata que `from` le pasó a `to` para saldar lo que se deben. Le suben el saldo a
+// quien pagó (debe menos) y se lo bajan a quien recibió (le deben menos). Un abono sin amount_home no descuenta nada
+// hasta tener tasa y se cuenta aparte, como los gastos.
 
 // Reparte `total` pesos enteros entre `ids`; el sobrante se reparte de a 1 peso en orden de id.
 export function splitEqual(total, ids) {
@@ -20,14 +24,17 @@ export function splitEqual(total, ids) {
 
 // `unit` = menor fracción que se paga en tu moneda, en centésimas (COP: 100 = un peso; USD: 1 = un centavo).
 // Así los repartos quedan en pesos enteros y no en fracciones que no se pueden pagar.
-export function computeSettlement(expenses, personIds = [], unit = 1) {
+export function computeSettlement(expenses, personIds = [], unit = 1, payments = []) {
   const paid = {};
   const consumed = {};
+  const settled = {};
   for (const id of personIds) {
     paid[id] = 0;
     consumed[id] = 0;
+    settled[id] = 0;
   }
   let pending = 0;
+  let pendingPayments = 0;
   for (const e of expenses) {
     if (e.amount_home == null) {
       pending += 1;
@@ -38,18 +45,29 @@ export function computeSettlement(expenses, personIds = [], unit = 1) {
     const parts = splitEqual(total, e.beneficiary_ids);
     for (const [id, v] of Object.entries(parts)) consumed[id] = (consumed[id] ?? 0) + v;
   }
-  const ids = new Set([...Object.keys(paid), ...Object.keys(consumed)]);
+  for (const a of payments) {
+    if (a.amount_home == null) {
+      pendingPayments += 1;
+      continue;
+    }
+    const amount = Math.round(a.amount_home / unit);
+    settled[a.from] = (settled[a.from] ?? 0) + amount;
+    settled[a.to] = (settled[a.to] ?? 0) - amount;
+  }
+  const ids = new Set([...Object.keys(paid), ...Object.keys(consumed), ...Object.keys(settled)]);
   const balances = [...ids].map((person_id) => ({
     person_id,
     paid: paid[person_id] ?? 0,
     consumed: consumed[person_id] ?? 0,
-    net: (paid[person_id] ?? 0) - (consumed[person_id] ?? 0),
+    settled: settled[person_id] ?? 0, // + abonó a otros, - recibió abonos
+    net: (paid[person_id] ?? 0) - (consumed[person_id] ?? 0) + (settled[person_id] ?? 0),
   }));
   const scale = (n) => n * unit;
   return {
-    balances: balances.map((b) => ({ ...b, paid: scale(b.paid), consumed: scale(b.consumed), net: scale(b.net) })),
+    balances: balances.map((b) => ({ ...b, paid: scale(b.paid), consumed: scale(b.consumed), settled: scale(b.settled), net: scale(b.net) })),
     transfers: minTransfers(balances).map((t) => ({ ...t, amount: scale(t.amount) })),
     pending,
+    pendingPayments,
   };
 }
 

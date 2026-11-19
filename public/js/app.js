@@ -84,6 +84,7 @@ function ctx() {
   return {
     state, trip: state.trip, trips: state.trips, counts: state.counts,
     people, allPeople, peopleById, methodsById, methods: state.payment_methods, payMethods, expenses: state.expenses,
+    payments: state.payments ?? [],
   };
 }
 
@@ -193,7 +194,8 @@ function settlementOf(c) {
     beneficiary_ids: e.beneficiary_ids,
   })).filter((e) => e.payer_id);
   const unit = 10 ** (2 - currencies().home.digits);
-  return computeSettlement(input, c.people.map((p) => p.id), unit);
+  const paid = c.payments.map((x) => ({ from: x.from_person_id, to: x.to_person_id, amount_home: x.amount_home }));
+  return computeSettlement(input, c.people.map((p) => p.id), unit, paid);
 }
 
 function forWho(c, e) {
@@ -1048,6 +1050,48 @@ async function submitForm(then) {
   }
 }
 
+// Abono: plata que una persona le pasó a otra. `payDraft` guarda lo escrito mientras el diálogo está abierto, así un
+// redibujado (por ejemplo al sincronizar) no borra lo que la persona iba escribiendo.
+let payOpen = false;
+let payDraft = null; // { id, from, to, amountText, currency, date, note }
+const centsText = (cents) => (cents / 100).toFixed(2).replace('.', ',');
+
+function payDialog(c) {
+  const d = payDraft;
+  const { dest, home } = currencies();
+  const who = (sel) => c.people.map((p) => `<option value="${esc(p.id)}" ${p.id === sel ? 'selected' : ''}>${esc(p.name)}</option>`).join('');
+  return `<dialog id="pay-dialog" class="sheet" aria-labelledby="pay-title">
+    <form id="pay-form" autocomplete="off">
+      <header class="sheet-head"><h2 id="pay-title">${d.id ? 'Editar abono' : 'Registrar abono'}</h2>
+        <button type="button" class="sheet-x" data-action="pay-cancel" aria-label="Cerrar">×</button></header>
+      <div class="sheet-body">
+        <label for="pay-from">Quién paga</label>
+        <select id="pay-from" required><option value="" hidden>Elegir…</option>${who(d.from)}</select>
+        <label for="pay-to">A quién le paga</label>
+        <select id="pay-to" required><option value="" hidden>Elegir…</option>${who(d.to)}</select>
+        <label for="pay-amount">Monto</label>
+        <input id="pay-amount" inputmode="decimal" placeholder="0" value="${esc(d.amountText)}" required>
+        <label for="pay-cur">Moneda en que se pagó</label>
+        <select id="pay-cur">${[dest, home].map((x) => `<option value="${esc(x.code)}" ${x.code === d.currency ? 'selected' : ''}>${esc(x.code)} · ${esc(x.name)}</option>`).join('')}</select>
+        <label for="pay-date">Fecha</label>
+        <input id="pay-date" type="date" value="${esc(d.date)}" max="${esc(todayStr())}" required>
+        <label for="pay-note">Nota (opcional)</label>
+        <input id="pay-note" maxlength="120" placeholder="Ej: Pix, efectivo" value="${esc(d.note)}">
+        <p class="muted">Se descuenta de lo que se deben. Si se pagó en otra moneda, se convierte con la tasa de ese día.</p>
+      </div>
+      <footer class="sheet-foot"><p id="pay-error" class="form-error" role="alert" hidden></p>
+        ${d.id ? `<button class="btn danger" type="button" data-action="pay-del" data-id="${esc(d.id)}">Borrar</button>` : ''}
+        <button class="btn secondary" type="button" data-action="pay-cancel">Cancelar</button>
+        <button class="btn" type="submit">${d.id ? 'Guardar' : 'Registrar'}</button></footer>
+    </form></dialog>`;
+}
+
+function readPayDraft() {
+  if (!payDraft) return;
+  const v = (id) => document.getElementById(id)?.value ?? '';
+  payDraft = { ...payDraft, from: v('pay-from'), to: v('pay-to'), amountText: v('pay-amount'), currency: v('pay-cur'), date: v('pay-date'), note: v('pay-note') };
+}
+
 function viewAccounts() {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
@@ -1058,10 +1102,22 @@ function viewAccounts() {
   return `
     ${noMethod ? `<div class="banner">${noMethod} gasto(s) con el medio de pago por definir; no entran en estas cuentas hasta que les pongas medio.</div>` : ''}
     ${s.pending ? `<div class="banner">${s.pending} gasto(s) sin tasa todavía; no entran en estas cuentas hasta convertirse.</div>` : ''}
+    ${s.pendingPayments ? `<div class="banner">${s.pendingPayments} abono(s) sin tasa todavía; no se descuentan hasta convertirse.</div>` : ''}
     <div class="card"><h2>Quién le paga a quién</h2>
-      ${s.transfers.length ? s.transfers.map((t) => `<div class="pay row"><span><b>${esc(personName(c, t.from))}</b> le paga a <b>${esc(personName(c, t.to))}</b></span><span class="num">${fmtHome(t.amount)}</span></div>`).join('')
+      ${s.transfers.length ? s.transfers.map((t) => `<div class="pay row"><span><b>${esc(personName(c, t.from))}</b> le paga a <b>${esc(personName(c, t.to))}</b></span>
+          <span class="pay-end"><span class="num">${fmtHome(t.amount)}</span>
+          <button type="button" class="btn secondary small" data-action="pay-new" data-from="${esc(t.from)}" data-to="${esc(t.to)}" data-amount="${t.amount}" aria-label="Registrar abono de ${esc(personName(c, t.from))} a ${esc(personName(c, t.to))}">Abonar</button></span></div>`).join('')
         : '<div class="empty">Nadie debe nada por ahora.</div>'}
     </div>
+    <div class="card"><h2>Abonos registrados</h2>
+      ${c.payments.length ? c.payments.map((x) => `<div class="pay row"><span><b>${esc(personName(c, x.from_person_id))}</b> le pagó a <b>${esc(personName(c, x.to_person_id))}</b>
+          <div class="muted">${esc(dayLabel(x.date))}${x.note ? ` · ${esc(x.note)}` : ''}${x.currency !== currencies().home.code ? ` · ${x.amount_home == null ? 'sin tasa todavía' : `≈ ${fmtHome(x.amount_home)}`}` : ''}${x.rate_estimated ? ' · tasa estimada' : ''}</div></span>
+          <span class="pay-end"><span class="num">${esc(fmtMoney(x.currency, x.amount_cents))}</span>
+          <button type="button" class="btn secondary small" data-action="pay-edit" data-id="${esc(x.id)}">Editar</button></span></div>`).join('')
+        : '<div class="empty">Aún no hay abonos. Cuando alguien le pague a otra persona, regístralo aquí y se descuenta de lo que se deben.</div>'}
+      <button class="btn" type="button" data-action="pay-new">+ Registrar abono</button>
+    </div>
+    ${payOpen ? payDialog(c) : ''}
     <div class="card"><h2>Saldo por persona</h2>
       ${s.balances.map((b) => `<div class="pay"><div class="row"><b>${esc(personName(c, b.person_id))}</b>
         <span class="num ${b.net < 0 ? 'neg' : 'pos'}">${b.net < 0 ? '−' : b.net > 0 ? '+' : ''}${fmtHome(Math.abs(b.net))}</span></div>
@@ -2179,6 +2235,7 @@ function render() {
   if (r.map && leafletMap && document.querySelector('#map.leaflet-container') && mapSig() === lastMapSig) return;
   if (!isFormRoute()) draft = null;
   if (r.tab !== 'ajustes') { methodOpen = false; tripOpen = false; personOpen = false; }
+  if (r.tab !== 'cuentas') { payOpen = false; payDraft = null; }
   $title.textContent = r.title;
   document.title = r.tab === 'home' ? 'Gastos de viaje' : `${r.title} · Gastos de viaje`;
   document.querySelectorAll('.tabbar a').forEach((a) => {
@@ -2199,6 +2256,7 @@ function render() {
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
   if (tripOpen) document.getElementById('trip-dialog')?.showModal();
   if (personOpen) document.getElementById('person-dialog')?.showModal();
+  if (payOpen) document.getElementById('pay-dialog')?.showModal();
 }
 
 // Los diálogos se cierran con Cancelar, la X, Escape o tocando fuera. Solo se limpia el estado: la próxima
@@ -2207,8 +2265,9 @@ $view.addEventListener('close', (ev) => {
   if (ev.target.id === 'method-dialog') { methodOpen = false; editMethod = null; }
   else if (ev.target.id === 'trip-dialog') { tripOpen = false; editTrip = null; }
   else if (ev.target.id === 'person-dialog') { personOpen = false; editPerson = null; }
+  else if (ev.target.id === 'pay-dialog') { payOpen = false; payDraft = null; }
 }, true);
-$view.addEventListener('click', (ev) => { if (['method-dialog', 'trip-dialog', 'person-dialog'].includes(ev.target.id) || ev.target.matches?.('dialog.info')) ev.target.close(); });
+$view.addEventListener('click', (ev) => { if (['method-dialog', 'trip-dialog', 'person-dialog', 'pay-dialog'].includes(ev.target.id) || ev.target.matches?.('dialog.info')) ev.target.close(); });
 
 // Selector de viaje (arriba, en todas las pantallas).
 function openTripSwitch() {
@@ -2365,6 +2424,22 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'edit-person') { editPerson = id; personOpen = true; render(); }
   else if (action === 'new-person') { editPerson = null; personOpen = true; render(); }
   else if (action === 'cancel-person') document.getElementById('person-dialog')?.close();
+  else if (action === 'pay-new') {
+    const amount = Number(t.dataset.amount);
+    payDraft = { id: null, from: t.dataset.from ?? '', to: t.dataset.to ?? '', amountText: amount > 0 ? centsText(amount) : '', currency: currencies().home.code, date: todayStr(), note: '' };
+    payOpen = true;
+    render();
+  } else if (action === 'pay-edit') {
+    const x = ctx().payments.find((p) => p.id === id);
+    if (x) {
+      payDraft = { id: x.id, from: x.from_person_id, to: x.to_person_id, amountText: centsText(x.amount_cents), currency: x.currency, date: x.date, note: x.note ?? '' };
+      payOpen = true;
+      render();
+    }
+  } else if (action === 'pay-cancel') document.getElementById('pay-dialog')?.close();
+  else if (action === 'pay-del') {
+    if (confirm('¿Borrar este abono?')) await busy(t, () => guard(async () => { await store.deletePayment(id); payOpen = false; payDraft = null; toast('Abono borrado'); render(); }), 'Borrando…');
+  }
   else if (action === 'pick-method') {
     draft.method = id;
     document.querySelectorAll('#cards .pitem').forEach((b) => {
@@ -2565,6 +2640,7 @@ $view.addEventListener('input', (ev) => {
   else if (id === 'desc') draft.desc = ev.target.value;
   else if (id === 'f-q') { filters.q = ev.target.value; const pos = ev.target.selectionStart; render(); const el = document.getElementById('f-q'); el.focus(); el.setSelectionRange(pos, pos); }
   else if (id.startsWith('m-')) onMethodForm(id);
+  else if (id.startsWith('pay-')) readPayDraft();
 });
 
 $view.addEventListener('change', (ev) => {
@@ -2573,6 +2649,8 @@ $view.addEventListener('change', (ev) => {
     const file = ev.target.files?.[0];
     ev.target.value = ''; // permite elegir otra vez el mismo archivo
     restoreFromFile(file);
+  } else if (id.startsWith('pay-')) {
+    readPayDraft();
   } else if (id === 'cur-other') {
     if (ev.target.value && currencyByCode(ev.target.value)) { draft.currency = ev.target.value; paintCur(); }
   } else if (id === 'f-method') { filters.method = picked(ev.target); render(); }
@@ -2633,6 +2711,21 @@ $view.addEventListener('submit', async (ev) => {
       personOpen = false;
       editPerson = null;
       toast('Persona guardada');
+      render();
+    }), 'Guardando…');
+  } else if (f === 'pay-form') {
+    await busy(btn, () => guardIn('pay-error', async () => {
+      readPayDraft();
+      const cents = parseAmount(payDraft.amountText);
+      if (!cents) throw new Error('Escribe un monto válido');
+      await store.savePayment({
+        id: payDraft.id ?? undefined, from_person_id: payDraft.from, to_person_id: payDraft.to,
+        amount_cents: cents, currency: payDraft.currency, date: payDraft.date, note: payDraft.note,
+      });
+      const wasNew = !payDraft.id;
+      payOpen = false;
+      payDraft = null;
+      toast(wasNew ? 'Abono registrado' : 'Abono guardado');
       render();
     }), 'Guardando…');
   } else if (f === 'method-form') {

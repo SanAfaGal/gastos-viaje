@@ -112,8 +112,12 @@ async function peopleInTripExpenses(db, tripId) {
   const rows = await db.all(
     `SELECT eb.person_id AS p FROM expense_beneficiaries eb JOIN expenses e ON e.id = eb.expense_id WHERE e.trip_id = ?
      UNION
-     SELECT m.owner_person_id FROM expenses e JOIN payment_methods m ON m.id = e.payment_method_id WHERE e.trip_id = ? AND e.pay_pending = 0`,
-    [tripId, tripId],
+     SELECT m.owner_person_id FROM expenses e JOIN payment_methods m ON m.id = e.payment_method_id WHERE e.trip_id = ? AND e.pay_pending = 0
+     UNION
+     SELECT from_person_id FROM payments WHERE trip_id = ?
+     UNION
+     SELECT to_person_id FROM payments WHERE trip_id = ?`,
+    [tripId, tripId, tripId, tripId],
   );
   return new Set(rows.map((r) => r.p));
 }
@@ -137,7 +141,7 @@ async function saveTrip(db, id, body) {
   }
 
   if (prev) {
-    const used = (await db.all('SELECT COUNT(*) AS n FROM expenses WHERE trip_id = ?', [id]))[0].n;
+    const used = (await db.all('SELECT (SELECT COUNT(*) FROM expenses WHERE trip_id = ?) + (SELECT COUNT(*) FROM payments WHERE trip_id = ?) AS n', [id, id]))[0].n;
     if (used > 0 && (prev.dest_currency !== body.dest || prev.home_currency !== body.home)) {
       fail(409, 'Este viaje ya tiene gastos: borra sus gastos para cambiar el país o la moneda');
     }
@@ -172,6 +176,7 @@ async function deleteTrip(db, id, withExpenses) {
   await db.batch([
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id IN (SELECT id FROM expenses WHERE trip_id = ?)', args: [id] },
     { sql: 'DELETE FROM expenses WHERE trip_id = ?', args: [id] },
+    { sql: 'DELETE FROM payments WHERE trip_id = ?', args: [id] },
     { sql: 'DELETE FROM trip_people WHERE trip_id = ?', args: [id] },
     { sql: 'DELETE FROM trips WHERE id = ?', args: [id] },
   ]);
@@ -201,11 +206,12 @@ async function savePerson(db, id, body) {
 async function deletePerson(db, id) {
   const used = await db.all(
     `SELECT (SELECT COUNT(*) FROM payment_methods WHERE owner_person_id = ?) AS m,
-            (SELECT COUNT(*) FROM expense_beneficiaries WHERE person_id = ?) AS b`,
-    [id, id],
+            (SELECT COUNT(*) FROM expense_beneficiaries WHERE person_id = ?) AS b,
+            (SELECT COUNT(*) FROM payments WHERE from_person_id = ? OR to_person_id = ?) AS p`,
+    [id, id, id, id],
   );
-  if (used[0].m > 0 || used[0].b > 0) {
-    fail(409, 'No se puede borrar: tiene medios de pago o gastos asociados');
+  if (used[0].m > 0 || used[0].b > 0 || used[0].p > 0) {
+    fail(409, 'No se puede borrar: tiene medios de pago, gastos o abonos asociados');
   }
   await db.batch([
     { sql: 'DELETE FROM trip_people WHERE person_id = ?', args: [id] },
@@ -378,6 +384,54 @@ async function deleteExpense(db, id) {
   ]);
 }
 
+// ---------- abonos ----------
+// Un abono es plata que una persona le pasó a otra para saldar lo que se deben. No es un gasto: no cuenta en
+// los totales, solo descuenta del saldo entre las dos. Se guarda en la moneda en que se pagó, con la tasa de
+// su día, igual que los gastos (el monto en tu moneda sale al leer, ver getState).
+
+async function savePayment(db, id, body) {
+  if (!isValidDate(body.date)) fail(400, 'Fecha inválida');
+  const cents = Number(body.amount_cents);
+  if (!Number.isInteger(cents) || cents <= 0) fail(400, 'El monto debe ser mayor a cero');
+  if (cents > MAX_CENTS) fail(400, 'El monto es demasiado grande');
+  const note = text(body.note, 'La nota', { max: 120, required: false });
+
+  const prev = (await db.all('SELECT trip_id, created_at FROM payments WHERE id = ?', [id]))[0];
+  const trip = await getTrip(db, prev?.trip_id ?? body.trip_id);
+  const blankCur = body.currency == null || body.currency === '';
+  if (!blankCur && !currencyByCode(body.currency)) fail(400, 'Moneda no válida');
+  const currency = blankCur || body.currency === trip.dest_currency ? null : body.currency;
+
+  if (!body.from_person_id || !body.to_person_id) fail(400, 'Indica quién paga y a quién');
+  if (body.from_person_id === body.to_person_id) fail(400, 'Quien paga y quien recibe deben ser personas distintas');
+  const going = await tripPeople(db, trip.id);
+  if (![body.from_person_id, body.to_person_id].every((p) => going.has(p))) fail(400, 'Alguna persona no va en este viaje');
+
+  let rate = null;
+  let rateDate = null;
+  let rateSource = null;
+  const r = await resolveRate(db, body.date, { dest: currency ?? trip.dest_currency, home: trip.home_currency });
+  if (r) {
+    rate = r.rate;
+    rateDate = r.rate_date;
+    rateSource = r.source;
+  }
+  await db.run(
+    `INSERT INTO payments (id, trip_id, from_person_id, to_person_id, date, amount_cents, currency, rate, rate_date, rate_source, note, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET from_person_id = excluded.from_person_id, to_person_id = excluded.to_person_id,
+       date = excluded.date, amount_cents = excluded.amount_cents, currency = excluded.currency,
+       rate = excluded.rate, rate_date = excluded.rate_date, rate_source = excluded.rate_source, note = excluded.note`,
+    [id, trip.id, body.from_person_id, body.to_person_id, body.date, cents, currency, rate, rateDate, rateSource, note,
+      prev?.created_at ?? new Date().toISOString()],
+  );
+  return { id };
+}
+
+async function deletePayment(db, id) {
+  await db.run('DELETE FROM payments WHERE id = ?', [id]);
+}
+
 // "Actualizar tasas": revisa los gastos del viaje contra la tasa que hoy da la fuente para el día de cada uno.
 // Con ?dry=1 solo cuenta qué cambiaría; sin él corrige las tasas guardadas y los montos de esos gastos.
 async function refreshTripRates(db, query) {
@@ -446,9 +500,15 @@ async function refreshTripRates(db, query) {
 //    pulsar "Actualizar tasas". No hace falta una marca aparte: la tabla rates solo guarda días cerrados, así que
 //    "la tasa del gasto es la de rates" ya significa "es la definitiva", y deja de revisarse sola.
 async function fillPendingRates(db) {
+  await fillPendingRatesOf(db, 'expenses');
+  await fillPendingRatesOf(db, 'payments'); // los abonos tienen moneda y tasa igual que los gastos
+}
+
+// `table` es siempre una constante del código, nunca un dato de la petición.
+async function fillPendingRatesOf(db, table) {
   const rows = await db.all(
     `SELECT e.id, e.date, e.rate, e.rate_date, e.rate_source, COALESCE(e.currency, t.dest_currency) AS cur, t.home_currency
-     FROM expenses e JOIN trips t ON t.id = e.trip_id
+     FROM ${table} e JOIN trips t ON t.id = e.trip_id
      WHERE COALESCE(e.currency, t.dest_currency) <> t.home_currency
        AND (e.rate IS NULL OR e.rate_date <> e.date
         OR (e.date < ? AND NOT EXISTS (SELECT 1 FROM rates r
@@ -462,19 +522,20 @@ async function fillPendingRates(db) {
     // Sin red o sin dato de ese día, la tasa exacta del gasto no se cambia por una más vieja (solo se mejora una estimada).
     if (r.estimated && e.rate != null && e.rate_date === e.date) continue;
     if (r.rate === e.rate && r.rate_date === e.rate_date && (!r.source || r.source === e.rate_source)) continue;
-    await db.run('UPDATE expenses SET rate = ?, rate_date = ?, rate_source = ? WHERE id = ?', [r.rate, r.rate_date, r.source ?? null, e.id]);
+    await db.run(`UPDATE ${table} SET rate = ?, rate_date = ?, rate_source = ? WHERE id = ?`, [r.rate, r.rate_date, r.source ?? null, e.id]);
   }
 }
 
 async function getState(db) {
   await fillPendingRates(db);
-  const [trips, tripLinks, people, methods, expenses, links] = await Promise.all([
+  const [trips, tripLinks, people, methods, expenses, links, payments] = await Promise.all([
     db.all('SELECT * FROM trips ORDER BY rowid'),
     db.all('SELECT trip_id, person_id FROM trip_people'),
     db.all('SELECT id, name FROM people ORDER BY name COLLATE NOCASE'),
     db.all('SELECT id, kind, name, last4, card_type, owner_person_id, color, network FROM payment_methods ORDER BY name COLLATE NOCASE'),
     db.all('SELECT * FROM expenses ORDER BY date DESC, created_at DESC'),
     db.all('SELECT expense_id, person_id FROM expense_beneficiaries'),
+    db.all('SELECT * FROM payments ORDER BY date DESC, created_at DESC'),
   ]);
   const byExpense = new Map();
   for (const l of links) {
@@ -502,6 +563,13 @@ async function getState(db) {
       amount_home: e.rate == null ? null : toHome(e.amount_cents, e.rate, homeDigits.get(e.trip_id) ?? 2),
       payment_method_id: pp ? null : e.payment_method_id,
       beneficiary_ids: byExpense.get(e.id) ?? [],
+    })),
+    // Igual que los gastos: moneda efectiva, y el monto en tu moneda y si la tasa es estimada salen al leer.
+    payments: payments.map((p) => ({
+      ...p,
+      currency: p.currency ?? destOf.get(p.trip_id),
+      rate_estimated: p.rate != null && p.rate_date !== p.date ? 1 : 0,
+      amount_home: p.rate == null ? null : toHome(p.amount_cents, p.rate, homeDigits.get(p.trip_id) ?? 2),
     })),
   };
 }
@@ -578,7 +646,7 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db));
     if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail }));
 
-    const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense] };
+    const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense], payments: [savePayment, deletePayment] };
     if (writers[resource]) {
       const [saver, deleter] = writers[resource];
       if (method === 'POST' && !id) return ok(await put(saver), 201);

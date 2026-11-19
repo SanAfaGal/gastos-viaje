@@ -92,4 +92,19 @@ CREATE TABLE IF NOT EXISTS expense_beneficiaries (
   person_id TEXT NOT NULL REFERENCES people(id),
   PRIMARY KEY (expense_id, person_id)
 );
+
+CREATE TABLE IF NOT EXISTS payments (
+  id TEXT PRIMARY KEY,
+  trip_id TEXT NOT NULL REFERENCES trips(id),
+  from_person_id TEXT NOT NULL REFERENCES people(id),
+  to_person_id TEXT NOT NULL REFERENCES people(id),
+  date TEXT NOT NULL,
+  amount_cents INTEGER NOT NULL,
+  currency TEXT,
+  rate REAL,
+  rate_date TEXT,
+  rate_source TEXT,
+  note TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL
+);
 `;

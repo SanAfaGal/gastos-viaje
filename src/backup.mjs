@@ -15,6 +15,8 @@ const BACKUP_VERSION = 1;
 const LIMIT = 20000; // filas por tabla: un tope para que un archivo absurdo no atasque el servidor
 const MAX_CENTS = 5e9;
 const TABLES = ['people', 'trips', 'trip_people', 'payment_methods', 'expenses', 'expense_beneficiaries'];
+// Secciones que los respaldos anteriores no traen: si faltan, se tratan como vacías.
+const OPTIONAL_TABLES = ['payments'];
 
 export async function dumpBackup(db) {
   const rows = await Promise.all([
@@ -24,12 +26,13 @@ export async function dumpBackup(db) {
     db.all('SELECT * FROM payment_methods ORDER BY name COLLATE NOCASE'),
     db.all('SELECT * FROM expenses ORDER BY date, created_at'),
     db.all('SELECT * FROM expense_beneficiaries'),
+    db.all('SELECT * FROM payments ORDER BY date, created_at'),
   ]);
   return {
     app: BACKUP_APP,
     version: BACKUP_VERSION,
     exportado: new Date().toISOString(),
-    ...Object.fromEntries(TABLES.map((t, i) => [t, rows[i]])),
+    ...Object.fromEntries([...TABLES, ...OPTIONAL_TABLES].map((t, i) => [t, rows[i]])),
   };
 }
 
@@ -44,6 +47,13 @@ export async function restoreBackup(db, data, { dry, fail }) {
   for (const t of TABLES) {
     const v = data[t];
     if (!Array.isArray(v)) fail(400, `Al respaldo le falta la sección «${t}»`);
+    if (v.length > LIMIT) fail(400, 'El respaldo es demasiado grande');
+    if (v.some((r) => !r || typeof r !== 'object' || Array.isArray(r))) fail(400, `La sección «${t}» tiene datos inválidos`);
+    file[t] = v;
+  }
+  for (const t of OPTIONAL_TABLES) {
+    const v = data[t] ?? [];
+    if (!Array.isArray(v)) fail(400, `La sección «${t}» tiene datos inválidos`);
     if (v.length > LIMIT) fail(400, 'El respaldo es demasiado grande');
     if (v.some((r) => !r || typeof r !== 'object' || Array.isArray(r))) fail(400, `La sección «${t}» tiene datos inválidos`);
     file[t] = v;
@@ -64,11 +74,12 @@ export async function restoreBackup(db, data, { dry, fail }) {
     trips: await existing('trips'),
     payment_methods: await existing('payment_methods'),
     expenses: await existing('expenses'),
+    payments: await existing('payments'),
   };
   const known = (table) => (id) => have[table].has(id) || newIds[table].has(id);
-  const newIds = { people: new Set(), trips: new Set(), payment_methods: new Set(), expenses: new Set() };
-  const skip = { people: 0, trips: 0, payment_methods: 0, expenses: 0 };
-  const stmts = { people: [], trips: [], trip_people: [], payment_methods: [], expenses: [], expense_beneficiaries: [] };
+  const newIds = { people: new Set(), trips: new Set(), payment_methods: new Set(), expenses: new Set(), payments: new Set() };
+  const skip = { people: 0, trips: 0, payment_methods: 0, expenses: 0, payments: 0 };
+  const stmts = { people: [], trips: [], trip_people: [], payment_methods: [], expenses: [], expense_beneficiaries: [], payments: [] };
 
   // Primero se decide qué falta (por id); las referencias se comprueban después contra "lo que ya hay + lo que entra".
   const pick = (table) => {
@@ -87,6 +98,7 @@ export async function restoreBackup(db, data, { dry, fail }) {
   const trips = pick('trips');
   const methods = pick('payment_methods');
   const expenses = pick('expenses');
+  const payments = pick('payments');
 
   for (const p of people) {
     const name = str(p.name, 80, { required: true });
@@ -159,6 +171,25 @@ export async function restoreBackup(db, data, { dry, fail }) {
     }
   }
 
+  for (const p of payments) {
+    const cents = p.amount_cents;
+    const rate = optNum(p.rate, 0, 1e9);
+    const note = str(p.note, 120);
+    const rateSource = str(p.rate_source, 40);
+    if (!isValidDate(p.date) || !Number.isInteger(cents) || cents <= 0 || cents > MAX_CENTS) bad('abono', p.id);
+    if (rate === undefined || note === null || rateSource === null) bad('abono', p.id);
+    if (p.rate_date != null && !isValidDate(p.rate_date)) bad('abono', p.id);
+    if (p.currency != null && !currencyByCode(p.currency)) bad('abono', p.id);
+    if (!known('trips')(p.trip_id)) bad('el viaje de un abono no existe', p.id);
+    if (!known('people')(p.from_person_id) || !known('people')(p.to_person_id) || p.from_person_id === p.to_person_id) bad('las personas de un abono', p.id);
+    stmts.payments.push({
+      sql: `INSERT OR IGNORE INTO payments (id, trip_id, from_person_id, to_person_id, date, amount_cents, currency, rate, rate_date, rate_source, note, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      args: [p.id, p.trip_id, p.from_person_id, p.to_person_id, p.date, cents, p.currency ?? null, rate, rate == null ? null : (p.rate_date ?? p.date),
+        rate == null ? null : (rateSource || null), note, str(p.created_at, 40) || new Date().toISOString()],
+    });
+  }
+
   // Quién va en cada viaje: los viajes nuevos con su lista; en un viaje que ya existe solo se completan las
   // personas que hacen falta para los gastos que entran (no se vuelve a agregar a quien se quitó a propósito).
   const owners = new Map((await db.all('SELECT id, owner_person_id FROM payment_methods')).map((m) => [m.id, m.owner_person_id]));
@@ -170,6 +201,10 @@ export async function restoreBackup(db, data, { dry, fail }) {
     const owner = owners.get(e.payment_method_id);
     if (owner) needed.get(e.trip_id).add(owner);
   }
+  for (const p of payments) { // quienes se pagaron también tienen que ir en el viaje
+    if (!needed.has(p.trip_id)) needed.set(p.trip_id, new Set());
+    needed.get(p.trip_id).add(p.from_person_id).add(p.to_person_id);
+  }
   for (const l of file.trip_people) {
     if (!isId(l.trip_id) || !isId(l.person_id)) bad('quién va en un viaje');
     const isNewTrip = newIds.trips.has(l.trip_id);
@@ -178,9 +213,9 @@ export async function restoreBackup(db, data, { dry, fail }) {
     stmts.trip_people.push({ sql: 'INSERT OR IGNORE INTO trip_people (trip_id, person_id) VALUES (?, ?)', args: [l.trip_id, l.person_id] });
   }
 
-  const add = { trips: trips.length, people: people.length, payment_methods: methods.length, expenses: expenses.length };
+  const add = { trips: trips.length, people: people.length, payment_methods: methods.length, expenses: expenses.length, payments: payments.length };
   if (!dry) {
-    const all = [...stmts.people, ...stmts.trips, ...stmts.trip_people, ...stmts.payment_methods, ...stmts.expenses, ...stmts.expense_beneficiaries];
+    const all = [...stmts.people, ...stmts.trips, ...stmts.trip_people, ...stmts.payment_methods, ...stmts.expenses, ...stmts.expense_beneficiaries, ...stmts.payments];
     if (all.length) await db.batch(all);
   }
   return { dry: Boolean(dry), add, skip };
