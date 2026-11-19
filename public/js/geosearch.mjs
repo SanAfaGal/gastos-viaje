@@ -34,7 +34,7 @@ export function parsePhoton(json) {
     if (!valid(lat, lng) || !p.name) continue;
     const street = [p.street, p.housenumber].filter(Boolean).join(' ');
     const detail = [street, p.district, p.city ?? p.county, p.state, p.country].filter((x, i, a) => x && a.indexOf(x) === i).join(', ');
-    out.push({ name: String(p.name), detail, lat, lng });
+    out.push({ name: String(p.name), detail, lat, lng, kind: p.osm_value ? String(p.osm_value) : '', key: p.osm_key ? String(p.osm_key) : '' });
   }
   return out;
 }

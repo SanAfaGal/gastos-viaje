@@ -38,6 +38,7 @@
   <link rel="modulepreload" href="/js/theme.js">
   <link rel="modulepreload" href="/js/stats.mjs">
   <link rel="modulepreload" href="/js/geosearch.mjs">
+  <link rel="modulepreload" href="/js/nearby.mjs">
 </head>
 <body>
   <header class="topbar">
@@ -59,20 +60,21 @@
     <div class="sheet-body" id="trip-list" role="radiogroup" aria-labelledby="ts-title"></div>
     <footer class="sheet-foot"><button type="button" class="btn secondary" data-manage>Crear o editar viajes</button></footer>
   </dialog>
-  <dialog id="map-pick" class="sheet" aria-labelledby="mp-title">
-    <header class="sheet-head"><h2 id="mp-title">Elige el lugar del gasto</h2>
+  <dialog id="map-pick" class="sheet pick-sheet" aria-labelledby="mp-title">
+    <header class="sheet-head"><h2 id="mp-title">Lugar del gasto</h2>
       <button type="button" class="sheet-x" data-pick-cancel aria-label="Cerrar">×</button></header>
-    <div class="sheet-body">
-      <form id="pick-search" class="pick-search" role="search" autocomplete="off">
-        <input id="pick-q" type="search" maxlength="120" placeholder="Buscar un lugar por nombre" aria-label="Buscar un lugar por nombre">
-        <button class="btn small" type="submit">Buscar</button>
-      </form>
-      <div id="pick-results" class="pick-results" role="group" aria-label="Resultados" hidden></div>
-      <p class="muted" id="pick-hint">Toca el mapa donde fue la compra.</p>
-      <div id="pick-map" class="map pick"></div>
-    </div>
-    <footer class="sheet-foot"><button type="button" class="btn secondary" data-pick-cancel>Cancelar</button>
-      <button type="button" class="btn" id="pick-ok" disabled>Usar este punto</button></footer>
+    <form id="pick-search" class="pick-search" role="search" autocomplete="off">
+      <input id="pick-q" type="search" enterkeyhint="search" maxlength="120" placeholder="Buscar lugar o dirección" aria-label="Buscar un lugar por nombre">
+      <button type="button" class="pick-here" id="pick-here" aria-label="Usar mi ubicación">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3.5M12 18.5V22M2 12h3.5M18.5 12H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span id="pick-here-t">Mi ubicación</span></button>
+    </form>
+    <div id="pick-map" class="map pick" role="region" aria-label="Mapa para elegir el lugar"></div>
+    <div id="pick-panel" class="pick-panel"></div>
+    <footer class="sheet-foot pick-foot">
+      <div class="pick-sel" id="pick-sel" aria-live="polite"></div>
+      <button type="button" class="btn" id="pick-ok" disabled>Usar este lugar</button>
+    </footer>
   </dialog>
   <div id="toast" class="toast"></div>
   <div id="live-status" class="sr-only" role="status"></div>

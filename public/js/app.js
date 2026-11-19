@@ -9,7 +9,9 @@ import { compareChronological, sameOrder } from './order.mjs';
 import { MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 import { breakdown, byDay, summary } from './stats.mjs';
-import { formatDistance, searchPlaces } from './geosearch.mjs';
+import { distanceKm, formatDistance, searchPlaces } from './geosearch.mjs';
+import { PICK_MIN_ZOOM, TAP_ZOOM, buildList, confirmPlace, dedupeByName, preferOsm, rankSearch, selectionSummary, tapRadiusM } from './picker.mjs';
+import { knownPlaces, mergeCandidates, nearbyPlaces, placeIcon } from './nearby.mjs';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -202,7 +204,7 @@ function expenseItem(c, e, n) {
   return `<div class="item" data-action="edit" data-id="${esc(e.id)}">
     <div><div class="t">${n ? `<span class="ord" title="Orden dentro del día">${n}</span>` : ''}<button type="button" class="item-open" data-action="edit" data-id="${esc(e.id)}" aria-label="${esc(`Editar: ${e.description || 'Gasto'}, ${cop}`)}">${esc(e.description || 'Gasto')}</button>${hasLocation(e)
       ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">📍</button>` : ''}</div>
-      <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : esc(methodLabel(m))}</div>
+      <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : m ? `${esc(methodLabel(m))} · <span class="nw">de ${esc(personName(c, m.owner_person_id))}</span>` : esc(methodLabel(m))}</div>
       <span class="tag">${esc(forWho(c, e))}</span>
       ${e.payment_method_id == null ? '<span class="tag danger">Sin medio de pago</span>' : ''}
       ${e.pending ? '<span class="tag info">Sin enviar</span>' : ''}
@@ -388,21 +390,16 @@ function draftFrom(c, id) {
 }
 
 // Fila de ubicación del formulario. Se vuelve a dibujar sola (sin render()) para no perder lo escrito.
+// Elegir el lugar (mapa, ubicación, búsqueda y sugerencias) es un solo diálogo: ver openPicker.
 function locHtml() {
-  if (draft.locating) {
-    return '<div class="loc-box"><div class="loc-wait" role="status"><span class="spin" aria-hidden="true"></span>Buscando tu ubicación…</div></div>';
-  }
   if (draft.lat == null) {
     return `<div class="loc-box">
       <div class="loc-empty"><span class="loc-ico" aria-hidden="true">📍</span><span>Sin ubicación</span></div>
-      <div class="loc-btns">
-        <button type="button" class="btn secondary small" data-action="locate">📍 Estoy aquí</button>
-        <button type="button" class="btn secondary small" data-action="pick-map">🗺 Buscar en el mapa</button>
-      </div></div>`;
+      <button type="button" class="btn loc-cta" data-action="pick-map">🗺 Elegir lugar en el mapa</button></div>`;
   }
   return `<div class="loc-box set">
       <div class="loc-head"><span class="loc-ico on" aria-hidden="true">📍</span>
-        <div class="loc-info"><b id="loc-name">${esc(draft.place.trim() || 'Ubicación guardada')}</b>
+        <div class="loc-info"><b id="loc-name">${esc(draft.place.trim() || "Ubicación guardada")}</b>
           <span class="muted">${esc(formatCoords(draft.lat, draft.lng))}</span></div></div>
       <input id="place" maxlength="120" placeholder="Ponle un nombre al lugar (opcional)" aria-label="Nombre del lugar" value="${esc(draft.place)}">
       <div class="loc-btns">
@@ -416,23 +413,77 @@ function paintLoc() {
   if (el && draft) el.innerHTML = locHtml();
 }
 
-function locate() {
-  if (!draft || draft.locating) return;
-  if (!navigator.geolocation) return toast('Este dispositivo no permite obtener la ubicación', 'error');
-  const target = draft;
-  target.locating = true;
-  paintLoc();
-  navigator.geolocation.getCurrentPosition((pos) => {
-    target.locating = false;
-    target.lat = pos.coords.latitude;
-    target.lng = pos.coords.longitude;
-    if (draft === target) paintLoc();
-  }, (err) => {
-    target.locating = false;
-    if (draft === target) paintLoc();
-    toast(err.code === 1 ? 'Sin permiso de ubicación. Actívalo en el navegador y vuelve a intentar.'
-      : 'No se pudo obtener la ubicación. Intenta de nuevo.', 'error');
-  }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 });
+// Una sola lectura del GPS suele traer un punto impreciso. Se escucha unos segundos y se queda con la lectura más exacta
+// (o la primera que llegue a ±25 m). Rechaza con el error del navegador si no hubo ninguna.
+// `onProgress(precisión en m)` avisa cada vez que mejora la lectura; `signal` la cancela (rechaza con { code: 0 }).
+function readPosition({ goodM = 25, maxMs = 6000, onProgress, signal } = {}) {
+  return new Promise((resolve, reject) => {
+    let best = null;
+    let id = null;
+    let timer = null;
+    const stop = () => { navigator.geolocation.clearWatch(id); clearTimeout(timer); signal?.removeEventListener('abort', cancel); };
+    const finish = (err) => {
+      stop();
+      if (best) resolve(best); else reject(err ?? { code: 3 });
+    };
+    function cancel() { stop(); reject({ code: 0 }); }
+    if (signal?.aborted) return reject({ code: 0 });
+    signal?.addEventListener('abort', cancel);
+    id = navigator.geolocation.watchPosition((pos) => {
+      if (!best || pos.coords.accuracy < best.accuracy) {
+        best = { lat: pos.coords.latitude, lng: pos.coords.longitude, accuracy: pos.coords.accuracy };
+        onProgress?.(best.accuracy);
+      }
+      if (best.accuracy <= goodM) finish();
+    }, (err) => { if (err.code === 1 || !best) finish(err); }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+    timer = setTimeout(() => finish(), maxMs);
+  });
+}
+
+// Botón "Ir a mi ubicación" para los mapas: si estás viendo algo lejos, vuelve a donde estás y marca tu posición con un
+// punto (y un círculo con la precisión). No cambia nada del gasto; solo mueve la vista. `onError(texto)` avisa si falla.
+function addLocateControl(L, map, onError) {
+  if (!navigator.geolocation) return;
+  const control = L.control({ position: 'bottomright' });
+  let dot = null;
+  let ring = null;
+  let busy = false;
+  control.onAdd = () => {
+    const bar = L.DomUtil.create('div', 'leaflet-bar locate-ctl');
+    const btn = L.DomUtil.create('a', '', bar);
+    btn.href = '#';
+    btn.setAttribute('role', 'button');
+    btn.setAttribute('aria-label', 'Ir a mi ubicación');
+    btn.title = 'Ir a mi ubicación';
+    // Icono dibujado (mira con punto central): el carácter ◎ no existe en todas las tipografías y a veces no se veía.
+    btn.innerHTML = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3.5M12 18.5V22M2 12h3.5M18.5 12H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+    L.DomEvent.disableClickPropagation(bar);
+    L.DomEvent.on(btn, 'click', async (ev) => {
+      L.DomEvent.preventDefault(ev);
+      if (busy) return;
+      busy = true;
+      bar.classList.add('locating'); // no 'busy': esa clase global dibuja un giro a la izquierda
+      try {
+        const fix = await readPosition({ maxMs: 5000 });
+        if (!map.getContainer().isConnected) return; // se cambió de pantalla mientras buscaba
+        geoRef = { lat: fix.lat, lng: fix.lng };
+        const at = [fix.lat, fix.lng];
+        const color = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#0b6b4a';
+        dot?.remove();
+        ring?.remove();
+        ring = L.circle(at, { radius: fix.accuracy, color, weight: 1, fillOpacity: 0.1, interactive: false }).addTo(map);
+        dot = L.circleMarker(at, { radius: 8, color: '#fff', weight: 3, fillColor: color, fillOpacity: 1, interactive: false }).addTo(map);
+        map.flyTo(at, Math.max(map.getZoom(), 16), { duration: 0.6 });
+      } catch (err) {
+        onError(err?.code === 1 ? 'Sin permiso de ubicación. Actívalo en el navegador.' : 'No se pudo obtener tu ubicación.');
+      } finally {
+        busy = false;
+        bar.classList.remove('locating');
+      }
+    });
+    return bar;
+  };
+  control.addTo(map);
 }
 
 // Con muchos medios de pago el carrusel se vuelve largo. Se ordenan por el uso más reciente (los que más
@@ -966,13 +1017,52 @@ function loadLeaflet() {
   return leafletLoading;
 }
 
+// Capa base de todos los mapas. Un solo lugar para cambiar de proveedor.
+//  - Stadia Maps: "OSM Bright" (con color: parques, agua, calles) en el tema claro y "Alidade Smooth Dark" en el oscuro. En el navegador
+//    no lleva clave: Stadia identifica el sitio por su dirección (autenticación por dominio; "localhost" funciona sin configurar).
+//    El dominio de producción se registra en su panel.
+//  - Si Stadia falla (dominio sin registrar, cupo agotado, caída), OpenStreetMap, que no usa clave y no vence. Una vez que falla,
+//    los demás mapas de esa sesión van directo a OpenStreetMap (recargar la app vuelve a probar con Stadia).
+// Las teselas de OpenStreetMap se invierten con CSS en el tema oscuro (clase osm-tiles en el mapa); las de Stadia ya vienen oscuras.
+const OSM_TILES = { url: "https://tile.openstreetmap.org/{z}/{x}/{y}.png", maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' };
+const STADIA = "https://tiles.stadiamaps.com/tiles";
+let stadiaFailed = false;
+let stadiaProbe = null; // ¿Stadia acepta este sitio? Se pregunta una vez por sesión.
+
+// Cuando Stadia no autoriza (401), la respuesta es una imagen de error con estado 401: para el navegador eso es una tesela "buena" y
+// el evento tileerror nunca salta. Por eso se pide una tesela con fetch y se mira el estado (Stadia permite este acceso entre sitios).
+function stadiaAllowed(style) {
+  stadiaProbe ??= fetch(`${STADIA}/${style}/0/0/0.png`, { cache: "no-store" }).then((r) => r.ok).catch(() => true); // sin red: que decida tileerror
+  return stadiaProbe;
+}
+
+function addBaseTiles(L, map) {
+  const useOsm = () => {
+    stadiaFailed = true;
+    map.getContainer().classList.add("osm-tiles");
+    return L.tileLayer(OSM_TILES.url, { maxZoom: OSM_TILES.maxZoom, attribution: OSM_TILES.attribution }).addTo(map);
+  };
+  if (stadiaFailed) return useOsm();
+  const style = document.documentElement.dataset.scheme === "dark" ? "alidade_smooth_dark" : "osm_bright";
+  const layer = L.tileLayer(`${STADIA}/${style}/{z}/{x}/{y}{r}.png`, {
+    maxZoom: 20, detectRetina: true,
+    attribution: '© <a href="https://stadiamaps.com/" target="_blank" rel="noopener">Stadia Maps</a> © <a href="https://openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+  }).addTo(map);
+  const swap = () => { if (map.hasLayer(layer)) { map.removeLayer(layer); useOsm(); } };
+  stadiaAllowed(style).then((ok) => { if (!ok) swap(); });
+  // Varias teselas seguidas con error de red = Stadia no responde: también se cambia a OpenStreetMap.
+  let errors = 0;
+  layer.on("tileerror", () => { errors += 1; if (errors === 4) swap(); });
+  return layer;
+}
+
 function viewMap() {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
   const n = c.expenses.filter(hasLocation).length;
   if (!n) {
     return `<div class="card"><h2>Mapa de lugares</h2>
-      <div class="empty">Aún no hay gastos con ubicación. Al agregar o editar un gasto, usa “Usar mi ubicación” o “Buscar o elegir en el mapa”.</div>
+      <div class="empty">Aún no hay gastos con ubicación. Al agregar o editar un gasto, usa “Elegir lugar en el mapa”.</div>
       <a class="btn secondary" href="#/gastos">Ir a Gastos</a></div>`;
   }
   const { places } = routeFrom(c.expenses);
@@ -1022,9 +1112,8 @@ async function initMap() {
   const map = L.map(el, { zoomControl: false });
   leafletMap = map;
   L.control.zoom({ position: 'bottomright', zoomInTitle: 'Acercar', zoomOutTitle: 'Alejar' }).addTo(map);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(map);
+  addLocateControl(L, map, (msg) => toast(msg, 'error'));
+  addBaseTiles(L, map);
   // El recorrido (línea punteada) va debajo; encima, cada parada numerada por orden de primera visita.
   const brand = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#0b6b4a';
   if (path.length > 1) L.polyline(path, { color: brand, weight: 4, opacity: 0.75, dashArray: '2 9', lineCap: 'round', interactive: false }).addTo(map);
@@ -1056,136 +1145,474 @@ let lastMapSig = '';
 let mapFocus = ''; // id del gasto cuyo lugar se abre al entrar al mapa
 const mapSig = () => JSON.stringify([routeFrom(ctx().expenses), mapFocus]);
 
-// --- elegir el lugar en el mapa o buscándolo por nombre (para gastos de antes, o si ya no estás ahí) ---
+// --- Lugar del gasto: un solo diálogo con mapa, búsqueda y sugerencias (la lógica sin DOM está en picker.mjs) ---
+//
+// Toda acción fija un *ancla* (📍 Mi ubicación, un toque en el mapa o un resultado de búsqueda). Alrededor del ancla se arma la lista:
+// "Este punto" (seleccionado por defecto), los lugares que ya usaste y los sitios cercanos. Tocar una fila la selecciona (el pin se
+// mueve ahí) y "Usar este lugar" confirma. El mapa tiene alto fijo y la lista hace scroll debajo: nada salta al aparecer resultados.
 
 const $pick = document.getElementById('map-pick');
 const $pickOk = document.getElementById('pick-ok');
-const $pickResults = document.getElementById('pick-results');
+const $pickPanel = document.getElementById('pick-panel');
+const $pickSel = document.getElementById('pick-sel');
+const $pickQ = document.getElementById('pick-q');
+const $pickHere = document.getElementById('pick-here');
+const $pickHereT = document.getElementById('pick-here-t');
 let pickMap = null;
-let pickMarker = null;
-let pickPoint = null;
-let pickName = ''; // nombre del resultado buscado; se usa como "lugar" si el gasto no tiene uno
 let pickLeaflet = null;
+let pickLayer = null; // marcadores numerados de los candidatos
+let pickGps = null; // punto azul + círculo de precisión de tu ubicación
+let pickPin = null; // el pin de lo elegido
+let pickResize = null;
+let geoRef = null; // última ubicación del dispositivo, si dio permiso
+let searchTimer = null;
 
-function setPickPoint(latlng, name = '') {
-  pickPoint = { lat: latlng.lat, lng: latlng.lng };
-  pickName = name;
-  if (pickMarker) pickMarker.setLatLng(latlng);
-  else pickMarker = pickLeaflet.marker(latlng).addTo(pickMap);
-  $pickOk.disabled = false;
-  document.getElementById('pick-hint').textContent = `${name ? name + ' · ' : ''}${formatCoords(pickPoint.lat, pickPoint.lng)} · toca otro punto para moverlo`;
+const pk = {
+  target: null, anchor: null, known: [], nearby: [], items: [], selKey: 'point', typed: '',
+  osm: 'done', more: 'idle', note: '', search: null, radiusM: 60, touched: false, locating: false,
+  seq: 0, ctl: null, sseq: 0, sctl: null, locCtl: null,
+  adjusted: new Map(), // llave de la fila -> { lat, lng } corregidos por el usuario (arrastró el pin o usó "Ajustar pin")
+  moveMode: false, // mientras está activo, un toque en el mapa mueve el pin en vez de elegir un punto nuevo
+};
+let pickAdjustBtn = null;
+
+const pickSel = () => pk.items.find((i) => i.key === pk.selKey) ?? null;
+const skeleton = (n) => '<div class="sug-skel" aria-hidden="true"></div>'.repeat(n);
+
+// Bloque "Buscar más lugares" (Foursquare): el botón, o el estado de la consulta.
+function moreHtml(state, attr = 'data-more') {
+  const btn = `<button type="button" class="btn secondary small more-btn" ${attr}>🔎 Buscar más lugares</button>`;
+  if (state === 'loading') return `<div class="pick-wait" role="status"><span class="spin" aria-hidden="true"></span>Buscando más lugares…</div>${skeleton(1)}`;
+  if (state === 'off') return '<div class="sug-note">La búsqueda ampliada no está activada (falta la clave de Foursquare en el servidor).</div>';
+  if (state === 'none') return '<div class="sug-note">No hay más lugares nuevos aquí.</div>';
+  if (state === 'error') return `<div class="sug-note">No se pudo buscar más lugares. Revisa tu conexión.</div>${btn}`;
+  if (state === 'done') return '<p class="muted sug-credit">Algunos sitios vienen de Foursquare.</p>';
+  return btn;
+}
+
+// Una fila de la lista: número (el mismo del mapa), nombre, detalle, distancia y una marca si es la elegida.
+function rowHtml(c, i, attr = 'data-i') {
+  const sel = c.key === pk.selKey;
+  const point = c.kind === 'point';
+  const where = selectionSummary({ ...c, name: '' });
+  const name = point ? 'Este punto' : (c.name || 'Sin nombre');
+  const sub = point ? `${where.title} · ${where.sub}`
+    : c.kind === 'known' ? `✓ Ya lo usaste · ${c.count} gasto${c.count === 1 ? '' : 's'}`
+    : `${c.kind ? `${placeIcon(c.kind)} ` : ''}${c.detail || formatCoords(c.lat, c.lng)}${c.approx ? ' · posición aproximada' : ''}`;
+  const badge = point ? '<span class="pk-ico" aria-hidden="true">📍</span>'
+    : `<span class="stop-n${c.kind === 'known' ? '' : ' last'}" aria-hidden="true">${c.n ?? '•'}</span>`;
+  const km = !point && c.km != null ? `<span class="pick-km">${esc(formatDistance(c.km))}</span>` : '';
+  return `<button type="button" class="pick-res${sel ? ' sel' : ''}" ${attr}="${i}" aria-pressed="${sel}">${badge}
+    <span class="sug-txt"><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span>${km}<span class="pk-tick" aria-hidden="true">✓</span></button>`;
+}
+
+function idleHtml() {
+  return `<div class="pk-help"><p><b>¿Dónde fue el gasto?</b></p>
+    <ul><li><span aria-hidden="true">📍</span><span>Toca <b>Mi ubicación</b> para usar tu GPS</span></li>
+    <li><span aria-hidden="true">👆</span><span>Toca el mapa donde fue la compra</span></li>
+    <li><span aria-hidden="true">🔍</span><span>O busca el nombre de la tienda o del edificio</span></li></ul></div>
+    ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
+}
+
+// Aviso sobre la posición: cómo corregirla si el pin no está donde debe, y qué hacer mientras está el modo mover.
+function hintHtml() {
+  const sel = pickSel();
+  if (pk.moveMode) return '<div class="pk-hint move" role="status">Toca el mapa donde está el lugar de verdad, o arrastra el pin. Luego toca “Listo”.</div>';
+  if (sel?.approx) return '<div class="pk-hint">La posición de este lugar es aproximada. Si el pin no está bien, arrástralo o toca “📌 Ajustar pin” en el mapa.</div>';
+  return '';
+}
+
+function anchorHtml() {
+  const [point, ...rest] = pk.items;
+  const known = rest.filter((c) => c.kind === 'known');
+  const near = rest.filter((c) => c.kind === 'near');
+  const idx = (c) => pk.items.indexOf(c);
+  const nameInput = point.key === pk.selKey
+    ? `<div class="pk-name"><label for="pick-name" class="sr-only">Nombre del lugar (opcional)</label>
+        <input id="pick-name" maxlength="120" autocomplete="off" placeholder="Nombre del lugar (opcional)" value="${esc(pk.typed)}"></div>` : '';
+  const nearStatus = pk.osm === 'loading' ? `<div class="muted" role="status">Buscando sitios cerca…</div>${skeleton(2)}`
+    : pk.osm === 'error' && !near.length ? '<div class="sug-note">No se pudieron cargar los sitios de OpenStreetMap. Revisa tu conexión.</div>'
+    : !near.length && pk.more !== 'loading' ? '<div class="sug-note">No hay sitios con nombre aquí. Usa “Este punto” o busca el nombre.</div>' : '';
+  return `${hintHtml()}${rowHtml(point, 0)}${nameInput}
+    ${known.length ? `<h3 class="sug-h">Lugares que ya usaste <span>${known.length}</span></h3><div class="sug-list">${known.map((c) => rowHtml(c, idx(c))).join('')}</div>` : ''}
+    <h3 class="sug-h">Sitios cercanos${near.length ? ` <span>${near.length}</span>` : ''}</h3>
+    <div class="sug-list">${near.map((c) => rowHtml(c, idx(c))).join('')}${nearStatus}</div>
+    ${pk.osm === 'loading' ? '' : `<div class="sug-more">${moreHtml(pk.more)}</div>`}
+    ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
+}
+
+// Resultados de una búsqueda por nombre: Foursquare (ordenado por parecido) y OpenStreetMap juntos, lo cercano primero.
+function searchList() {
+  const s = pk.search;
+  // El mismo lugar en las dos fuentes sale una vez, con la posición de OpenStreetMap (la de Foursquare es aproximada).
+  const merged = preferOsm(s.fsq, s.osm);
+  const found = dedupeByName([...merged.fsq, ...merged.osm]);
+  const { near, far } = rankSearch(found, s.ref);
+  return { near, far, all: [...near, ...far] };
+}
+
+function searchHtml() {
+  const s = pk.search;
+  const { near, far, all } = searchList();
+  const row = (c) => {
+    const badge = `<span class="pk-ico" aria-hidden="true">${c.kind ? placeIcon(c.kind) : '📍'}</span>`;
+    const km = c.km != null ? `<span class="pick-km">${esc(formatDistance(c.km))}</span>` : '';
+    return `<button type="button" class="pick-res" data-s="${all.indexOf(c)}">${badge}
+      <span class="sug-txt"><b>${esc(c.name)}</b><span class="muted">${esc(`${c.detail || formatCoords(c.lat, c.lng)}${c.approx ? ' · posición aproximada' : ''}`)}</span></span>${km}</button>`;
+  };
+  const busy = s.state === 'loading' || s.fsqState === 'loading';
+  const status = busy && !all.length ? `<div class="muted" role="status">Buscando…</div>${skeleton(3)}`
+    : !busy && !all.length ? `<div class="sug-note">${s.state === 'error' && s.fsqState !== 'done'
+      ? 'No se pudo buscar. Revisa tu conexión.' : 'No se encontró. Prueba con el nombre completo (por ejemplo con “Edf.”) o toca el mapa donde fue.'}</div>` : '';
+  const fsq = s.fsqState === 'idle' ? moreHtml('idle', 'data-more-search')
+    : s.fsqState === 'noref' ? '<div class="sug-note">Mueve el mapa o usa Mi ubicación para buscar con más alcance.</div>'
+    : moreHtml(s.fsqState, 'data-more-search');
+  return `${hintHtml()}<div class="pk-bar"><h3 class="sug-h">Resultados de “${esc(s.q)}”</h3>${pk.anchor ? '<button type="button" class="linkbtn" data-clear-search>‹ Volver</button>' : ''}</div>
+    <div class="sug-list" aria-busy="${busy}">${near.map(row).join('')}${far.length ? `<h3 class="sug-h">Más lejos</h3>${far.map(row).join('')}` : ''}${status}</div>
+    <div class="sug-more">${fsq}</div>`;
+}
+
+function paintPick() {
+  pk.items = buildList({ anchor: pk.anchor, known: pk.known, nearby: pk.nearby, typed: pk.typed, adjusted: pk.adjusted });
+  const top = $pickPanel.scrollTop;
+  const mode = pk.search ? 'search' : pk.anchor ? 'anchor' : 'idle';
+  $pickPanel.innerHTML = mode === 'search' ? searchHtml() : mode === 'anchor' ? anchorHtml() : idleHtml();
+  if ($pickPanel.dataset.mode === mode) $pickPanel.scrollTop = top; // el redibujo no manda la lista de vuelta al inicio
+  $pickPanel.dataset.mode = mode;
+  updatePickFoot();
+}
+
+function updatePickFoot() {
+  const sel = pickSel();
+  const { title, sub } = selectionSummary(sel);
+  $pickSel.innerHTML = `<b>${esc(title)}</b><span class="muted">${esc(sub)}</span>`;
+  $pickOk.disabled = !sel;
+  updateAdjust();
+}
+
+// Botón del mapa "📌 Ajustar pin" (solo con algo elegido): activa el modo mover; "✓ Listo" lo apaga. Alternativa a arrastrar el pin, que en
+// el celular queda tapado por el dedo.
+function addAdjustControl(L, map) {
+  const control = L.control({ position: 'bottomleft' });
+  control.onAdd = () => {
+    const bar = L.DomUtil.create('div', 'leaflet-bar adjust-ctl');
+    const btn = L.DomUtil.create('a', '', bar);
+    btn.href = '#';
+    btn.setAttribute('role', 'button');
+    L.DomEvent.disableClickPropagation(bar);
+    L.DomEvent.on(btn, 'click', (ev) => {
+      L.DomEvent.preventDefault(ev);
+      pk.moveMode = !pk.moveMode;
+      paintPick();
+      drawPickMap(); // en modo mover los números del mapa dejan de ser tocables: un toque encima también mueve el pin
+    });
+    pickAdjustBtn = btn;
+    return bar;
+  };
+  control.addTo(map);
+  updateAdjust();
+}
+
+function updateAdjust() {
+  if (!pickAdjustBtn) return;
+  pickAdjustBtn.parentElement.hidden = !pickSel();
+  pickAdjustBtn.textContent = pk.moveMode ? '✓ Listo' : '📌 Ajustar pin';
+  pickAdjustBtn.setAttribute('aria-pressed', String(pk.moveMode));
+  pickAdjustBtn.parentElement.classList.toggle('on', pk.moveMode);
+  pickMap?.getContainer().classList.toggle('moving', pk.moveMode);
+}
+
+// El usuario corrigió la posición de lo elegido (arrastró el pin o tocó el mapa en modo mover): se conserva el nombre y cambian las coordenadas.
+function setAdjusted(ll) {
+  const sel = pickSel();
+  if (!sel) return;
+  pk.adjusted.set(sel.key, { lat: ll.lat, lng: ll.lng });
+  paintPick();
+  drawPickMap();
+}
+
+// Mapa: el pin va donde está lo elegido; los demás candidatos son círculos numerados (tocar uno lo elige).
+function drawPickMap() {
+  if (!pickMap || !pickLayer) return;
+  const L = pickLeaflet;
+  pickLayer.clearLayers();
+  const sel = pickSel();
+  const pts = [];
+  pk.items.forEach((c, i) => {
+    if (c.kind === 'point') return;
+    pts.push([c.lat, c.lng]);
+    if (c === sel) return; // lo elegido lo representa el pin
+    const icon = L.divIcon({ className: `stop${c.kind === 'known' ? '' : ' last'}`, html: `<span>${c.n}</span>`, iconSize: [34, 34], iconAnchor: [17, 17] });
+    L.marker([c.lat, c.lng], { icon, title: c.name || `Lugar ${c.n}`, alt: c.name || `Lugar ${c.n}`, interactive: !pk.moveMode, keyboard: !pk.moveMode })
+      .on('click', () => selectPick(i)).addTo(pickLayer);
+  });
+  if (sel) {
+    if (pickPin) pickPin.setLatLng([sel.lat, sel.lng]);
+    else {
+      pickPin = L.marker([sel.lat, sel.lng], { title: 'Lugar elegido (arrástralo para corregir la posición)', alt: 'Lugar elegido', keyboard: false, draggable: true })
+        .on('dragend', (ev) => setAdjusted(ev.target.getLatLng())).addTo(pickMap);
+    }
+  }
+  // Con tu ubicación o un resultado se encuadra el ancla con sus candidatos; con un toque suelto no se toca la vista (el usuario ya
+  // eligió dónde mirar). Si moviste el mapa tú, tampoco.
+  if (!pk.touched && pk.anchor && ['gps', 'result'].includes(pk.anchor.source) && pts.length) {
+    pickMap.fitBounds([[pk.anchor.lat, pk.anchor.lng], ...pts], { padding: [40, 40], maxZoom: 18, animate: false });
+  }
+}
+
+function selectPick(i) {
+  const c = pk.items[i];
+  if (!c) return;
+  pk.selKey = c.key;
+  pk.moveMode = false;
+  paintPick();
+  drawPickMap();
+  const ll = [c.lat, c.lng];
+  if (pickMap && !pickMap.getBounds().pad(-0.12).contains(ll)) pickMap.panTo(ll);
+}
+
+// Fija el ancla y arma la lista: lugares usados al instante (sin red) y sitios cercanos de OpenStreetMap cuando lleguen.
+function setAnchor(at, { source, accuracy = null, name = '', radiusM = 60, approx = false } = {}) {
+  Object.assign(pk, {
+    anchor: { lat: at.lat, lng: at.lng, source, accuracy, approx }, radiusM, typed: name, selKey: 'point', known: knownPlaces(ctx().expenses, at),
+    nearby: [], more: 'idle', osm: 'loading', note: '', search: null, touched: false, adjusted: new Map(), moveMode: false,
+  });
+  pk.ctl?.abort();
+  pk.ctl = new AbortController();
+  const seq = (pk.seq += 1);
+  pickMap?.getContainer().addEventListener('pointerdown', () => { pk.touched = true; }, { once: true });
+  paintPick();
+  drawPickMap();
+  // Con tu ubicación o un resultado, si OpenStreetMap trae poco (lo normal con edificios y negocios pequeños) se completa solo con
+  // Foursquare. Con un toque suelto queda el botón, para no gastar el cupo gratis en cada toque.
+  const auto = source === 'gps' || source === 'result';
+  nearbyPlaces(at, { radiusM: source === 'gps' ? 80 : radiusM, limit: 8, signal: pk.ctl.signal }).then(({ results }) => {
+    if (seq !== pk.seq) return;
+    pk.nearby = mergeCandidates(pk.known, results);
+    pk.osm = 'done';
+    paintPick();
+    drawPickMap();
+    if (auto && pk.nearby.length < 5) loadMorePick();
+  }).catch((err) => {
+    if (err?.name === 'AbortError' || seq !== pk.seq) return;
+    pk.osm = 'error';
+    paintPick();
+    if (auto) loadMorePick();
+  });
+}
+
+// "Buscar más lugares" para el ancla: Foursquare (incluye edificios) alrededor del punto; lo nuevo se suma a la lista y al mapa.
+async function loadMorePick() {
+  const a = pk.anchor;
+  if (!a || pk.more === 'loading') return;
+  const seq = pk.seq;
+  const set = (state) => { if (seq === pk.seq) { pk.more = state; paintPick(); drawPickMap(); } };
+  set('loading');
+  try {
+    const radius = a.source === 'gps' ? 150 : Math.max(40, pk.radiusM * 1.5);
+    const { configured, results } = await store.fetchMorePlaces({ lat: a.lat, lng: a.lng, radius });
+    if (!configured) return set('off');
+    if (seq !== pk.seq) return;
+    // Lo que ya está en OpenStreetMap (mismo nombre equivalente, hasta 150 m) no se repite: queda el de OpenStreetMap, con mejor posición.
+    const withKm = results.map((r) => ({ ...r, km: distanceKm(a, r) }));
+    const fresh = mergeCandidates([...pk.known, ...pk.nearby], preferOsm(withKm, pk.nearby).fsq.filter((r) => !r.merged));
+    pk.nearby = [...pk.nearby, ...fresh];
+    set(fresh.length ? 'done' : 'none');
+  } catch { set('error'); }
+}
+
+function onMapTap(ll) {
+  const z = pickMap.getZoom();
+  // Muy alejado un toque no distingue una tienda de otra: se acerca al punto en vez de ignorarlo.
+  if (z < PICK_MIN_ZOOM) pickMap.setView(ll, TAP_ZOOM);
+  setAnchor(ll, { source: 'tap', radiusM: tapRadiusM(z < PICK_MIN_ZOOM ? TAP_ZOOM : z, ll.lat) });
+}
+
+// Botón 📍 Mi ubicación: lee el GPS (la mejor lectura en unos segundos), lo marca en el mapa y lo usa de ancla. Tocarlo otra vez cancela.
+function setHere(text) {
+  $pickHere.classList.toggle('locating', Boolean(text));
+  $pickHere.setAttribute('aria-label', text ? 'Cancelar la búsqueda de tu ubicación' : 'Usar mi ubicación');
+  $pickHereT.textContent = text ?? 'Mi ubicación';
+}
+
+async function pickLocate() {
+  if (pk.locating) { pk.locCtl?.abort(); return; }
+  if (!navigator.geolocation) { pk.note = 'Este dispositivo no permite obtener la ubicación.'; paintPick(); return; }
+  pk.locating = true;
+  pk.locCtl = new AbortController();
+  pk.note = '';
+  setHere('Buscando…');
+  try {
+    const fix = await readPosition({ maxMs: 6000, signal: pk.locCtl.signal, onProgress: (m) => setHere(`Buscando · ±${Math.max(5, Math.round(m))} m`) });
+    if (!$pick.open || !pickMap) return;
+    geoRef = { lat: fix.lat, lng: fix.lng };
+    const L = pickLeaflet;
+    const color = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim() || '#0b6b4a';
+    pickGps?.clearLayers();
+    pickGps ??= L.layerGroup().addTo(pickMap);
+    if (fix.accuracy) L.circle([fix.lat, fix.lng], { radius: fix.accuracy, color, weight: 1, fillOpacity: 0.1, interactive: false }).addTo(pickGps);
+    L.circleMarker([fix.lat, fix.lng], { radius: 8, color: '#fff', weight: 3, fillColor: color, fillOpacity: 1, interactive: false }).addTo(pickGps);
+    pickMap.setView([fix.lat, fix.lng], 18, { animate: false });
+    setAnchor(fix, { source: 'gps', accuracy: fix.accuracy, radiusM: 80 });
+  } catch (err) {
+    if (err?.code === 0) return; // lo cancelaste tú
+    pk.note = err?.code === 1 ? 'Sin permiso de ubicación. Actívalo en el navegador y vuelve a intentar.' : 'No se pudo obtener tu ubicación. Intenta de nuevo.';
+    paintPick();
+  } finally {
+    pk.locating = false;
+    setHere(null);
+  }
 }
 
 async function openPicker() {
   if (!draft) return;
   const target = draft;
-  pickPoint = null;
-  pickName = '';
-  $pick.pickFor = target;
-  $pickOk.disabled = true;
+  for (const c of [pk.ctl, pk.sctl, pk.locCtl]) c?.abort();
   clearTimeout(searchTimer);
-  searchCtl?.abort();
-  $pickResults.hidden = true;
-  $pickResults.innerHTML = '';
-  document.getElementById('pick-q').value = '';
-  document.getElementById('pick-hint').textContent = 'Busca el lugar por nombre o toca el mapa donde fue la compra.';
+  Object.assign(pk, {
+    target, anchor: null, known: [], nearby: [], items: [], selKey: 'point', typed: '', osm: 'done', more: 'idle', note: '',
+    search: null, touched: false, locating: false, adjusted: new Map(), moveMode: false,
+  });
+  pk.seq += 1;
+  pk.sseq += 1;
+  $pickQ.value = '';
+  setHere(null);
+  paintPick();
   const box = document.getElementById('pick-map');
   box.innerHTML = '<div class="empty">Cargando mapa…</div>';
   $pick.showModal();
   try { pickLeaflet = await loadLeaflet(); } catch {
-    box.innerHTML = '<div class="empty">No se pudo cargar el mapa.</div>';
+    box.innerHTML = '<div class="empty">No se pudo cargar el mapa. Puedes buscar el lugar por nombre.</div>';
     return;
   }
-  if (!$pick.open) return;
+  if (!$pick.open || pk.target !== target) return;
   const L = pickLeaflet;
   box.innerHTML = '';
+  pickResize?.disconnect();
   pickMap?.remove();
-  pickMarker = null;
-  pickMap = L.map(box);
-  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-  }).addTo(pickMap);
-  // Arranca donde ya estaba el gasto; si no, en el último gasto con ubicación del viaje; si no, el mundo.
-  const last = ctx().expenses.find(hasLocation);
-  if (target.lat != null) { pickMap.setView([target.lat, target.lng], 16); setPickPoint({ lat: target.lat, lng: target.lng }); }
-  else if (last) pickMap.setView([last.lat, last.lng], 13);
-  else pickMap.setView([20, 0], 2);
-  // Sin gasto con ubicación donde centrarse: se usa dónde estás (si das permiso) para centrar el mapa y ordenar las búsquedas.
-  if (target.lat == null && !last && navigator.geolocation) {
-    navigator.geolocation.getCurrentPosition((pos) => {
-      geoRef = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      if (pickMap && !pickPoint && pickMap.getZoom() < 8) pickMap.setView([geoRef.lat, geoRef.lng], 14);
-    }, () => {}, { timeout: 6000, maximumAge: 600000 });
+  pickPin = null;
+  pickGps = null;
+  pickMap = L.map(box, { zoomControl: false });
+  L.control.zoom({ position: 'bottomright', zoomInTitle: 'Acercar', zoomOutTitle: 'Alejar' }).addTo(pickMap);
+  addBaseTiles(L, pickMap);
+  pickLayer = L.layerGroup().addTo(pickMap);
+  // Dentro del diálogo el tamaño real se conoce un instante después de abrirlo, y cambia si aparece el teclado o se gira el teléfono.
+  if (typeof ResizeObserver === 'function') {
+    pickResize = new ResizeObserver(() => pickMap?.invalidateSize());
+    pickResize.observe(box);
   }
-  pickMap.on('click', (ev) => setPickPoint(ev.latlng));
-  pickMap.invalidateSize();
+  // Arranca donde ya estaba el gasto; si no, donde estuviste hace poco; si no, en el último gasto con ubicación; si no, el mundo.
+  const last = ctx().expenses.find(hasLocation);
+  if (target.lat != null) {
+    pickMap.setView([target.lat, target.lng], 17);
+    setAnchor({ lat: target.lat, lng: target.lng }, { source: 'saved', name: target.place });
+  } else if (geoRef) pickMap.setView([geoRef.lat, geoRef.lng], 16);
+  else if (last) pickMap.setView([Number(last.lat), Number(last.lng)], 15);
+  else pickMap.setView([20, 0], 2);
+  addAdjustControl(L, pickMap);
+  // En modo mover un toque corrige la posición de lo elegido; si no, elige un punto nuevo.
+  pickMap.on('click', (ev) => { if (pk.moveMode && pickSel()) setAdjusted(ev.latlng); else onMapTap(ev.latlng); });
+  requestAnimationFrame(() => pickMap?.invalidateSize());
 }
 
-// Búsqueda por nombre: sugerencias mientras escribes (con una pausa corta) y también al enviar. Prefiere lo que está cerca
-// de tu ubicación o de lo que se ve en el mapa (ver geosearch.mjs): "Foco" encuentra el de tu ciudad, no uno de otro país.
-let geoRef = null; // última ubicación del dispositivo, si dio permiso
-let searchSeq = 0;
-let searchCtl = null;
-let searchTimer = null;
+// --- búsqueda por nombre ---
 
-// Punto de referencia para ordenar los resultados: lo que se ve en el mapa (si ya está cerca de algo) o tu ubicación.
-function searchRef() {
+// Punto de referencia para ordenar los resultados: el ancla, o lo que se ve en el mapa, o tu ubicación, o el último gasto.
+function pickSearchRef() {
+  if (pk.anchor) return { lat: pk.anchor.lat, lng: pk.anchor.lng };
   const c = pickMap?.getCenter();
   if (c && pickMap.getZoom() >= 8) return { lat: c.lat, lng: c.lng };
-  if (pickPoint) return { ...pickPoint };
-  return geoRef;
+  if (geoRef) return { ...geoRef };
+  const last = ctx().expenses.find(hasLocation);
+  return last ? { lat: Number(last.lat), lng: Number(last.lng) } : null;
 }
 
-async function runSearch(q) {
-  if (!pickMap) return;
-  const text = q.trim();
-  searchCtl?.abort();
-  if (text.length < 2) { $pickResults.hidden = true; return; }
-  const seq = (searchSeq += 1);
-  searchCtl = new AbortController();
-  $pickResults.hidden = false;
-  if (!$pickResults.childElementCount) $pickResults.innerHTML = '<div class="muted">Buscando…</div>';
+// Foursquare por nombre, alrededor de la referencia. Solo al enviar la búsqueda o con el botón (no en cada letra: cuida el cupo gratis).
+async function searchFsq() {
+  const s = pk.search;
+  if (!s || s.fsqState === 'loading') return;
+  if (!s.ref) { s.fsqState = 'noref'; paintPick(); return; }
+  const seq = pk.sseq;
+  s.fsqState = 'loading';
+  paintPick();
   try {
-    const { results } = await searchPlaces(text, { ref: searchRef(), signal: searchCtl.signal });
-    if (seq !== searchSeq) return;
-    $pickResults.found = results;
-    $pickResults.innerHTML = results.length
-      ? results.map((r, i) => `<button type="button" class="pick-res" data-i="${i}">
-          <span class="pick-line"><b>${esc(r.name)}</b>${r.km == null ? '' : `<span class="pick-km">${esc(formatDistance(r.km))}</span>`}</span>
-          <span class="muted">${esc(r.detail)}</span></button>`).join('')
-      : '<div class="muted">No se encontró. Prueba con otro nombre o agrega la ciudad.</div>';
-  } catch (err) {
-    if (err?.name === 'AbortError' || seq !== searchSeq) return;
-    $pickResults.innerHTML = '<div class="muted">No se pudo buscar. Revisa tu conexión o toca el mapa.</div>';
+    const { configured, results } = await store.fetchMorePlaces({ lat: s.ref.lat, lng: s.ref.lng, q: s.q, radius: 5000 });
+    if (seq !== pk.sseq) return;
+    s.fsq = results;
+    s.fsqState = configured ? 'done' : 'off';
+  } catch {
+    if (seq !== pk.sseq) return;
+    s.fsqState = 'error';
   }
+  paintPick();
+}
+
+function runPickSearch(q, { auto = false } = {}) {
+  const text = q.trim();
+  pk.sctl?.abort();
+  if (text.length < 2) { pk.search = null; paintPick(); return; }
+  const ref = pickSearchRef();
+  const seq = (pk.sseq += 1);
+  pk.sctl = new AbortController();
+  const s = { q: text, ref, osm: [], fsq: [], state: 'loading', fsqState: 'idle' };
+  pk.search = s;
+  paintPick();
+  searchPlaces(text, { ref, signal: pk.sctl.signal }).then(({ results }) => {
+    if (seq !== pk.sseq) return;
+    s.osm = results;
+    s.state = 'done';
+    paintPick();
+  }).catch((err) => {
+    if (err?.name === 'AbortError' || seq !== pk.sseq) return;
+    s.state = 'error';
+    paintPick();
+  });
+  if (auto) searchFsq(); // al enviar la búsqueda siempre se completa con Foursquare: OpenStreetMap suele traer sitios de otras ciudades
+}
+
+// Elegir un resultado: el mapa va ahí, ese punto pasa a ser el ancla y el nombre del resultado queda como nombre del lugar.
+function chooseResult(c) {
+  pk.search = null;
+  pk.sctl?.abort();
+  const at = { lat: c.lat, lng: c.lng };
+  if (pickMap) pickMap.setView([at.lat, at.lng], Math.max(pickMap.getZoom(), TAP_ZOOM), { animate: false });
+  setAnchor(at, { source: 'result', name: c.name.slice(0, 120), approx: Boolean(c.approx) });
 }
 
 document.getElementById('pick-search').addEventListener('submit', (ev) => {
   ev.preventDefault();
   clearTimeout(searchTimer);
-  runSearch(document.getElementById('pick-q').value);
+  runPickSearch($pickQ.value, { auto: true });
 });
-document.getElementById('pick-q').addEventListener('input', (ev) => {
+$pickQ.addEventListener('input', () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => runSearch(ev.target.value), 450);
+  searchTimer = setTimeout(() => runPickSearch($pickQ.value), 450);
 });
+$pickHere.addEventListener('click', pickLocate);
 
-$pickResults.addEventListener('click', (ev) => {
-  const b = ev.target.closest('.pick-res');
-  const r = b && $pickResults.found?.[Number(b.dataset.i)];
-  if (!r || !pickMap) return;
-  const at = { lat: r.lat, lng: r.lng };
-  setPickPoint(at, r.name);
-  pickMap.setView(at, 17);
-  $pickResults.hidden = true;
+$pickPanel.addEventListener('click', (ev) => {
+  const t = ev.target;
+  if (t.closest('[data-more]')) return loadMorePick();
+  if (t.closest('[data-more-search]')) return searchFsq();
+  if (t.closest('[data-clear-search]')) { pk.search = null; pk.sctl?.abort(); $pickQ.value = ''; paintPick(); return; }
+  const s = t.closest('[data-s]');
+  if (s) { const c = searchList().all[Number(s.dataset.s)]; if (c) chooseResult(c); return; }
+  const r = t.closest('[data-i]');
+  if (r) selectPick(Number(r.dataset.i));
+});
+$pickPanel.addEventListener('input', (ev) => {
+  if (ev.target.id !== 'pick-name') return;
+  pk.typed = ev.target.value;
+  updatePickFoot();
 });
 
 $pickOk.addEventListener('click', () => {
-  const target = $pick.pickFor;
-  if (pickPoint && target && target === draft) {
-    target.lat = pickPoint.lat;
-    target.lng = pickPoint.lng;
-    if (pickName && !target.place.trim()) target.place = pickName.slice(0, 120);
+  const sel = pickSel();
+  const target = pk.target;
+  if (sel && target && target === draft) {
+    target.lat = sel.lat;
+    target.lng = sel.lng;
+    target.place = confirmPlace(target.place, sel);
     paintLoc();
   }
   $pick.close();
@@ -1193,7 +1620,21 @@ $pickOk.addEventListener('click', () => {
 $pick.addEventListener('click', (ev) => {
   if (ev.target === $pick || ev.target.closest('[data-pick-cancel]')) $pick.close();
 });
-$pick.addEventListener('close', () => { pickMap?.remove(); pickMap = null; pickMarker = null; $pick.pickFor = null; });
+$pick.addEventListener('close', () => {
+  for (const c of [pk.ctl, pk.sctl, pk.locCtl]) c?.abort();
+  pk.seq += 1;
+  pk.sseq += 1;
+  clearTimeout(searchTimer);
+  pickResize?.disconnect();
+  pickMap?.remove();
+  pickMap = null;
+  pickLayer = null;
+  pickGps = null;
+  pickPin = null;
+  pickAdjustBtn = null;
+  pk.target = null;
+  pk.moveMode = false;
+});
 
 function viewLogin() {
   return `<form id="login" class="login card"><h2>Código de acceso</h2>
@@ -1272,7 +1713,33 @@ function focusKey() {
   return action ? `${el.localName}[data-action="${CSS.escape(action)}"]${id ? `[data-id="${CSS.escape(id)}"]` : ''}` : null;
 }
 
+// La versión de la app es el nombre de su caché (gastos-viaje-vNN). Se muestra al final de Ajustes para poder comprobar
+// que el celular o el navegador ya tiene la última.
+async function showAppVersion() {
+  let text = 'sin instalar (se carga desde internet)';
+  try {
+    const v = (await caches.keys()).filter((k) => k.startsWith('gastos-viaje-v')).sort().pop();
+    if (v) text = v.replace('gastos-viaje-', '');
+  } catch { /* sin Cache API */ }
+  if (!document.getElementById('app-version')) $view.insertAdjacentHTML('beforeend', '<p id="app-version" class="muted" style="text-align:center;margin:16px 0 0"></p>');
+  const el = document.getElementById('app-version');
+  if (el) el.textContent = `Versión de la app: ${text}`;
+}
+
+// Una versión nueva de la app: el service worker nuevo toma el control, pero la pantalla abierta sigue con el código viejo hasta
+// recargar. Se recarga sola, salvo que haya un gasto a medias: entonces espera a que lo termines o lo cierres.
+let updatePending = false;
+function applyUpdate() {
+  if (formActive()) {
+    updatePending = true;
+    toast('Hay una versión nueva. Se aplicará al terminar este gasto.');
+    return;
+  }
+  location.reload();
+}
+
 function render() {
+  if (updatePending && !formActive()) { updatePending = false; location.reload(); return; }
   updateStatus();
   $tripBtn.hidden = store.net.needsLogin;
   if (store.net.needsLogin) {
@@ -1302,6 +1769,7 @@ function render() {
   $view.innerHTML = r.view(m);
   if (keep) $view.querySelector(keep)?.focus({ preventScroll: true }); // el redibujo no le quita el foco a quien navega con teclado
   if (r.map) initMap();
+  if (r.tab === 'ajustes') showAppVersion();
   if (isFormRoute() && draft) { updateConv(); renderChart(); centerPicked(); }
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
   if (tripOpen) document.getElementById('trip-dialog')?.showModal();
@@ -1421,8 +1889,7 @@ $view.addEventListener('click', async (ev) => {
     draft.approx = !draft.approx;
     t.classList.toggle('on', draft.approx);
     t.setAttribute('aria-checked', String(draft.approx));
-  } else if (action === 'locate') locate();
-  else if (action === 'pick-map') openPicker();
+  } else if (action === 'pick-map') openPicker();
   else if (action === 'unlocate') { draft.lat = null; draft.lng = null; draft.place = ''; paintLoc(); }
   else if (action === 'bar') {
     const d = homeBars[Number(id ?? t.dataset.i)];
@@ -1772,7 +2239,14 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && !f
 setInterval(() => { if (!document.hidden && !formActive()) sync(); }, 60000);
 
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/sw.js').catch(() => {});
+  const hadController = Boolean(navigator.serviceWorker.controller); // la primera instalación no recarga; una actualización sí
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (hadController) applyUpdate(); });
+  navigator.serviceWorker.register('/sw.js').then((reg) => {
+    // El navegador solo busca un service worker nuevo al abrir la app; también se busca al volver a ella y cada 30 minutos.
+    const check = () => reg.update().catch(() => {});
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) check(); });
+    setInterval(check, 30 * 60 * 1000);
+  }).catch(() => {});
 }
 
 render(); // primero lo guardado en el teléfono; si el servidor trae algo distinto, refresh() avisa y se redibuja

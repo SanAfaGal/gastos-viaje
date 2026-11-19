@@ -164,6 +164,14 @@ export async function fetchRate(date) {
   }
 }
 
+// Más lugares cerca de un punto (Foursquare, vía el servidor). Devuelve { configured, results }; lanza si no hay conexión o falla.
+export function fetchMorePlaces({ lat, lng, radius, q }) {
+  const params = new URLSearchParams({ lat: String(lat), lng: String(lng) });
+  if (radius) params.set('radius', String(Math.round(radius)));
+  if (q) params.set('q', q);
+  return request('GET', `/api/places?${params}`);
+}
+
 // Historial de tasas para el gráfico: lo pide al servidor y guarda una copia por si no hay internet.
 export async function fetchHistory(days = 30) {
   const trip = activeTrip();
