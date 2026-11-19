@@ -12,6 +12,10 @@
 // Trazabilidad: cada tasa guarda de qué fuente salió (rates.source y expenses.rate_source) y rates.fetched_at, cuándo se
 // consultó. Vacío = guardada antes de que se registrara la fuente.
 //
+// Moneda del gasto (expenses.currency): vacío = la moneda del destino del viaje, así los gastos anteriores no cambian.
+// Con otra moneda (la de casa, por ejemplo un vuelo comprado en Colombia, o la de un tercer país) amount_cents está en
+// esa moneda y la tasa es la de ese par hacia la moneda de casa (1 si ya es la de casa).
+//
 // No usar punto y coma dentro de los comentarios de este archivo: el esquema se parte por punto y coma.
 export default `CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -79,7 +83,8 @@ CREATE TABLE IF NOT EXISTS expenses (
   place TEXT,
   amount_approx INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER,
-  pay_pending INTEGER NOT NULL DEFAULT 0
+  pay_pending INTEGER NOT NULL DEFAULT 0,
+  currency TEXT
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (

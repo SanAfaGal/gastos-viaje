@@ -19,7 +19,8 @@ function byTime(expenses) {
 // Agrupa los gastos que están muy cerca (con 3 decimales, unos 100 m) en un solo lugar y recorre el viaje en orden:
 //   places: paradas numeradas por su primera visita [{ n, lat, lng, place, count, total_home, total_dest, ids, first_date, last_date }]
 //   path:   puntos [lat, lng] del recorrido; una vuelta a un lugar ya visitado cuenta, dos gastos seguidos en el mismo no.
-export function routeFrom(expenses, decimals = 3) {
+// total_dest solo suma los gastos en la moneda del destino (`destCode`): los de otra moneda no se pueden sumar ahí.
+export function routeFrom(expenses, decimals = 3, destCode = null) {
   const groups = new Map();
   const seq = [];
   for (const e of byTime(expenses)) {
@@ -33,7 +34,7 @@ export function routeFrom(expenses, decimals = 3) {
     g.sumLng += Number(e.lng);
     g.count += 1;
     g.total_home += e.amount_home ?? 0;
-    g.total_dest += e.amount_cents ?? 0;
+    if (!destCode || !e.currency || e.currency === destCode) g.total_dest += e.amount_cents ?? 0;
     g.ids.push(e.id);
     g.last_date = e.date;
     if (!g.place && e.place) g.place = e.place;

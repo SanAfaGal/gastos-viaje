@@ -115,7 +115,8 @@ const tripById = (id) => tripsList().find((t) => t.id === id);
 const expenseTrip = (e) => tripById(e.trip_id ?? tripsList()[0].id);
 
 export const activeTrip = () => tripById(activeId) ?? tripsList()[0];
-const pairKey = (trip = activeTrip()) => `${trip.dest}-${trip.home}`;
+// Par de monedas de las tasas guardadas. `currency` = moneda de un gasto que no es la del destino del viaje.
+const pairKey = (trip = activeTrip(), currency = trip.dest) => `${currency ?? trip.dest}-${trip.home}`;
 const applySettings = () => setCurrencies(activeTrip().dest, activeTrip().home);
 applySettings();
 
@@ -130,8 +131,9 @@ export function setActiveTrip(id) {
   notify();
 }
 
-function remember(date, rate, trip = activeTrip()) {
-  const key = pairKey(trip);
+function remember(date, rate, trip = activeTrip(), currency = trip.dest) {
+  if (currency === trip.home) return; // en la moneda de casa la tasa siempre es 1: no hay nada que guardar
+  const key = pairKey(trip, currency);
   rates[key] ??= {};
   rates[key][date] = rate;
   write(K.rates, rates);
@@ -140,26 +142,30 @@ function remember(date, rate, trip = activeTrip()) {
 function rememberRates(expenses) {
   for (const e of expenses) {
     const trip = expenseTrip(e);
-    if (trip && e.rate && e.rate_date && !e.rate_estimated) remember(e.rate_date, e.rate, trip);
+    if (trip && e.rate && e.rate_date && !e.rate_estimated) remember(e.rate_date, e.rate, trip, e.currency);
   }
 }
 
-// Tasa conocida en el celular para esa fecha, o la anterior más cercana.
-export function localRate(date, trip = activeTrip()) {
-  const map = rates[pairKey(trip)] ?? {};
+// Tasa conocida en el celular para esa fecha, o la anterior más cercana. `currency`: la del gasto (por defecto la del destino).
+export function localRate(date, trip = activeTrip(), currency = trip.dest) {
+  if (currency === trip.home) return { rate: 1, estimated: false }; // gasto en la moneda de casa: sin conversión
+  const map = rates[pairKey(trip, currency)] ?? {};
   if (map[date]) return { rate: map[date], estimated: false };
   const earlier = Object.keys(map).filter((d) => d <= date).sort().pop();
   return earlier ? { rate: map[earlier], estimated: true } : null;
 }
 
-export async function fetchRate(date) {
+export async function fetchRate(date, currency) {
   const trip = activeTrip();
+  const cur = currency ?? trip.dest;
+  if (cur === trip.home) return { rate: 1, estimated: false, rate_date: date, source: null, local: false };
   try {
-    const r = await request('GET', `/api/rate?date=${date}&trip=${encodeURIComponent(trip.id)}`);
-    if (r?.rate && !r.estimated) remember(r.rate_date, r.rate, trip);
+    const extra = cur === trip.dest ? '' : `&currency=${encodeURIComponent(cur)}`;
+    const r = await request('GET', `/api/rate?date=${date}&trip=${encodeURIComponent(trip.id)}${extra}`);
+    if (r?.rate && !r.estimated) remember(r.rate_date, r.rate, trip, cur);
     return r?.rate ? r : null;
   } catch {
-    const l = localRate(date, trip);
+    const l = localRate(date, trip, cur);
     return l ? { rate: l.rate, estimated: true, local: true } : null;
   }
 }
@@ -234,9 +240,11 @@ export function getState() {
     const x = op.expense;
     const t = expenseTrip(x);
     if (!t) continue; // el viaje se borró: el servidor lo rechazará al enviar
-    const r = localRate(x.date, t);
+    const cur = x.currency ?? t.dest;
+    const r = localRate(x.date, t, cur);
     all.push({
       ...x,
+      currency: cur,
       // Editar un gasto no lo cambia de lugar en su día (si cambia de día, queda al final del nuevo).
       sort_order: prev && prev.date === x.date ? (prev.sort_order ?? null) : null,
       trip_id: t.id,
@@ -331,7 +339,7 @@ export const deleteMethod = (id) => mutate('DELETE', `/api/payment-methods/${id}
 export async function refreshRatesNow(dry) {
   const out = await request('POST', `/api/rates/refresh?trip=${encodeURIComponent(activeTrip().id)}${dry ? '&dry=1' : ''}`);
   if (!dry) {
-    delete rates[pairKey()];
+    for (const k of Object.keys(rates)) if (k.endsWith(`-${activeTrip().home}`)) delete rates[k]; // el viaje puede tener gastos en varias monedas
     write(K.rates, rates);
     await refresh();
   }

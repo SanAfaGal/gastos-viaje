@@ -26,16 +26,29 @@ export const currencies = () => ({ dest: current.dest, home: current.home });
 export const fmtDest = (cents) => current.fd.format(cents / 100);
 export const fmtHome = (cents) => current.fh.format(cents / 100);
 
-// "1 BRL = 585,03 COP"
-export function fmtRate(rate) {
-  const n = new Intl.NumberFormat(current.home.locale, { maximumFractionDigits: rate < 10 ? 4 : 2 }).format(rate);
-  return `1 ${current.dest.code} = ${n} ${current.home.code}`;
+// Monto en la moneda de un gasto (la del destino, la de casa u otra). Sin código o con uno desconocido, la del destino.
+const formatters = new Map();
+export function fmtMoney(code, cents) {
+  const c = currencyByCode(code);
+  if (!c || c.code === current.dest.code) return fmtDest(cents);
+  if (c.code === current.home.code) return fmtHome(cents);
+  if (!formatters.has(c.code)) formatters.set(c.code, formatterFor(c));
+  return formatters.get(c.code).format(cents / 100);
 }
 
-// "12,50", "12.50", "1.234,56", "R$ 8" -> centésimas enteras; null si no es válido.
+// "1 BRL = 585,03 COP". Con `code`, la tasa de esa moneda (la de un gasto en otra moneda) hacia la de casa.
+export function fmtRate(rate, code = current.dest.code) {
+  const n = new Intl.NumberFormat(current.home.locale, { maximumFractionDigits: rate < 10 ? 4 : 2 }).format(rate);
+  return `1 ${code} = ${n} ${current.home.code}`;
+}
+
+// "12,50", "12.50", "1.234,56", "50.000", "R$ 8" -> centésimas enteras; null si no es válido.
 export function parseAmount(text) {
   let s = String(text ?? '').replace(/[^\d.,]/g, '');
   if (!s) return null;
+  // Sin coma, puntos que separan miles ("50.000", "1.234.567"): en pesos colombianos es como se escribe. Un punto con 1 o 2
+  // decimales ("12.50") sigue siendo decimal.
+  if (!s.includes(',') && /^\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
   if (s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
   if (!/^\d+(\.\d{1,2})?$/.test(s)) return null;
   const cents = Math.round(parseFloat(s) * 100);

@@ -141,6 +141,7 @@ export async function restoreBackup(db, data, { dry, fail }) {
     if (!isValidDate(e.date) || !Number.isInteger(cents) || cents <= 0 || cents > MAX_CENTS) bad('gasto', e.id);
     if (rate === undefined || lat === undefined || lng === undefined || description === null || place === null || rateSource === null || flags.includes(undefined)) bad('gasto', e.id);
     if (e.rate_date != null && !isValidDate(e.rate_date)) bad('gasto', e.id);
+    if (e.currency != null && !currencyByCode(e.currency)) bad('gasto', e.id); // vacío = moneda del destino (copias anteriores)
     if ((lat == null) !== (lng == null)) bad('gasto', e.id);
     if (e.sort_order != null && !Number.isInteger(e.sort_order)) bad('gasto', e.id);
     if (!known('trips')(e.trip_id)) bad('el viaje de un gasto no existe', e.id);
@@ -148,10 +149,10 @@ export async function restoreBackup(db, data, { dry, fail }) {
     if (!links.get(e.id)?.size) bad('un gasto sin personas', e.id);
     stmts.expenses.push({
       sql: `INSERT OR IGNORE INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, rate_source,
-              created_at, trip_id, lat, lng, place, amount_approx, sort_order, pay_pending)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              created_at, trip_id, lat, lng, place, amount_approx, sort_order, pay_pending, currency)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [e.id, e.date, cents, description, e.payment_method_id, rate, rate == null ? null : (e.rate_date ?? e.date), rate == null ? null : (rateSource || null),
-        str(e.created_at, 40) || new Date().toISOString(), e.trip_id, lat, lng, place || null, flags[0], e.sort_order ?? null, flags[1]],
+        str(e.created_at, 40) || new Date().toISOString(), e.trip_id, lat, lng, place || null, flags[0], e.sort_order ?? null, flags[1], e.currency ?? null],
     });
     for (const p of links.get(e.id)) {
       stmts.expense_beneficiaries.push({ sql: 'INSERT OR IGNORE INTO expense_beneficiaries (expense_id, person_id) VALUES (?, ?)', args: [e.id, p] });

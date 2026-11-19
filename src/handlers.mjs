@@ -275,7 +275,11 @@ async function saveExpense(db, id, body) {
   // de que hubiera varios viajes) va al primero.
   const prevTrip = (await db.all('SELECT trip_id FROM expenses WHERE id = ?', [id]))[0]?.trip_id;
   const trip = await getTrip(db, prevTrip ?? body.trip_id);
-  const settings = tripPair(trip);
+  // Moneda del gasto: la del destino del viaje (se guarda vacía), la de casa o cualquier otra del catálogo.
+  const blankCur = body.currency == null || body.currency === '';
+  if (!blankCur && !currencyByCode(body.currency)) fail(400, 'Moneda no válida');
+  const currency = blankCur || body.currency === trip.dest_currency ? null : body.currency;
+  const settings = { dest: currency ?? trip.dest_currency, home: trip.home_currency };
   const going = await tripPeople(db, trip.id);
 
   // Medio "por definir": se sabe que se debe el gasto pero no con qué se pagó. La columna payment_method_id
@@ -335,8 +339,8 @@ async function saveExpense(db, id, body) {
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
               rate, rate_date, rate_source, created_at, trip_id,
-              lat, lng, place, amount_approx, pay_pending, sort_order)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              lat, lng, place, amount_approx, pay_pending, sort_order, currency)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
@@ -344,9 +348,10 @@ async function saveExpense(db, id, body) {
               lat = excluded.lat, lng = excluded.lng, place = excluded.place,
               amount_approx = excluded.amount_approx,
               pay_pending = excluded.pay_pending,
+              currency = excluded.currency,
               sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
       args: [id, body.date, cents, description, methodId, rate, rateDate, rateSource, createdAt, trip.id,
-        lat, lng, place, approx, payPending ? 1 : 0, sortOrder],
+        lat, lng, place, approx, payPending ? 1 : 0, sortOrder, currency],
     },
     { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
     ...ids.map((p) => ({
@@ -381,15 +386,19 @@ async function refreshTripRates(db, query) {
   const settings = tripPair(trip);
   const digits = currencyByCode(settings.home).digits;
   const rows = await db.all(
-    'SELECT id, date, amount_cents, rate, rate_date, rate_source FROM expenses WHERE trip_id = ?',
+    'SELECT id, date, amount_cents, rate, rate_date, rate_source, currency FROM expenses WHERE trip_id = ?',
     [trip.id],
   );
-  const dates = [...new Set(rows.map((r) => r.date))].sort().slice(-120);
-  let fresh;
-  try {
-    fresh = await refreshRates(db, settings, dates, { save: !dry });
-  } catch {
-    fail(503, 'No se pudo consultar la fuente de tasas. Intenta de nuevo con internet.');
+  // Cada moneda tiene su par hacia la de casa. Las que ya están en la de casa no tienen tasa que revisar (siempre 1).
+  const freshBy = new Map();
+  for (const cur of new Set(rows.map((r) => r.currency ?? settings.dest))) {
+    if (cur === settings.home) continue;
+    const dates = [...new Set(rows.filter((r) => (r.currency ?? settings.dest) === cur).map((r) => r.date))].sort().slice(-120);
+    try {
+      freshBy.set(cur, await refreshRates(db, { dest: cur, home: settings.home }, dates, { save: !dry }));
+    } catch {
+      fail(503, 'No se pudo consultar la fuente de tasas. Intenta de nuevo con internet.');
+    }
   }
   let changed = 0;
   let unchanged = 0;
@@ -398,6 +407,14 @@ async function refreshTripRates(db, query) {
   let after = 0;
   const updates = [];
   for (const e of rows) {
+    const fresh = freshBy.get(e.currency ?? settings.dest);
+    if (!fresh) { // gasto en la moneda de casa: sin conversión
+      const home = e.rate == null ? 0 : toHome(e.amount_cents, e.rate, digits);
+      before += home;
+      after += home;
+      unchanged += 1;
+      continue;
+    }
     const got = fresh.get(e.date);
     const rate = got?.rate;
     const current = e.rate == null ? 0 : toHome(e.amount_cents, e.rate, digits);
@@ -430,16 +447,17 @@ async function refreshTripRates(db, query) {
 //    "la tasa del gasto es la de rates" ya significa "es la definitiva", y deja de revisarse sola.
 async function fillPendingRates(db) {
   const rows = await db.all(
-    `SELECT e.id, e.date, e.rate, e.rate_date, e.rate_source, t.dest_currency, t.home_currency
+    `SELECT e.id, e.date, e.rate, e.rate_date, e.rate_source, COALESCE(e.currency, t.dest_currency) AS cur, t.home_currency
      FROM expenses e JOIN trips t ON t.id = e.trip_id
-     WHERE e.rate IS NULL OR e.rate_date <> e.date
+     WHERE COALESCE(e.currency, t.dest_currency) <> t.home_currency
+       AND (e.rate IS NULL OR e.rate_date <> e.date
         OR (e.date < ? AND NOT EXISTS (SELECT 1 FROM rates r
-            WHERE r.pair = t.dest_currency || '-' || t.home_currency AND r.date = e.date AND r.rate = e.rate))
+            WHERE r.pair = COALESCE(e.currency, t.dest_currency) || '-' || t.home_currency AND r.date = e.date AND r.rate = e.rate)))
      ORDER BY e.date DESC LIMIT 8`,
     [todayStr()],
   );
   for (const e of rows) {
-    const r = await resolveRate(db, e.date, { dest: e.dest_currency, home: e.home_currency });
+    const r = await resolveRate(db, e.date, { dest: e.cur, home: e.home_currency });
     if (!r) continue;
     // Sin red o sin dato de ese día, la tasa exacta del gasto no se cambia por una más vieja (solo se mejora una estimada).
     if (r.estimated && e.rate != null && e.rate_date === e.date) continue;
@@ -464,6 +482,7 @@ async function getState(db) {
     byExpense.get(l.expense_id).push(l.person_id);
   }
   const homeDigits = new Map(trips.map((t) => [t.id, currencyByCode(t.home_currency)?.digits ?? 2]));
+  const destOf = new Map(trips.map((t) => [t.id, t.dest_currency]));
   const byTrip = new Map();
   for (const l of tripLinks) {
     if (!byTrip.has(l.trip_id)) byTrip.set(l.trip_id, []);
@@ -478,6 +497,7 @@ async function getState(db) {
     // El monto en tu moneda y si la tasa es estimada no se guardan: salen de la tasa y de la fecha de cada gasto.
     expenses: expenses.map(({ pay_pending: pp, ...e }) => ({
       ...e,
+      currency: e.currency ?? destOf.get(e.trip_id), // siempre la moneda efectiva del gasto
       rate_estimated: e.rate != null && e.rate_date !== e.date ? 1 : 0,
       amount_home: e.rate == null ? null : toHome(e.amount_cents, e.rate, homeDigits.get(e.trip_id) ?? 2),
       payment_method_id: pp ? null : e.payment_method_id,
@@ -539,7 +559,13 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     if (resource === 'rate' && method === 'GET') {
       const date = query.get('date') ?? todayStr();
       if (!isValidDate(date)) fail(400, 'Fecha inválida');
-      const r = await resolveRate(db, date, tripPair(await getTrip(db, query.get('trip'))));
+      const pair = tripPair(await getTrip(db, query.get('trip')));
+      const cur = query.get('currency'); // moneda del gasto si no es la del destino del viaje
+      if (cur) {
+        if (!currencyByCode(cur)) fail(400, 'Moneda no válida');
+        pair.dest = cur;
+      }
+      const r = await resolveRate(db, date, pair);
       return ok(r ?? { rate: null });
     }
 
