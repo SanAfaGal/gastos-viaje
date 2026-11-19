@@ -4,7 +4,7 @@ import { setCurrencies, toHome, todayStr } from './money.mjs';
 import { currencyByCode, DEFAULT_SETTINGS } from './currencies.mjs';
 import { compareExpenses } from './order.mjs';
 
-const K = { state: 'bg_state2', queue: 'bg_queue', pass: 'bg_pass', rates: 'bg_rates2', hist: 'bg_hist', trip: 'bg_trip' };
+const K = { state: 'bg_state2', queue: 'bg_queue', pass: 'bg_pass', open: 'bg_open', rates: 'bg_rates2', hist: 'bg_hist', trip: 'bg_trip' };
 
 function read(key, fallback) {
   try {
@@ -28,11 +28,32 @@ export const uuid = () =>
 export const listeners = new Set();
 const notify = () => listeners.forEach((fn) => fn());
 
-export const net = { online: true, syncing: false, needsLogin: false, lastSync: 0 };
-
 const getPass = () => localStorage.getItem(K.pass) ?? '';
+
+// Sin código guardado y sin saber que este servidor abre sin pedirlo, se muestra el acceso desde el primer
+// instante en vez de dibujar la app vacía y esperar al 401. K.open = '1': el servidor respondió sin código.
+function startsLocked() {
+  try {
+    return !getPass() && localStorage.getItem(K.open) !== '1';
+  } catch {
+    return true; // sin almacenamiento no hay código guardado
+  }
+}
+
+function setOpenMark(on) {
+  try {
+    if (on) localStorage.setItem(K.open, '1');
+    else localStorage.removeItem(K.open);
+  } catch {
+    /* sin almacenamiento: la marca no se guarda */
+  }
+}
+
+export const net = { online: true, syncing: false, needsLogin: startsLocked(), lastSync: 0 };
+
 export function setPass(p) {
   localStorage.setItem(K.pass, p);
+  if (p === '') setOpenMark(false);
   net.needsLogin = false;
 }
 
@@ -64,8 +85,16 @@ async function request(method, path, body, extraHeaders = {}) {
   }
   if (path === '/api/state' && res.ok) stateEtag = res.headers?.get?.('etag') ?? null;
   if (res.status === 401) {
+    setOpenMark(false);
     net.needsLogin = true;
     notify();
+  } else if (!getPass()) {
+    // Respondió sin que mandáramos código: este servidor está abierto.
+    setOpenMark(true);
+    if (net.needsLogin) {
+      net.needsLogin = false;
+      notify();
+    }
   }
   if (!res.ok) {
     const err = new Error(data?.error ?? `Error ${res.status}`);

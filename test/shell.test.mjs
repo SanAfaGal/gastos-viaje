@@ -62,3 +62,8 @@ test('ningún archivo de código de la app pasa de 700 líneas', () => {
   walk(path.resolve(root, '..', 'src'));
   assert.deepEqual(big, [], `pasan de 700 líneas: ${big.join(', ')}`);
 });
+
+test('la barra de pestañas se oculta mientras se pide el código', () => {
+  assert.match(read('css/app.css'), /\.logged-out \.tabbar\s*\{\s*display:\s*none/);
+  assert.ok(read('js/router.js').includes("classList.toggle('logged-out'"));
+});

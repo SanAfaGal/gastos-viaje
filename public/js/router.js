@@ -83,6 +83,7 @@ export function render() {
   if (updatePending && !formActive()) { updatePending = false; location.reload(); return; }
   updateStatus();
   $tripBtn.hidden = store.net.needsLogin;
+  document.body.classList.toggle('logged-out', store.net.needsLogin);
   if (store.net.needsLogin) {
     $title.textContent = 'Gastos de viaje';
     $view.innerHTML = viewLogin();
