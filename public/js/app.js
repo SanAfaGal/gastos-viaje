@@ -1,8 +1,8 @@
 // Interfaz: router por hash y 5 pantallas, sin framework.
 import { computeSettlement, splitEqual } from './settlement.mjs';
-import { addDays, currencies, fmtDest, fmtHome, fmtRate, parseAmount, toHome, todayStr } from './money.mjs';
-import { CURRENCIES, DEFAULT_SETTINGS } from './currencies.mjs';
-import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, detectNetwork, isHexColor, suggestColor } from './cards.mjs';
+import { addDays, currencies, fmtDest, fmtHome, fmtMoney, fmtRate, parseAmount, toHome, todayStr } from './money.mjs';
+import { CURRENCIES, DEFAULT_SETTINGS, currencyByCode } from './currencies.mjs';
+import { DEFAULT_COLOR, KIND_COLOR, NETWORKS, NETWORK_MARK, cardPaint, isHexColor, suggestColor } from './cards.mjs';
 import { changeAt, nearestIndex, sparkline } from './chart.mjs';
 import { formatCoords, hasLocation, routeFrom } from './places.mjs';
 import { compareChronological, sameOrder } from './order.mjs';
@@ -11,7 +11,10 @@ import * as store from './store.js';
 import { breakdown, byDay, summary } from './stats.mjs';
 import { distanceKm, formatDistance, searchPlaces } from './geosearch.mjs';
 import { PICK_MIN_ZOOM, TAP_ZOOM, buildList, combineNearby, confirmPlace, dedupeByName, preferOsm, rankSearch, selectionSummary, tapRadiusM } from './picker.mjs';
-import { knownPlaces, nearbyPlaces, placeIcon, recentPlaces } from './nearby.mjs';
+import { icon } from './icons.mjs';
+import { initSelects } from './select.mjs';
+import { openDatePicker } from './datepicker.mjs';
+import { knownPlaces, nearbyPlaces, placeIcon, placeKind, recentPlaces } from './nearby.mjs';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -146,14 +149,10 @@ function paintPreview() {
   g('m-auto').setAttribute('aria-pressed', String(!m.color));
 }
 
-// Los primeros dígitos solo sirven para reconocer la red; no se envían ni se guardan.
 // El selector de color fija el color; "Automático" lo deja vacío para que lo decida la app.
 function onMethodForm(id) {
   const g = (x) => document.getElementById(x);
-  if (id === 'm-bin') {
-    const net = detectNetwork(g('m-bin').value);
-    if (net) g('m-network').value = net;
-  } else if (id === 'm-color-pick') g('m-color').value = g('m-color-pick').value;
+  if (id === 'm-color-pick') g('m-color').value = g('m-color-pick').value;
   paintPreview();
 }
 
@@ -161,6 +160,30 @@ function onMethodForm(id) {
 function centerPicked() {
   const el = document.querySelector('#cards .pitem.on');
   if (el) el.parentElement.scrollLeft = el.offsetLeft - (el.parentElement.clientWidth - el.offsetWidth) / 2;
+  paintCardDots();
+}
+
+// Indicador del carrusel de medios de pago: "2 de 5", un punto por tarjeta (el de la que está al centro va marcado) y un
+// desvanecido en el borde por donde hay más. Sin esto solo se ven dos tarjetas y nada dice que existen más.
+function paintCardDots() {
+  const box = document.getElementById('cards');
+  const dots = document.getElementById('cards-dots');
+  if (!box || !dots) return;
+  const items = [...box.querySelectorAll('.pitem')];
+  const atEnd = box.scrollLeft + box.clientWidth >= box.scrollWidth - 6;
+  const mid = box.scrollLeft + box.clientWidth / 2;
+  let active = 0;
+  let best = Infinity;
+  items.forEach((el, i) => {
+    const d = Math.abs(el.offsetLeft + el.offsetWidth / 2 - mid);
+    if (d < best) { best = d; active = i; }
+  });
+  if (atEnd) active = items.length - 1; // al llegar al final el último no siempre alcanza el centro
+  else if (box.scrollLeft <= 6) active = 0;
+  box.classList.toggle('more-right', !atEnd);
+  box.classList.toggle('more-left', box.scrollLeft > 6);
+  dots.hidden = items.length < 2;
+  dots.innerHTML = `<span class="cards-n">${active + 1} de ${items.length}</span>${items.length <= 8 ? items.map((_, i) => `<button type="button" class="cdot${i === active ? ' on' : ''}" data-action="card-go" data-i="${i}" aria-label="Ir al medio de pago ${i + 1} de ${items.length}"></button>`).join('') : ''}`;
 }
 
 function settlementOf(c) {
@@ -201,17 +224,22 @@ const setupCard = () => {
 function expenseItem(c, e, n) {
   const m = c.methodsById[e.payment_method_id];
   const cop = e.amount_home == null ? 'Por convertir' : fmtHome(e.amount_home);
+  const { dest, home } = currencies();
+  const cur = e.currency ?? dest.code;
+  // Monto original: en su propia moneda. Si ya es la de casa no hay nada más que mostrar (no se convierte).
+  const original = cur === home.code ? '' : fmtMoney(cur, e.amount_cents);
   return `<div class="item" data-action="edit" data-id="${esc(e.id)}">
     <div><div class="t">${n ? `<span class="ord" title="Orden dentro del día">${n}</span>` : ''}<button type="button" class="item-open" data-action="edit" data-id="${esc(e.id)}" aria-label="${esc(`Editar: ${e.description || 'Gasto'}, ${cop}`)}">${esc(e.description || 'Gasto')}</button>${hasLocation(e)
-      ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">📍</button>` : ''}</div>
+      ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">${icon('mappin')}</button>` : ''}</div>
       <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : m ? `${esc(methodLabel(m))} · <span class="nw">de ${esc(personName(c, m.owner_person_id))}</span>` : esc(methodLabel(m))}</div>
       <span class="tag">${esc(forWho(c, e))}</span>
       ${e.payment_method_id == null ? '<span class="tag danger">Sin medio de pago</span>' : ''}
       ${e.pending ? '<span class="tag info">Sin enviar</span>' : ''}
       ${e.amount_home == null ? '<span class="tag warn">Esperando tasa</span>' : ''}
       ${e.rate_estimated ? '<span class="tag warn">Tasa estimada</span>' : ''}
-      ${e.amount_approx ? '<span class="tag approx">Monto aproximado</span>' : ''}</div>
-    <div class="r"><div class="num">${cop}</div><div class="muted">${fmtDest(e.amount_cents)}</div></div>
+      ${e.amount_approx ? '<span class="tag approx">Monto aproximado</span>' : ''}
+      ${cur !== dest.code ? `<span class="tag">${esc(cur === home.code ? `En ${cur}, sin conversión` : `En ${cur}`)}</span>` : ''}</div>
+    <div class="r"><div class="num">${cop}</div><div class="muted">${esc(original)}</div></div>
   </div>`;
 }
 
@@ -248,9 +276,10 @@ function viewHome() {
   const placed = c.expenses.filter(hasLocation).length;
   const unsent = store.pendingCount();
   const cur = currencies();
-  const s = summary(c.expenses, today);
-  const totalDest = c.expenses.reduce((a, e) => a + e.amount_cents, 0);
-  homeBars = byDay(c.expenses, { today, days: 14 });
+  const s = summary(c.expenses, today, cur.dest.code);
+  const destOnly = c.expenses.filter((e) => !e.currency || e.currency === cur.dest.code); // las de otra moneda no se suman en la del destino
+  const totalDest = destOnly.reduce((a, e) => a + e.amount_cents, 0);
+  homeBars = byDay(c.expenses, { today, days: 14, dest: cur.dest.code });
   const peak = homeBars.reduce((m, d) => (d.home > m.home ? d : m), homeBars[0] ?? { home: 0 });
   const methodRows = breakdown(c.expenses, (e) => {
     if (e.payment_method_id == null) return { id: PENDING, label: 'Por definir' };
@@ -269,7 +298,7 @@ function viewHome() {
     <div class="card hero"><h2>Total gastado</h2>
       <div class="big">${fmtHome(s?.total ?? 0)}</div>
       <div class="sub">${fmtDest(totalDest)} · ${c.expenses.length} gasto(s)</div>
-      <a class="hero-link" href="#/mapa">🗺 Ver mapa${placed ? ` · ${placed} con ubicación` : ''}</a>
+      <a class="hero-link" href="#/mapa">${icon('map')} Ver mapa${placed ? ` · ${placed} con ubicación` : ''}</a>
     </div>
     ${s ? `
     <div class="kpis">
@@ -320,9 +349,10 @@ function viewList() {
   // Solo se puede ordenar viendo el día completo: con un filtro puesto faltarían gastos y el orden saldría torcido.
   const sortable = !filtered;
   const sumHome = (items) => items.reduce((a, e) => a + (e.amount_home ?? 0), 0);
-  const sumDest = (items) => items.reduce((a, e) => a + e.amount_cents, 0);
-  const unconverted = list.filter((e) => e.amount_home == null).length;
   const cur = currencies();
+  // Solo los gastos en la moneda del destino suman ahí: los de otra moneda (la de casa, un tercer país) ya están en el total de arriba.
+  const sumDest = (items) => items.filter((e) => !e.currency || e.currency === cur.dest.code).reduce((a, e) => a + e.amount_cents, 0);
+  const unconverted = list.filter((e) => e.amount_home == null).length;
   // Número de cada gasto dentro de su día completo (no cambia al filtrar). c.expenses ya viene en el orden del día.
   const perDay = {};
   for (const e of c.expenses) perDay[e.date] = (perDay[e.date] ?? 0) + 1;
@@ -383,14 +413,14 @@ function newDraft(c, date = todayStr()) {
   const method = '';
   const going = new Set(c.people.map((p) => p.id));
   const benes = lastBenes.filter((id) => going.has(id));
-  return { id: null, date, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), created_at: null, approx: false, lat: null, lng: null, place: '' };
+  return { id: null, date, currency: currencies().dest.code, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), created_at: null, approx: false, lat: null, lng: null, place: '' };
 }
 
 function draftFrom(c, id) {
   const e = c.expenses.find((x) => x.id === id);
   if (!e) return null;
   return {
-    id: e.id, date: e.date, amountText: (e.amount_cents / 100).toFixed(2).replace('.', ','),
+    id: e.id, date: e.date, currency: e.currency ?? currencies().dest.code, amountText: (e.amount_cents / 100).toFixed(2).replace('.', ','),
     desc: e.description, method: e.payment_method_id ?? PENDING, benes: new Set(e.beneficiary_ids),
     created_at: e.created_at,
     approx: Boolean(e.amount_approx),
@@ -402,21 +432,42 @@ function draftFrom(c, id) {
 // Elegir el lugar (mapa, ubicación, búsqueda y sugerencias) es un solo diálogo: ver openPicker.
 function locHtml() {
   if (draft.lat == null) {
+    const here = draft.here;
+    // Buscando con el GPS: se ve que algo pasa y se puede cancelar.
+    if (here?.state === 'locating' && !here.options?.length) {
+      return `<div class="loc-box"><div class="loc-wait"><span class="spin" aria-hidden="true"></span><span>Buscando dónde estás…</span>
+        <button type="button" class="linkbtn" data-action="here-cancel">Cancelar</button></div></div>`;
+    }
+    // Con el GPS: el sitio más cercano se ofrece de un toque y los siguientes quedan como alternativas.
+    if (here?.options?.length) {
+      const [best, ...rest] = here.options;
+      const detail = (o) => [placeKind(o.kind) || o.detail || (o.count ? 'Ya usaste este lugar' : ''), o.km != null ? formatDistance(o.km) : ''].filter(Boolean).join(' · ');
+      return `<div class="loc-box sug">
+        <div class="loc-head"><span class="loc-ico" aria-hidden="true">${placeIcon(best.kind)}</span>
+          <div class="loc-info"><span class="muted">Estás aquí</span><b>${esc(best.name || 'Lugar sin nombre')}</b><span class="muted">${esc(detail(best))}</span></div></div>
+        <button type="button" class="btn loc-cta" data-action="here-use" data-i="0">Usar este lugar</button>
+        ${rest.length ? `<div class="loc-chips">${rest.map((o, i) => `<button type="button" class="chip loc-chip" data-action="here-use" data-i="${i + 1}">${placeIcon(o.kind)} <span class="loc-chip-t">${esc(o.name || 'Sin nombre')}</span>${o.km != null ? ` <span class="loc-chip-s">${esc(formatDistance(o.km))}</span>` : ''}</button>`).join('')}</div>` : ''}
+        ${here.state === 'locating' ? '<div class="loc-more muted"><span class="spin" aria-hidden="true"></span> Buscando más sitios…</div>' : ''}
+        <div class="loc-links"><button type="button" class="linkbtn" data-action="pick-map">Elegir en el mapa</button><button type="button" class="linkbtn" data-action="here-point">Solo mi punto, sin nombre</button></div></div>`;
+    }
     // Varios gastos en el mismo lugar con distinto medio de pago: se elige una vez y después basta un toque. Los lugares donde ya hubo un
     // gasto de este mismo día salen primero.
     draft.recentList = recentPlaces(ctx().expenses, { date: draft.date, limit: 3 });
     const chips = draft.recentList.map((r, i) => `<button type="button" class="chip loc-chip" data-action="use-recent" data-i="${i}"
-        aria-label="Usar el lugar ${esc(r.name || 'sin nombre')}${r.today ? ', donde ya hay un gasto de este día' : ''}">📍 <span class="loc-chip-t">${esc(r.name || 'Sin nombre')}</span>${r.today ? ' <span class="loc-chip-s">este día</span>' : ''}</button>`).join('');
+        aria-label="Usar el lugar ${esc(r.name || 'sin nombre')}${r.today ? ', donde ya hay un gasto de este día' : ''}">${icon('mappin')} <span class="loc-chip-t">${esc(r.name || 'Sin nombre')}</span>${r.today ? ' <span class="loc-chip-s">este día</span>' : ''}</button>`).join('');
+    const note = { empty: 'No encontré sitios con nombre aquí.', denied: 'Sin permiso de ubicación. Actívalo en el navegador.', error: 'No se pudo obtener tu ubicación.' }[here?.state];
     return `<div class="loc-box">
-      <div class="loc-empty"><span class="loc-ico" aria-hidden="true">📍</span><span>Sin ubicación</span></div>
+      <div class="loc-empty"><span class="loc-ico" aria-hidden="true">${icon('mappin')}</span><span>${esc(note ?? 'Lugar del gasto (opcional)')}</span></div>
       ${chips ? `<div class="loc-recent"><span class="muted">Usar un lugar reciente</span><div class="loc-chips">${chips}</div></div>` : ''}
-      <button type="button" class="btn loc-cta" data-action="pick-map">🗺 Elegir lugar en el mapa</button></div>`;
+      <div class="loc-btns">
+        <button type="button" class="btn secondary" data-action="here">${icon('crosshair')} ¿Dónde estoy?</button>
+        <button type="button" class="btn secondary" data-action="pick-map">${icon('map')} En el mapa</button></div>
+      ${here?.state === 'empty' && here.fix ? '<div class="loc-links"><button type="button" class="linkbtn" data-action="here-point">Usar mi punto, sin nombre</button></div>' : ''}</div>`;
   }
   return `<div class="loc-box set">
-      <div class="loc-head"><span class="loc-ico on" aria-hidden="true">📍</span>
-        <div class="loc-info"><b id="loc-name">${esc(draft.place.trim() || "Ubicación guardada")}</b>
-          <span class="muted">${esc(formatCoords(draft.lat, draft.lng))}</span></div></div>
-      <input id="place" maxlength="120" placeholder="Ponle un nombre al lugar (opcional)" aria-label="Nombre del lugar" value="${esc(draft.place)}">
+      <div class="loc-head"><span class="loc-ico on" aria-hidden="true">${icon('mappin')}</span>
+        <div class="loc-info"><span class="muted">Lugar elegido</span><b id="loc-name">${esc(draft.place.trim() || 'Ubicación sin nombre')}</b>
+          <span class="muted">${esc(formatCoords(draft.lat, draft.lng))}${draft.place.trim() ? '' : ' · toca Cambiar para ponerle nombre'}</span></div></div>
       <div class="loc-btns">
         <button type="button" class="btn secondary small" data-action="pick-map">Cambiar</button>
         <button type="button" class="btn danger small" data-action="unlocate">Quitar</button>
@@ -426,6 +477,92 @@ function locHtml() {
 function paintLoc() {
   const el = document.getElementById('loc');
   if (el && draft) el.innerHTML = locHtml();
+}
+
+// --- sugerencia de lugar con el GPS ---
+// Al abrir un gasto nuevo, si el teléfono ya te dio permiso de ubicación, se busca solo dónde estás y se ofrece el sitio más cercano
+// (primero los que ya usaste, luego OpenStreetMap; Foursquare solo si no hay nada, para cuidar el cupo gratis). Sin permiso, no se
+// pide nada solo: queda el botón "¿Dónde estoy?". Nada se guarda hasta que tocas "Usar este lugar".
+const hereCache = { key: '', at: 0, osm: [], fsq: [] }; // la misma zona varios gastos seguidos no vuelve a consultar
+let hereSeq = 0;
+let hereCtl = null;
+
+async function geoGranted() {
+  try { return (await navigator.permissions?.query({ name: 'geolocation' }))?.state === 'granted'; } catch { return false; }
+}
+
+function autoHere() {
+  if (!draft || draft.id || draft.lat != null || !navigator.geolocation) return;
+  const target = draft;
+  geoGranted().then((ok) => { if (ok && draft === target && target.lat == null && !target.here) suggestHere(); });
+}
+
+async function suggestHere() {
+  const target = draft;
+  if (!target || target.lat != null) return;
+  if (!navigator.geolocation) { target.here = { state: 'error' }; return paintLoc(); }
+  hereCtl?.abort();
+  hereCtl = new AbortController();
+  const signal = hereCtl.signal;
+  const seq = (hereSeq += 1);
+  const alive = () => draft === target && seq === hereSeq && target.lat == null && !signal.aborted;
+  target.here = { state: 'locating', options: [] };
+  paintLoc();
+  let fix;
+  try {
+    fix = await readPosition({ maxMs: 5000, goodM: 30, signal });
+  } catch (err) {
+    if (err?.code === 0 || !alive()) return; // lo cancelaste
+    target.here = { state: err?.code === 1 ? 'denied' : 'error' };
+    return paintLoc();
+  }
+  if (!alive()) return;
+  geoRef = { lat: fix.lat, lng: fix.lng };
+  const key = `${fix.lat.toFixed(4)},${fix.lng.toFixed(4)}`;
+  const fresh = hereCache.key === key && Date.now() - hereCache.at < CACHE_MS;
+  let osm = fresh ? hereCache.osm : [];
+  let fsq = fresh ? hereCache.fsq : [];
+  const known = knownPlaces(ctx().expenses, fix);
+  const show = (done) => {
+    if (!alive()) return;
+    const options = combineNearby({ known, osm, fsq }).slice(0, 3);
+    target.here = { state: done ? (options.length ? 'found' : 'empty') : 'locating', fix, options };
+    paintLoc();
+  };
+  show(fresh);
+  if (fresh) return;
+  try {
+    const r = await nearbyPlaces(fix, { radiusM: 80, limit: 6, signal, onPartial: ({ results }) => { osm = results; show(false); } });
+    osm = r.results;
+  } catch (err) {
+    if (err?.name === 'AbortError' || !alive()) return;
+  }
+  // Foursquare (con edificios) solo si con lo anterior no hay nada que ofrecer.
+  if (alive() && !combineNearby({ known, osm, fsq }).length) {
+    try {
+      const { configured, results } = await store.fetchMorePlaces({ lat: fix.lat, lng: fix.lng, radius: 150 });
+      if (configured) fsq = results.map((x) => ({ ...x, km: distanceKm(fix, x) }));
+    } catch { /* sin Foursquare: queda lo que haya */ }
+  }
+  hereCache.key = key; hereCache.at = Date.now(); hereCache.osm = osm; hereCache.fsq = fsq;
+  show(true);
+}
+
+function useHere(i) {
+  const here = draft?.here;
+  const o = here?.options?.[i];
+  if (!o) return;
+  draft.lat = o.lat; draft.lng = o.lng; draft.place = String(o.name ?? '').slice(0, 120);
+  draft.here = null;
+  paintLoc();
+}
+
+function useHerePoint() {
+  const fix = draft?.here?.fix;
+  if (!fix) return;
+  draft.lat = fix.lat; draft.lng = fix.lng; draft.place = '';
+  draft.here = null;
+  paintLoc();
 }
 
 // Una sola lectura del GPS suele traer un punto impreciso. Se escucha unos segundos y se queda con la lectura más exacta
@@ -534,6 +671,7 @@ function paintCards() {
   if (!box || !draft) return;
   box.innerHTML = cardsHtml(c);
   box.scrollLeft = 0;
+  paintCardDots();
   const f = document.getElementById('owner-f');
   if (f) f.outerHTML = ownerFilterHtml(c);
 }
@@ -553,35 +691,43 @@ function viewForm(editId) {
     if (!draft) { location.hash = '#/gastos'; return ''; }
     convRate = null;
     loadRate();
+    autoHere(); // un gasto nuevo con permiso de ubicación ya concedido: sugiere dónde estás
   }
   return `
-    <form id="exp-form" autocomplete="off" novalidate>
-      <div class="lab-row">
-        <label for="amount">Monto en ${esc(currencies().dest.name.toLowerCase())} (${esc(currencies().dest.code)})</label>
-        <span class="lab-tools"><button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx"><span class="track" aria-hidden="true"></span>Aproximado</button>
-          ${infoBtn('approx', 'Monto aproximado')}</span>
-      </div>
-      <input id="amount" class="amount" inputmode="decimal" placeholder="0,00" value="${esc(draft.amountText)}">
-      <div class="conv-row"><div class="conv" id="conv"></div>${infoBtn('rate', 'Tasa de cambio e historial')}</div>
+    <form id="exp-form" class="xform" autocomplete="off" novalidate>
+      <section class="amount-hero" aria-label="Monto">
+        <div class="hero-top">
+          <label for="amount" id="amount-l">${amountLabel()}</label>
+          <span class="lab-tools"><button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx"><span class="track" aria-hidden="true"></span>Aproximado</button>
+            ${infoBtn('approx', 'Monto aproximado')}</span>
+        </div>
+        <input id="amount" class="amount" inputmode="decimal" placeholder="0,00" value="${esc(draft.amountText)}">
+        <div class="chips cur-chips" id="cur" role="radiogroup" aria-label="Moneda del gasto">${curHtml()}</div>
+        <div class="conv-row"><div class="conv" id="conv"></div>${infoBtn('rate', 'Tasa de cambio e historial')}</div>
+      </section>
 
-      <label for="date">Día del gasto</label>
-      <input id="date" type="date" max="${todayStr()}" value="${esc(draft.date)}">
+      <section class="fcard" aria-labelledby="when-l">
+        <div class="lab-row"><span class="flab" id="when-l">Cuándo y dónde</span>${infoBtn('loc', 'Ubicación')}</div>
+        <div class="chips date-chips" id="dates" role="group" aria-label="Día del gasto">${dateHtml()}</div>
+        <div id="loc" class="loc" role="group" aria-label="Lugar del gasto">${locHtml()}</div>
+      </section>
 
-      <div class="lab-row"><span class="label" id="cards-l">Pagado con</span>${infoBtn('pay', 'Pagado con')}</div>
-      ${ownerFilterHtml(c)}
-      <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">${cardsHtml(c)}</div>
+      <section class="fcard" aria-labelledby="cards-l">
+        <div class="lab-row"><span class="flab" id="cards-l">Pagado con</span>${infoBtn('pay', 'Pagado con')}</div>
+        ${ownerFilterHtml(c)}
+        <div class="cards" id="cards" role="radiogroup" aria-labelledby="cards-l">${cardsHtml(c)}</div>
+        <div class="cards-dots" id="cards-dots" role="group" aria-label="Medios de pago disponibles"></div>
+      </section>
 
-      <div class="lab-row"><span class="label" id="benes-l">¿Para quién es?</span>${infoBtn('who', 'Para quién es')}</div>
-      <div class="chips" id="benes" role="group" aria-labelledby="benes-l">
-        ${c.people.map((p) => `<button type="button" class="chip ${draft.benes.has(p.id) ? 'on' : ''}" data-action="bene" data-id="${esc(p.id)}" aria-pressed="${draft.benes.has(p.id)}">${esc(personName(c, p.id))}</button>`).join('')}
-        <button type="button" class="chip ghost" data-action="bene-all">Todos</button>
-      </div>
+      <section class="fcard" aria-labelledby="benes-l">
+        <div class="lab-row"><span class="flab" id="benes-l">¿Para quién es?</span>${infoBtn('who', 'Para quién es')}</div>
+        <div id="benes" role="group" aria-labelledby="benes-l">${benesHtml(c)}</div>
+      </section>
 
-      <label for="desc">Descripción</label>
-      <input id="desc" maxlength="120" placeholder="Almuerzo, Uber, entradas…" value="${esc(draft.desc)}">
-
-      <div class="lab-row"><span class="label" id="loc-l">Ubicación</span>${infoBtn('loc', 'Ubicación')}</div>
-      <div id="loc" class="loc" role="group" aria-labelledby="loc-l">${locHtml()}</div>
+      <section class="fcard">
+        <label class="flab" for="desc">Descripción</label>
+        <input id="desc" maxlength="120" placeholder="Almuerzo, Uber, entradas…" value="${esc(draft.desc)}">
+      </section>
 
       <button class="btn" type="submit" data-then="list">${draft.id ? 'Guardar cambios' : 'Guardar'}</button>
       ${draft.id ? '' : '<button class="btn secondary" type="submit" data-then="again">Guardar y agregar otro</button>'}
@@ -596,12 +742,81 @@ function viewForm(editId) {
     </form>`;
 }
 
+// Día del gasto: casi siempre es hoy o ayer, así que son dos toques; cualquier otro día abre el calendario del teléfono.
+function dateHtml() {
+  const today = todayStr();
+  const yesterday = addDays(today, -1);
+  const other = draft.date !== today && draft.date !== yesterday;
+  const chip = (id, label, on) => `<button type="button" class="chip ${on ? 'on' : ''}" data-action="date-q" data-id="${id}" aria-pressed="${on}">${label}</button>`;
+  return `${chip('today', 'Hoy', draft.date === today)}${chip('yesterday', 'Ayer', draft.date === yesterday)}
+    <button type="button" class="chip date-other ${other ? 'on' : ''}" data-action="date-open" aria-haspopup="dialog" aria-pressed="${other}">${icon('calendar')} <span>${other ? esc(shortDate(draft.date)) : 'Otro día'}</span></button>`;
+}
+
+function paintDates() {
+  const el = document.getElementById('dates');
+  if (el && draft) el.innerHTML = dateHtml();
+}
+
+// Se cambió el día: la tasa, el gráfico y los lugares de ese día (pasan al principio) se ponen al día.
+function setDraftDate(date) {
+  draft.date = date;
+  paintDates();
+  loadRate();
+  renderChart();
+  if (draft.lat == null) paintLoc();
+}
+
+// ¿Para quién? Con 3 o más personas se pliega en una línea (casi siempre es igual que la vez anterior) y se abre al tocarla.
+function benesHtml(c) {
+  const chosen = c.people.filter((p) => draft.benes.has(p.id));
+  if (c.people.length >= 3 && chosen.length && !draft.benesOpen) {
+    const all = chosen.length === c.people.length;
+    const names = all ? `Todos (${chosen.length})` : chosen.map((p) => personName(c, p.id)).join(', ');
+    const dots = chosen.slice(0, 4).map((p) => `<span class="av">${esc(personName(c, p.id).trim().charAt(0).toUpperCase())}</span>`).join('');
+    return `<button type="button" class="benes-sum" data-action="benes-open" aria-label="Para quién es: ${esc(names)}. Cambiar">
+      <span class="avs" aria-hidden="true">${dots}</span><span class="benes-t">${esc(names)}</span><span class="benes-c">Cambiar ›</span></button>`;
+  }
+  return `<div class="chips">${c.people.map((p) => `<button type="button" class="chip ${draft.benes.has(p.id) ? 'on' : ''}" data-action="bene" data-id="${esc(p.id)}" aria-pressed="${draft.benes.has(p.id)}">${esc(personName(c, p.id))}</button>`).join('')}
+    <button type="button" class="chip ghost" data-action="bene-all">Todos</button></div>`;
+}
+
+function paintBenes() {
+  const el = document.getElementById('benes');
+  if (el && draft) el.innerHTML = benesHtml(ctx());
+}
+
+// Moneda del gasto: la del destino, la de casa (sin conversión) u otra del catálogo (un tercer país).
+const amountLabel = () => {
+  const c = currencyByCode(draft.currency) ?? currencies().dest;
+  return `Monto en ${esc(c.name.toLowerCase())} (${esc(c.code)})`;
+};
+
+function curHtml() {
+  const { dest, home } = currencies();
+  const main = [dest.code, home.code];
+  const other = main.includes(draft.currency) ? '' : draft.currency;
+  const chip = (code, extra = '') => `<button type="button" class="chip ${draft.currency === code ? 'on' : ''}" role="radio" aria-checked="${draft.currency === code}" data-action="cur" data-id="${esc(code)}">${esc(code)}${extra}</button>`;
+  const options = CURRENCIES.filter((x) => !main.includes(x.code))
+    .map((x) => `<option value="${esc(x.code)}" ${x.code === other ? 'selected' : ''}>${esc(`${x.code} · ${x.name}`)}</option>`).join('');
+  return `${chip(dest.code)}${chip(home.code)}
+    <select id="cur-other" class="chip cur-other ${other ? 'on' : ''}" aria-label="Otra moneda"><option value="" hidden>Otra moneda…</option>${options}</select>`;
+}
+
+function paintCur() {
+  const el = document.getElementById('cur');
+  if (el) el.innerHTML = curHtml();
+  const l = document.getElementById('amount-l');
+  if (l) l.innerHTML = amountLabel();
+  loadRate();
+}
+
 async function loadRate() {
   const date = draft.date;
+  const currency = draft.currency;
   convRate = null;
   updateConv();
-  const r = await store.fetchRate(date);
-  if (draft && draft.date === date) {
+  const r = await store.fetchRate(date, currency);
+  if (draft && draft.date === date && draft.currency === currency) {
     convRate = r ? { rate: r.rate, estimated: Boolean(r.estimated), rate_date: r.rate_date, source: r.source, local: r.local } : null;
     updateConv(true);
   }
@@ -686,7 +901,8 @@ function paintReadout(i, scrubbing) {
   const isSel = !scrubbing && chartGeo.selectedIndex === i;
   document.getElementById('c-meta').textContent = `${isSel ? 'Día del gasto' : p.date === todayStr() ? 'Hoy' : dayShort(p.date)} · ${pctFmt(changeAt(history, i))} en ${history.length} días`;
   const cents = parseAmount(draft?.amountText);
-  document.getElementById('c-conv').textContent = cents ? `${fmtDest(cents)} ese día = ${fmtHome(toHome(cents, p.rate, cur.home.digits))}` : '';
+  // El gráfico es de la moneda del destino: en un gasto de otra moneda no sirve para convertir.
+  document.getElementById('c-conv').textContent = cents && (!draft?.currency || draft.currency === cur.dest.code) ? `${fmtDest(cents)} ese día = ${fmtHome(toHome(cents, p.rate, cur.home.digits))}` : '';
   const cross = document.getElementById('c-cross');
   const live = document.getElementById('c-live');
   cross.hidden = !scrubbing;
@@ -723,10 +939,15 @@ function updateConv(loaded = false) {
   const cop = toHome(cents, r.rate, currencies().home.digits);
   const n = Math.max(draft.benes.size, 1);
   const each = Object.values(splitEqual(cop, [...draft.benes].length ? [...draft.benes] : ['x']))[0];
-  el.innerHTML = `<b>${fmtDest(cents)} ≈ ${fmtHome(cop)}</b>`;
+  if (draft.currency === currencies().home.code) { // en la moneda de casa no se convierte: suma tal cual
+    el.innerHTML = `<b>${fmtHome(cop)}</b> · sin conversión`;
+    if (det) det.innerHTML = `Este gasto ya está en ${esc(currencies().home.code)}: suma directo al total, sin tasa de cambio.${n > 1 ? ` ${n} personas: ${fmtHome(each)} c/u` : ''}`;
+    return;
+  }
+  el.innerHTML = `<b>${fmtMoney(draft.currency, cents)} ≈ ${fmtHome(cop)}</b>`;
   if (det) {
     const provisional = !r.estimated && (r.rate_date ?? draft.date) === todayStr(); // la tasa de hoy aún puede cambiar
-    det.innerHTML = `${fmtRate(r.rate)}${r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
+    det.innerHTML = `${fmtRate(r.rate, draft.currency)}${r.estimated ? ` (tasa estimada${r.rate_date ? ` del ${esc(dayLabel(r.rate_date).toLowerCase())}` : ''})` : ` (${esc(dayLabel(draft.date).toLowerCase())})`}
     ${n > 1 ? ` · ${n} personas: ${fmtHome(each)} c/u` : ''}
     <div>Fuente: ${esc(r.local ? 'guardada en este teléfono' : rateSourceLabel(r.source))}${provisional ? ' · provisional hasta que cierre el día' : ''}</div>`;
   }
@@ -742,6 +963,7 @@ async function submitForm(then) {
   const exp = {
     id: draft.id ?? store.uuid(),
     date: draft.date,
+    currency: draft.currency,
     amount_cents: cents,
     description: draft.desc.trim(),
     payment_method_id: draft.method === PENDING ? null : draft.method,
@@ -754,16 +976,19 @@ async function submitForm(then) {
   lastBenes = [...draft.benes];
   localStorage.setItem('bg_lastBenes', JSON.stringify(lastBenes));
   const keepDate = draft.date;
+  const keepCurrency = draft.currency;
   const wasEdit = Boolean(draft.id);
   const c = ctx();
   store.saveExpense(exp).then((r) => { if (r?.errors?.length) toast(r.errors[0], 'error'); });
   toast(wasEdit ? 'Cambios guardados' : 'Gasto guardado');
   if (then === 'again' && !wasEdit) {
     draft = newDraft(c, keepDate);
+    draft.currency = keepCurrency; // varios gastos seguidos en la misma moneda (los de un día en casa)
     convRate = null;
     render();
     document.getElementById('amount')?.focus();
     loadRate();
+    autoHere();
   } else {
     draft = null;
     location.hash = '#/gastos';
@@ -907,8 +1132,6 @@ function viewSettings() {
         <label for="m-name">${kind === 'card' ? 'Nombre (el banco, por ejemplo)' : 'Nombre'}</label>
         <input id="m-name" maxlength="40" placeholder="${kind === 'card' ? 'Ej: Bancolombia, Nu, Visa de Ana' : kind === 'pix' ? 'Ej: Transferencia de Juan' : 'Ej: Efectivo de Ana'}" value="${esc(m.name ?? '')}" required>
         <div id="card-fields" ${kind === 'card' ? '' : 'hidden'}>
-          <label for="m-bin">Primeros dígitos (opcional)</label>
-          <input id="m-bin" inputmode="numeric" maxlength="8" autocomplete="off" placeholder="Solo para reconocer la red; no se guarda">
           <label for="m-network">Red</label>
           <select id="m-network"><option value="">Sin especificar</option>${Object.entries(NETWORKS).map(([k, v]) => `<option value="${esc(k)}" ${m.network === k ? 'selected' : ''}>${esc(v)}</option>`).join('')}</select>
           <label for="m-last4">Últimos 4 dígitos (opcional)</label>
@@ -1087,7 +1310,7 @@ function viewMap() {
       <div class="empty">Aún no hay gastos con ubicación. Al agregar o editar un gasto, usa “Elegir lugar en el mapa”.</div>
       <a class="btn secondary" href="#/gastos">Ir a Gastos</a></div>`;
   }
-  const { places } = routeFrom(c.expenses);
+  const { places } = routeFrom(c.expenses, 3, currencies().dest.code);
   const chip = (p) => {
     const tag = places.length > 1 && p.n === 1 ? 'Inicio' : places.length > 1 && p.n === places.length ? 'Último' : '';
     return `<button type="button" class="stop-chip" data-action="map-stop" data-id="${p.n}">
@@ -1123,7 +1346,7 @@ function addFitControl(L, map, pts) {
     btn.setAttribute("role", "button");
     btn.setAttribute("aria-label", "Ver todas las paradas");
     btn.title = "Ver todas las paradas";
-    btn.textContent = "🗺 Ver todo";
+    btn.innerHTML = `${icon('map')} Ver todo`;
     L.DomEvent.disableClickPropagation(bar);
     L.DomEvent.on(btn, "click", (ev) => {
       L.DomEvent.preventDefault(ev);
@@ -1150,7 +1373,7 @@ async function initMap() {
   if (document.getElementById('map') !== el) return; // se cambió de pantalla mientras cargaba
   const c = ctx();
   const byId = Object.fromEntries(c.expenses.map((e) => [e.id, e]));
-  const { places, path } = routeFrom(c.expenses);
+  const { places, path } = routeFrom(c.expenses, 3, currencies().dest.code);
   let focus = null; // el lugar del gasto que se pidió ver (desde el pin de la lista)
   el.innerHTML = '';
   const map = L.map(el, { zoomControl: false });
@@ -1188,7 +1411,7 @@ async function initMap() {
 // con cada sincronización, solo se redibuja si cambió algo de lo que muestra.
 let lastMapSig = '';
 let mapFocus = ''; // id del gasto cuyo lugar se abre al entrar al mapa
-const mapSig = () => JSON.stringify([routeFrom(ctx().expenses), mapFocus]);
+const mapSig = () => JSON.stringify([routeFrom(ctx().expenses, 3, currencies().dest.code), mapFocus]);
 
 // --- Lugar del gasto: un solo diálogo con mapa, búsqueda y sugerencias (la lógica sin DOM está en picker.mjs) ---
 //
@@ -1230,7 +1453,7 @@ const skeleton = (n) => '<div class="sug-skel" aria-hidden="true"></div>'.repeat
 
 // Bloque "Buscar más lugares" (Foursquare): el botón, o el estado de la consulta.
 function moreHtml(state, attr = 'data-more') {
-  const btn = `<button type="button" class="btn secondary small more-btn" ${attr}>🔎 Buscar más lugares</button>`;
+  const btn = `<button type="button" class="btn secondary small more-btn" ${attr}>${icon('search')} Buscar más lugares</button>`;
   if (state === 'loading') return `<div class="pick-wait" role="status"><span class="spin" aria-hidden="true"></span>Buscando más lugares…</div>${skeleton(1)}`;
   if (state === 'off') return '<div class="sug-note">La búsqueda ampliada no está activada (falta la clave de Foursquare en el servidor).</div>';
   if (state === 'none') return '<div class="sug-note">No hay más lugares nuevos aquí.</div>';
@@ -1248,7 +1471,7 @@ function rowHtml(c, i, attr = 'data-i') {
   const sub = point ? `${where.title} · ${where.sub}`
     : c.kind === 'known' ? `✓ Ya lo usaste · ${c.count} gasto${c.count === 1 ? '' : 's'}`
     : `${c.kind ? `${placeIcon(c.kind)} ` : ''}${c.detail || formatCoords(c.lat, c.lng)}${c.approx ? ' · posición aproximada' : ''}`;
-  const badge = point ? '<span class="pk-ico" aria-hidden="true">📍</span>'
+  const badge = point ? `<span class="pk-ico" aria-hidden="true">${icon('mappin')}</span>`
     : `<span class="stop-n${c.kind === 'known' ? '' : ' last'}" aria-hidden="true">${c.n ?? '•'}</span>`;
   const km = !point && c.km != null ? `<span class="pick-km">${esc(formatDistance(c.km))}</span>` : '';
   return `<button type="button" class="pick-res${sel ? ' sel' : ''}" ${attr}="${i}" aria-pressed="${sel}">${badge}
@@ -1259,16 +1482,16 @@ function idleHtml() {
   // Con lugares recientes se muestran primero (un toque y listo); la ayuda larga solo cuando todavía no hay ninguno.
   if (pk.recent.length) {
     const rows = pk.recent.map((r, i) => `<button type="button" class="pick-res" data-r="${i}">
-        <span class="pk-ico" aria-hidden="true">🕘</span>
+        <span class="pk-ico" aria-hidden="true">${icon('clock')}</span>
         <span class="sug-txt"><b>${esc(r.name || 'Sin nombre')}</b><span class="muted">${esc(`${r.today ? 'Ya hay un gasto de este día' : dayLabel(r.last)} · ${r.count} gasto${r.count === 1 ? '' : 's'}`)}</span></span><span class="pk-tick" aria-hidden="true">✓</span></button>`).join('');
     return `<h3 class="sug-h">Lugares recientes</h3><div class="sug-list">${rows}</div>
       <p class="muted pk-tip">O toca el mapa, usa Mi ubicación o busca el nombre.</p>
       ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
   }
   return `<div class="pk-help"><p><b>¿Dónde fue el gasto?</b></p>
-    <ul><li><span aria-hidden="true">📍</span><span>Toca <b>Mi ubicación</b> para usar tu GPS</span></li>
-    <li><span aria-hidden="true">👆</span><span>Toca el mapa donde fue la compra</span></li>
-    <li><span aria-hidden="true">🔍</span><span>O busca el nombre de la tienda o del edificio</span></li></ul></div>
+    <ul><li><span aria-hidden="true">${icon('crosshair')}</span><span>Toca <b>Mi ubicación</b> para usar tu GPS</span></li>
+    <li><span aria-hidden="true">${icon('pointer')}</span><span>Toca el mapa donde fue la compra</span></li>
+    <li><span aria-hidden="true">${icon('search')}</span><span>O busca el nombre de la tienda o del edificio</span></li></ul></div>
     ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
 }
 
@@ -1276,7 +1499,7 @@ function idleHtml() {
 function hintHtml() {
   const sel = pickSel();
   if (pk.moveMode) return '<div class="pk-hint move" role="status">Toca el mapa donde está el lugar de verdad, o arrastra el pin. Luego toca “Listo”.</div>';
-  if (sel?.approx) return '<div class="pk-hint">La posición de este lugar es aproximada. Si el pin no está bien, arrástralo o toca “📌 Ajustar pin” en el mapa.</div>';
+  if (sel?.approx) return '<div class="pk-hint">La posición de este lugar es aproximada. Si el pin no está bien, arrástralo o toca “Ajustar pin” en el mapa.</div>';
   return '';
 }
 
@@ -1323,7 +1546,7 @@ function searchHtml() {
   const s = pk.search;
   const { near, far, all } = searchList();
   const row = (c) => {
-    const badge = `<span class="pk-ico" aria-hidden="true">${c.kind ? placeIcon(c.kind) : '📍'}</span>`;
+    const badge = `<span class="pk-ico" aria-hidden="true">${c.kind ? placeIcon(c.kind) : icon('mappin')}</span>`;
     const km = c.km != null ? `<span class="pick-km">${esc(formatDistance(c.km))}</span>` : '';
     return `<button type="button" class="pick-res" data-s="${all.indexOf(c)}">${badge}
       <span class="sug-txt"><b>${esc(c.name)}</b><span class="muted">${esc(`${c.detail || formatCoords(c.lat, c.lng)}${c.approx ? ' · posición aproximada' : ''}`)}</span></span>${km}</button>`;
@@ -1337,7 +1560,7 @@ function searchHtml() {
     : moreHtml(s.fsqState, 'data-more-search');
   // Si el pin está lejos de donde se buscó, se ofrece repetir la búsqueda cerca del pin.
   const moved = pk.anchor && s.ref && distanceKm(pk.anchor, s.ref) > 1.5;
-  const research = moved ? `<button type="button" class="btn secondary small more-btn" data-research>🔎 Buscar “${esc(s.q)}” cerca del pin</button>` : '';
+  const research = moved ? `<button type="button" class="btn secondary small more-btn" data-research>${icon('search')} Buscar “${esc(s.q)}” cerca del pin</button>` : '';
   return `${hintHtml()}${pk.anchor ? tabsHtml() : `<div class="pk-bar"><h3 class="sug-h">Resultados de “${esc(s.q)}”</h3></div>`}
     <div class="sug-list" aria-busy="${busy}">${near.map(row).join('')}${status}</div>
     ${far.length ? `<details class="pk-far"${pk.farOpen ? ' open' : ''}><summary>Más lejos (${far.length})</summary><div class="sug-list">${far.map(row).join('')}</div></details>` : ''}
@@ -1391,7 +1614,7 @@ function addAdjustControl(L, map) {
 function updateAdjust() {
   if (!pickAdjustBtn) return;
   pickAdjustBtn.parentElement.hidden = !pickSel();
-  pickAdjustBtn.textContent = pk.moveMode ? '✓ Listo' : '📌 Ajustar pin';
+  pickAdjustBtn.innerHTML = pk.moveMode ? `${icon('check')} Listo` : `${icon('pin')} Ajustar pin`;
   pickAdjustBtn.setAttribute('aria-pressed', String(pk.moveMode));
   pickAdjustBtn.parentElement.classList.toggle('on', pk.moveMode);
   pickMap?.getContainer().classList.toggle('moving', pk.moveMode);
@@ -1730,6 +1953,10 @@ $pickPanel.addEventListener('toggle', (ev) => { if (ev.target.classList?.contain
 $pickPanel.addEventListener('input', (ev) => {
   if (ev.target.id !== 'pick-name') return;
   pk.typed = ev.target.value;
+  // La lista ya está armada con el nombre de antes: se pone el nuevo en el punto elegido. Sin esto el pie del diálogo y
+  // "Usar este lugar" seguían usando el nombre vacío y lo escrito se perdía.
+  const point = pk.items.find((i) => i.key === 'point');
+  if (point) point.name = pk.typed;
   updatePickFoot();
 });
 
@@ -1773,12 +2000,12 @@ function viewLogin() {
 function downloadCsv() {
   const c = ctx();
   const cur = currencies();
-  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', cur.dest.code, 'Tasa', 'Fecha de la tasa', 'Fuente de la tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
+  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', 'Monto', 'Moneda', 'Tasa', 'Fecha de la tasa', 'Fuente de la tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
   for (const e of [...c.expenses].sort(compareChronological)) {
     const m = c.methodsById[e.payment_method_id];
     rows.push([e.date, e.description, e.payment_method_id == null ? 'Por definir' : methodLabel(m), m ? personName(c, m.owner_person_id) : '',
       e.beneficiary_ids.map((id) => personName(c, id)).join(' + '),
-      (e.amount_cents / 100).toFixed(2), e.rate ?? '', e.rate == null ? '' : e.rate_date ?? e.date, e.rate == null ? '' : rateSourceLabel(e.rate_source), e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
+      (e.amount_cents / 100).toFixed(2), e.currency ?? cur.dest.code, e.rate ?? '', e.rate == null ? '' : e.rate_date ?? e.date, e.rate == null ? '' : rateSourceLabel(e.rate_source), e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
       e.amount_approx ? 'Sí' : '', hasLocation(e) ? e.lat : '', hasLocation(e) ? e.lng : '', e.place ?? '']);
   }
   // Un texto que empieza con = + - @ se interpretaría como fórmula en Excel; se le antepone un apóstrofo.
@@ -1875,7 +2102,7 @@ function render() {
     return;
   }
   const trip = store.activeTrip();
-  $tripBtn.textContent = `✈ ${trip.name} · ${trip.dest}→${trip.home} ▾`;
+  $tripBtn.innerHTML = `${icon('plane')} ${esc(trip.name)} · ${esc(trip.dest)}→${esc(trip.home)} ${icon('chevron', 'trip-ch')}`;
   const { r, m } = currentRoute();
   mapFocus = r.map && m[1] ? decodeURIComponent(m[1]) : '';
   if (dragSt?.active) return; // no se redibuja la lista mientras se arrastra un gasto
@@ -2006,6 +2233,19 @@ $view.addEventListener('click', async (ev) => {
   else if (action === 'show-place') location.hash = `#/mapa/${encodeURIComponent(id)}`;
   else if (action === 'map-stop') focusStop(id);
   else if (action === 'pm-owner') { draft.owner = id; paintCards(); }
+  else if (action === 'cur') { if (draft.currency !== id) { draft.currency = id; paintCur(); } }
+  else if (action === 'date-q') setDraftDate(id === 'yesterday' ? addDays(todayStr(), -1) : todayStr());
+  else if (action === 'date-open') openDatePicker({ value: draft.date, onPick: setDraftDate });
+  else if (action === 'benes-open') { draft.benesOpen = true; paintBenes(); }
+  else if (action === 'card-go') {
+    const box = document.getElementById('cards');
+    const el = box?.querySelectorAll('.pitem')[Number(t.dataset.i)];
+    if (el) box.scrollTo({ left: el.offsetLeft - (box.clientWidth - el.offsetWidth) / 2, behavior: 'smooth' });
+  }
+  else if (action === 'here') suggestHere();
+  else if (action === 'here-cancel') { hereCtl?.abort(); draft.here = null; paintLoc(); }
+  else if (action === 'here-use') useHere(Number(t.dataset.i));
+  else if (action === 'here-point') useHerePoint();
   else if (action === 'info') document.getElementById(`info-${id}`)?.showModal();
   else if (action === 'info-close') t.closest('dialog')?.close();
   else if (action === 'bene') {
@@ -2243,15 +2483,16 @@ $view.addEventListener('keydown', (ev) => {
 });
 $view.addEventListener('focusout', (ev) => { if (ev.target.id === 'c-plot') resetReadout(); });
 
+let dotsRaf = 0;
+$view.addEventListener('scroll', (ev) => { // el evento scroll no sube: se escucha en la fase de captura
+  if (ev.target.id !== 'cards' || dotsRaf) return;
+  dotsRaf = requestAnimationFrame(() => { dotsRaf = 0; paintCardDots(); });
+}, true);
+
 $view.addEventListener('input', (ev) => {
   const id = ev.target.id;
   if (id === 'amount') { draft.amountText = ev.target.value; updateConv(); }
   else if (id === 'desc') draft.desc = ev.target.value;
-  else if (id === 'place') {
-    draft.place = ev.target.value;
-    const name = document.getElementById('loc-name');
-    if (name) name.textContent = draft.place.trim() || 'Ubicación guardada';
-  }
   else if (id === 'f-q') { filters.q = ev.target.value; const pos = ev.target.selectionStart; render(); const el = document.getElementById('f-q'); el.focus(); el.setSelectionRange(pos, pos); }
   else if (id.startsWith('m-')) onMethodForm(id);
 });
@@ -2262,8 +2503,8 @@ $view.addEventListener('change', (ev) => {
     const file = ev.target.files?.[0];
     ev.target.value = ''; // permite elegir otra vez el mismo archivo
     restoreFromFile(file);
-  } else if (id === 'date') {
-    if (ev.target.value) { draft.date = ev.target.value; loadRate(); renderChart(); if (draft.lat == null) paintLoc(); } // los lugares de ese día pasan al principio
+  } else if (id === 'cur-other') {
+    if (ev.target.value && currencyByCode(ev.target.value)) { draft.currency = ev.target.value; paintCur(); }
   } else if (id === 'f-method') { filters.method = ev.target.value; render(); }
   else if (id === 'f-person') { filters.person = ev.target.value; render(); }
   else if (id === 'f-payer') { filters.payer = ev.target.value; render(); }
@@ -2381,5 +2622,6 @@ if ('serviceWorker' in navigator) {
   }).catch(() => {});
 }
 
+initSelects(); // menús desplegables con el estilo de la app
 render(); // primero lo guardado en el teléfono; si el servidor trae algo distinto, refresh() avisa y se redibuja
 sync();

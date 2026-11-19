@@ -1,8 +1,8 @@
 // Service worker: guarda la app en el celular para que abra sin internet.
 // Los datos (API) NO pasan por aquí: los maneja store.js con su copia local y su cola.
-const CACHE = 'gastos-viaje-v63';
+const CACHE = 'gastos-viaje-v71';
 const SHELL = [
-  '/', '/index.html', '/css/app.css', '/js/app.js', '/js/store.js', '/js/money.mjs', '/js/cards.mjs', '/js/places.mjs', '/js/order.mjs', '/js/stats.mjs', '/js/geosearch.mjs', '/js/nearby.mjs', '/js/picker.mjs',
+  '/', '/index.html', '/css/app.css', '/js/app.js', '/js/store.js', '/js/money.mjs', '/js/cards.mjs', '/js/places.mjs', '/js/order.mjs', '/js/stats.mjs', '/js/geosearch.mjs', '/js/nearby.mjs', '/js/picker.mjs', '/js/icons.mjs', '/js/select.mjs', '/js/datepicker.mjs',
   '/vendor/leaflet/leaflet.js', '/vendor/leaflet/leaflet.css',
   '/vendor/leaflet/images/marker-icon.png', '/vendor/leaflet/images/marker-icon-2x.png', '/vendor/leaflet/images/marker-shadow.png', '/vendor/leaflet/images/layers.png', '/vendor/leaflet/images/layers-2x.png',
   '/js/settlement.mjs', '/js/currencies.mjs', '/js/chart.mjs', '/js/theme.js', '/manifest.webmanifest', '/icon.svg', '/icon-192.png', '/icon-512.png',

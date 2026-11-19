@@ -210,6 +210,82 @@ dialog.info .chart { margin-top: 12px; }
 .chip { padding: 9px 14px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface); font: inherit; color: var(--text); cursor: pointer; }
 .chip.on { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); font-weight: 600; }
 .chip.ghost { border-style: dashed; color: var(--muted); }
+/* Formulario de gasto: franja del monto arriba y una tarjeta por tema. */
+/* minmax(0, 1fr): sin esto la columna crece hasta el ancho del carrusel de tarjetas y toda la pantalla se corre a un lado. */
+.xform { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; margin-top: 8px; }
+.xform > * { min-width: 0; }
+.amount-hero { padding: 14px 16px 12px; border-radius: 20px; color: var(--brand-ink); background: linear-gradient(135deg, var(--brand), var(--brand-2)); box-shadow: 0 6px 18px color-mix(in srgb, var(--brand) 28%, transparent); }
+.hero-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.amount-hero label { margin: 0; color: inherit; opacity: .85; font-size: .8rem; text-transform: uppercase; letter-spacing: .04em; }
+.amount-hero .amount { margin-top: 6px; padding: 2px 0; border: 0; border-radius: 8px; background: transparent; color: inherit; font-size: 2.3rem; font-weight: 800; letter-spacing: -.01em; }
+.amount-hero .amount::placeholder { color: inherit; opacity: .6; }
+.amount-hero .amount:focus { outline: 2px solid color-mix(in srgb, var(--brand-ink) 60%, transparent); outline-offset: 2px; }
+.amount-hero .conv { color: inherit; font-weight: 600; opacity: .95; }
+.amount-hero .info-btn { color: inherit; border-color: currentColor; opacity: .85; }
+.amount-hero .switch { background: color-mix(in srgb, var(--brand-ink) 16%, transparent); border-color: color-mix(in srgb, var(--brand-ink) 30%, transparent); color: inherit; }
+.amount-hero .switch .track { background: color-mix(in srgb, var(--brand-ink) 35%, transparent); }
+.amount-hero .switch.on { background: var(--warn-bg); color: var(--warn-text); border-color: transparent; }
+.fcard { padding: 14px; border: 1px solid var(--border); border-radius: 18px; background: var(--surface); box-shadow: 0 1px 2px rgb(0 0 0 / .04); }
+.fcard .lab-row { margin: 0 0 10px; }
+.flab { display: block; margin: 0 0 8px; font-size: .75rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); }
+.fcard .lab-row .flab { margin: 0; }
+.fcard .loc-box { border-style: solid; border-color: var(--border); background: var(--surface-2); }
+.fcard .loc-box.set { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 6%, var(--surface)); }
+/* Con padding arriba: el aro de la tarjeta elegida y su sombra se cortaban contra el borde del carrusel. */
+.fcard .cards { margin: 0 -14px; padding: 8px 14px 12px; }
+.fcard .owner-f { margin: 0 0 6px; padding: 2px 0; }
+/* Moneda del gasto: sobre la franja verde. */
+.cur-chips { margin: 8px 0 4px; }
+.cur-chips .chip { padding: 6px 12px; font-size: .88rem; min-height: 34px; background: color-mix(in srgb, var(--brand-ink) 14%, transparent); border-color: color-mix(in srgb, var(--brand-ink) 32%, transparent); color: inherit; }
+.cur-chips .chip.on { background: var(--brand-ink); border-color: var(--brand-ink); color: var(--brand); }
+.cur-chips .cur-other { max-width: 200px; }
+.cur-chips .cur-other.on { background: var(--brand-ink); border-color: var(--brand-ink); color: var(--brand); }
+.cur-chips .cur-other.empty .selbtn-t { color: inherit; }
+.cur-chips .cur-other .selbtn-ch { color: inherit; }
+/* Iconos SVG (en lugar de emojis): toman el color y el tamaño del texto. */
+.ic { width: 1.15em; height: 1.15em; flex: none; vertical-align: -.2em; }
+.btn .ic, .chip .ic, .more-btn .ic { margin-right: 6px; }
+.chip.selbtn .ic.selbtn-ch, .btn .ic.selbtn-ch { margin-right: 0; }
+.sheet-x { display: grid; place-items: center; }
+.sheet-x .ic { width: 20px; height: 20px; margin: 0; }
+/* Menús desplegables propios (ver select.mjs): el <select> queda oculto y en su lugar sale este botón. */
+.sel-native { position: absolute !important; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden; }
+.selbtn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 13px 14px; border: 1px solid var(--control-border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.selbtn:focus-visible { outline: 2px solid var(--brand); outline-offset: 1px; }
+.selbtn:disabled { opacity: .55; cursor: not-allowed; }
+.selbtn-t { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.selbtn.empty .selbtn-t { color: var(--muted); }
+.selbtn .selbtn-ch { flex: none; margin: 0; color: var(--muted); }
+.selbtn.chip { display: inline-flex; width: auto; gap: 6px; }
+.sel-sheet { max-height: min(78dvh, 560px); }
+.sel-find { flex: none; padding: 2px 16px 10px; }
+.sel-body { padding-top: 4px; }
+.sel-list { display: grid; gap: 4px; margin: 0; padding: 0 0 6px; list-style: none; }
+.sel-list li[hidden] { display: none; }
+.sel-opt { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 50px; padding: 10px 14px; border: 1.5px solid transparent; border-radius: 12px; background: none; color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.sel-opt:hover, .sel-opt:active { background: var(--surface-2); }
+.sel-opt.on { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 9%, var(--surface)); font-weight: 700; }
+.sel-opt:disabled { opacity: .45; cursor: default; }
+.sel-opt-t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.sel-opt .sel-ck { margin: 0; color: var(--brand); }
+/* Día: Hoy / Ayer / otro día. */
+.date-chips { margin-bottom: 12px; }
+.date-chips .chip { min-height: 38px; display: inline-flex; align-items: center; gap: 4px; }
+/* ¿Para quién? plegado en una línea. */
+.benes-sum { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.avs { display: flex; flex: none; }
+.av { display: grid; place-items: center; width: 30px; height: 30px; margin-left: -8px; border: 2px solid var(--surface-2); border-radius: 50%; background: var(--brand); color: var(--brand-ink); font-size: .8rem; font-weight: 800; }
+.av:first-child { margin-left: 0; }
+.benes-t { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.benes-c { flex: none; font-size: .82rem; font-weight: 600; color: var(--brand); }
+/* Sugerencia de lugar con el GPS. */
+.loc-box.sug { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 7%, var(--surface)); }
+.loc-wait, .loc-more { display: flex; align-items: center; gap: 10px; font-size: .9rem; color: var(--muted); }
+.loc-wait .linkbtn { margin-left: auto; }
+.loc-links { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.linkbtn { padding: 8px 0; border: 0; background: none; color: var(--brand); font: inherit; font-size: .85rem; font-weight: 600; cursor: pointer; }
+.loc-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.loc-btns .btn.secondary { margin: 0; padding: 12px 8px; font-size: .9rem; }
 .btn { display: block; width: 100%; padding: 14px; border: 0; border-radius: 14px; font: inherit; font-weight: 700; background: var(--brand); color: var(--brand-ink); cursor: pointer; margin-top: 14px; }
 .btn.secondary { background: var(--surface-2); color: var(--text); }
 .btn.danger { background: transparent; color: var(--neg); border: 1px solid var(--border); }
@@ -542,3 +618,34 @@ main:focus-visible { outline: none; }
 /* Un nombre largo en un atajo no debe ensanchar la pantalla: los hijos de la tarjeta pueden encogerse. */
 .loc-box > * { min-width: 0; }
 .loc-recent, .loc-chips { min-width: 0; max-width: 100%; }
+
+/* Calendario propio (ver datepicker.mjs). */
+.cal-sheet { max-height: min(88dvh, 640px); }
+.cal-body { padding-bottom: 8px; }
+.cal-nav { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 4px 0 8px; }
+.cal-title { flex: 1; text-align: center; font-size: 1.05rem; text-transform: capitalize; }
+.cal-arrow { display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 50%; background: var(--surface-2); color: var(--text); cursor: pointer; }
+.cal-arrow:disabled { opacity: .35; cursor: default; }
+.cal-arrow .ic { width: 20px; height: 20px; margin: 0; }
+.cal-left { transform: rotate(90deg); }
+.cal-right { transform: rotate(-90deg); }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px 2px; }
+.cal-dow { padding: 6px 0; text-align: center; font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.cal-day { display: grid; place-items: center; width: 100%; aspect-ratio: 1; max-height: 48px; padding: 0; border: 1.5px solid transparent; border-radius: 50%; background: none; color: var(--text); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; }
+.cal-day:hover:not(:disabled) { background: var(--surface-2); }
+.cal-day.today { border-color: var(--brand); color: var(--brand); font-weight: 700; }
+.cal-day.sel { background: var(--brand); border-color: var(--brand); color: var(--brand-ink); font-weight: 800; }
+.cal-day:disabled { color: var(--muted); opacity: .35; cursor: default; }
+.cal-day:focus-visible, .cal-arrow:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; }
+
+/* Indicador del carrusel de medios de pago (ver paintCardDots). */
+.cards.more-right { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 44px), transparent); }
+.cards.more-left { -webkit-mask-image: linear-gradient(270deg, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(270deg, #000 calc(100% - 44px), transparent); }
+.cards.more-left.more-right { -webkit-mask-image: linear-gradient(90deg, transparent, #000 44px, #000 calc(100% - 44px), transparent); mask-image: linear-gradient(90deg, transparent, #000 44px, #000 calc(100% - 44px), transparent); }
+.cards-dots { display: flex; align-items: center; justify-content: center; gap: 4px; min-height: 32px; margin-top: 2px; }
+.cards-dots[hidden] { display: none; }
+.cards-n { margin-right: 8px; font-size: .8rem; font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
+.cdot { position: relative; width: 8px; height: 8px; padding: 0; border: 0; border-radius: 50%; background: var(--control-border); cursor: pointer; transition: width .15s ease, background-color .15s ease; }
+.cdot::after { content: ''; position: absolute; inset: -12px -6px; } /* área de toque grande para un punto pequeño */
+.cdot.on { width: 22px; border-radius: 99px; background: var(--brand); }
+@media (prefers-reduced-motion: reduce) { .cdot { transition: none; } }

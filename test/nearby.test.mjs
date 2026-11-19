@@ -52,8 +52,9 @@ test('Overpass: lee nodos y centros, y descarta lo que no tiene nombre o coorden
   assert.equal(list[0].detail, 'Supermercado · Av. Boa Viagem 10');
   assert.equal(list[0].kind, 'supermarket');
   assert.equal(list[1].lat, -8.0502);
-  assert.equal(placeIcon('supermarket'), '🛒');
-  assert.equal(placeIcon('algo_raro'), '📍');
+  assert.match(placeIcon('supermarket'), /^<svg /); // icono SVG, no emoji
+  assert.notEqual(placeIcon('supermarket'), placeIcon('cafe'));
+  assert.equal(placeIcon('algo_raro'), placeIcon(undefined)); // un tipo desconocido cae al pin de lugar
   assert.equal(parseOverpass({ elements: [{ lat: 1, lon: 1, tags: { name: 'X', shop: 'yes', 'addr:street': 'Rua A' } }] })[0].detail, 'Rua A');
 });
 

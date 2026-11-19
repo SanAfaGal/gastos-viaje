@@ -7,6 +7,7 @@
 
 import { distanceKm, parsePhoton } from './geosearch.mjs';
 import { hasLocation } from './places.mjs';
+import { icon } from './icons.mjs';
 
 const SAME_PLACE_KM = 0.04; // gastos a menos de 40 m cuentan como el mismo lugar
 const DUP_KM = 0.06; // un sitio cercano a menos de 60 m de un lugar usado con el mismo nombre es el mismo
@@ -57,19 +58,19 @@ export function recentPlaces(expenses, { date = '', limit = 5 } = {}) {
     .slice(0, limit);
 }
 
-// Tipo de sitio de OpenStreetMap (shop/amenity/...) -> [icono, nombre en español]. Lo que no está aquí se muestra sin tipo.
+// Tipo de sitio de OpenStreetMap (shop/amenity/...) -> [nombre del icono (ver icons.mjs), nombre en español]. Lo que no está aquí se muestra sin tipo.
 const KINDS = {
-  supermarket: ['🛒', 'Supermercado'], convenience: ['🏪', 'Tienda'], mall: ['🛍️', 'Centro comercial'], department_store: ['🛍️', 'Almacén'],
-  marketplace: ['🧺', 'Mercado'], greengrocer: ['🥬', 'Frutería'], bakery: ['🥖', 'Panadería'], butcher: ['🥩', 'Carnicería'],
-  restaurant: ['🍽️', 'Restaurante'], fast_food: ['🍔', 'Comida rápida'], cafe: ['☕', 'Café'], bar: ['🍺', 'Bar'], pub: ['🍺', 'Bar'],
-  ice_cream: ['🍦', 'Heladería'], pharmacy: ['💊', 'Farmacia'], chemist: ['🧴', 'Droguería'], clothes: ['👕', 'Ropa'], shoes: ['👟', 'Zapatos'],
-  fuel: ['⛽', 'Gasolinera'], atm: ['🏧', 'Cajero'], bank: ['🏦', 'Banco'], hotel: ['🏨', 'Hotel'], hostel: ['🏨', 'Hostal'],
-  guest_house: ['🏨', 'Posada'], taxi: ['🚕', 'Taxi'], bus_station: ['🚌', 'Estación de buses'], museum: ['🏛️', 'Museo'],
-  attraction: ['🎡', 'Atracción'], cinema: ['🎬', 'Cine'], souvenir: ['🎁', 'Souvenirs'], gift: ['🎁', 'Regalos'],
-  kiosk: ['🏪', 'Quiosco'], hairdresser: ['💇', 'Peluquería'], beach_resort: ['🏖️', 'Playa'], park: ['🌳', 'Parque'],
+  supermarket: ['cart', 'Supermercado'], convenience: ['bag', 'Tienda'], mall: ['bag', 'Centro comercial'], department_store: ['bag', 'Almacén'],
+  marketplace: ['bag', 'Mercado'], greengrocer: ['leaf', 'Frutería'], bakery: ['utensils', 'Panadería'], butcher: ['utensils', 'Carnicería'],
+  restaurant: ['utensils', 'Restaurante'], fast_food: ['utensils', 'Comida rápida'], cafe: ['coffee', 'Café'], bar: ['beer', 'Bar'], pub: ['beer', 'Bar'],
+  ice_cream: ['icecream', 'Heladería'], pharmacy: ['pill', 'Farmacia'], chemist: ['droplet', 'Droguería'], clothes: ['shirt', 'Ropa'], shoes: ['bag', 'Zapatos'],
+  fuel: ['fuel', 'Gasolinera'], atm: ['banknote', 'Cajero'], bank: ['landmark', 'Banco'], hotel: ['bed', 'Hotel'], hostel: ['bed', 'Hostal'],
+  guest_house: ['bed', 'Posada'], taxi: ['car', 'Taxi'], bus_station: ['bus', 'Estación de buses'], museum: ['landmark', 'Museo'],
+  attraction: ['ticket', 'Atracción'], cinema: ['film', 'Cine'], souvenir: ['gift', 'Souvenirs'], gift: ['gift', 'Regalos'],
+  kiosk: ['bag', 'Quiosco'], hairdresser: ['scissors', 'Peluquería'], beach_resort: ['umbrella', 'Playa'], park: ['tree', 'Parque'],
 };
 
-export const placeIcon = (kind) => KINDS[kind]?.[0] ?? '📍';
+export const placeIcon = (kind) => icon(KINDS[kind]?.[0] ?? 'mappin');
 export const placeKind = (kind) => KINDS[kind]?.[1] ?? '';
 
 // Centroide (centro de masa) de un contorno [{ lat, lon }]. El centro de la caja que lo rodea puede quedar fuera del edificio si tiene forma
