@@ -1,37 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cardPaint, detectNetwork, isHexColor, suggestColor } from '../public/js/cards.mjs';
-
-test('red: se deduce de los primeros dígitos', () => {
-  assert.equal(detectNetwork('4'), 'visa');
-  assert.equal(detectNetwork('4111 1111'), 'visa');
-  assert.equal(detectNetwork('51'), 'mastercard');
-  assert.equal(detectNetwork('5412'), 'mastercard');
-  assert.equal(detectNetwork('2221'), 'mastercard');
-  assert.equal(detectNetwork('2720'), 'mastercard');
-  assert.equal(detectNetwork('37'), 'amex');
-  assert.equal(detectNetwork('3782'), 'amex');
-  assert.equal(detectNetwork('6011'), 'discover');
-  assert.equal(detectNetwork('36'), 'diners');
-});
-
-test('red: Elo y Hipercard tienen rangos propios y ganan sobre Visa y Discover', () => {
-  assert.equal(detectNetwork('4011'), 'elo');
-  assert.equal(detectNetwork('5067'), 'elo');
-  assert.equal(detectNetwork('650'), 'elo');
-  assert.equal(detectNetwork('606282'), 'hipercard');
-  assert.equal(detectNetwork('3841'), 'hipercard');
-  // Con un solo dígito todavía adivina Visa; al llegar al cuarto dígito corrige a Elo.
-  assert.equal(detectNetwork('40'), 'visa');
-});
-
-test('red: sin dígitos o con un prefijo desconocido no inventa nada', () => {
-  assert.equal(detectNetwork(''), null);
-  assert.equal(detectNetwork(null), null);
-  assert.equal(detectNetwork('abc'), null);
-  assert.equal(detectNetwork('9'), null);
-  assert.equal(detectNetwork('5'), null); // todavía no alcanza para decir Mastercard
-});
+import { cardPaint, isHexColor, suggestColor } from '../public/js/cards.mjs';
 
 test('color: solo acepta #rrggbb', () => {
   assert.equal(isHexColor('#7c3aed'), true);

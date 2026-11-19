@@ -57,26 +57,6 @@ export function cardPaint(hex) {
   return { c1: ok, c2: mix(light ? 0.18 : 0.5), fg: light ? '#16181d' : '#ffffff', shadow: light ? 'none' : '0 1px 2px rgb(0 0 0 / .35)' };
 }
 
-// Deduce la red por los primeros dígitos (con 1 dígito ya adivina Visa o Mastercard; Elo necesita 4 o más).
-// Devuelve la clave de NETWORKS o null si no reconoce el prefijo.
-export function detectNetwork(input) {
-  const d = String(input ?? '').replace(/\D/g, '');
-  if (!d) return null;
-  const n = (len) => Number(d.slice(0, len));
-  const has = (len) => d.length >= len;
-
-  if ((has(6) && n(6) === 606282) || (has(4) && n(4) === 3841)) return 'hipercard';
-  const elo4 = [4011, 4312, 4389, 4514, 4576, 5041, 5066, 5067, 5090, 6277, 6362, 6363, 6516, 6550];
-  if ((has(4) && elo4.includes(n(4))) || (has(3) && n(3) === 650)) return 'elo';
-  if (d[0] === '4') return 'visa';
-  if (has(2) && n(2) >= 51 && n(2) <= 55) return 'mastercard';
-  if (has(4) && n(4) >= 2221 && n(4) <= 2720) return 'mastercard';
-  if (has(2) && (n(2) === 34 || n(2) === 37)) return 'amex';
-  if ((has(4) && n(4) === 6011) || (has(2) && n(2) === 65) || (has(3) && n(3) >= 644 && n(3) <= 649)) return 'discover';
-  if ((has(2) && (n(2) === 36 || n(2) === 38 || n(2) === 39)) || (has(3) && n(3) >= 300 && n(3) <= 305)) return 'diners';
-  return null;
-}
-
 // Color sugerido según el nombre escrito a mano (ignora mayúsculas y tildes). "Nu" y "C6" son tan cortos
 // que solo cuentan como palabra completa, para no confundirlos con "Nueva" o "C60".
 export function suggestColor(name) {
