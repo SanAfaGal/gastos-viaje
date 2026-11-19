@@ -1532,17 +1532,17 @@ function rowHtml(c, i, attr = 'data-i') {
   const badge = point ? `<span class="pk-ico" aria-hidden="true">${icon('mappin')}</span>`
     : `<span class="stop-n${c.kind === 'known' ? '' : ' last'}" aria-hidden="true">${c.n ?? '•'}</span>`;
   const km = !point && c.km != null ? `<span class="pick-km">${esc(formatDistance(c.km))}</span>` : '';
-  return `<button type="button" class="pick-res${sel ? ' sel' : ''}" ${attr}="${i}" aria-pressed="${sel}">${badge}
+  return `<button type="button" class="pick-res${sel ? ' sel' : ''}${point ? '' : c.kind === 'known' ? ' known' : ' near'}" ${attr}="${i}" aria-pressed="${sel}">${badge}
     <span class="sug-txt"><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span>${km}<span class="pk-tick" aria-hidden="true">✓</span></button>`;
 }
 
 function idleHtml() {
   // Con lugares recientes se muestran primero (un toque y listo); la ayuda larga solo cuando todavía no hay ninguno.
   if (pk.recent.length) {
-    const rows = pk.recent.map((r, i) => `<button type="button" class="pick-res" data-r="${i}">
+    const rows = pk.recent.map((r, i) => `<button type="button" class="pick-res known" data-r="${i}">
         <span class="pk-ico" aria-hidden="true">${icon('clock')}</span>
         <span class="sug-txt"><b>${esc(r.name || 'Sin nombre')}</b><span class="muted">${esc(`${r.today ? 'Ya hay un gasto de este día' : dayLabel(r.last)} · ${r.count} gasto${r.count === 1 ? '' : 's'}`)}</span></span><span class="pk-tick" aria-hidden="true">✓</span></button>`).join('');
-    return `<h3 class="sug-h">Lugares recientes</h3><div class="sug-list">${rows}</div>
+    return `<section class="pk-sec known"><h3 class="sug-h">Lugares recientes</h3><div class="sug-list">${rows}</div></section>
       <p class="muted pk-tip">O toca el mapa, usa Mi ubicación o busca el nombre.</p>
       ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
   }
@@ -1582,10 +1582,10 @@ function anchorHtml() {
     : pk.osm === 'error' && !near.length ? '<div class="sug-note">No se pudieron cargar los sitios de OpenStreetMap. Revisa tu conexión.</div>'
     : !near.length && pk.more !== 'loading' ? '<div class="sug-note">No hay sitios con nombre aquí. Usa “Este punto” o busca el nombre.</div>' : '';
   return `${tabsHtml()}${hintHtml()}${rowHtml(point, 0)}${nameInput}
-    ${known.length ? `<h3 class="sug-h">Lugares que ya usaste <span>${known.length}</span></h3><div class="sug-list">${known.map((c) => rowHtml(c, idx(c))).join('')}</div>` : ''}
-    <h3 class="sug-h">Sitios cercanos${near.length ? ` <span>${near.length}</span>` : ''}</h3>
+    ${known.length ? `<section class="pk-sec known"><h3 class="sug-h">Lugares que ya usaste <span>${known.length}</span></h3><div class="sug-list">${known.map((c) => rowHtml(c, idx(c))).join('')}</div></section>` : ''}
+    <section class="pk-sec near"><h3 class="sug-h">Sitios cercanos${near.length ? ` <span>${near.length}</span>` : ''}</h3>
     <div class="sug-list">${near.map((c) => rowHtml(c, idx(c))).join('')}${nearStatus}</div>
-    ${pk.osm === 'loading' ? '' : `<div class="sug-more">${moreHtml(pk.more)}</div>`}
+    ${pk.osm === 'loading' ? '' : `<div class="sug-more">${moreHtml(pk.more)}</div>`}</section>
     ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
 }
 
@@ -1604,9 +1604,9 @@ function searchHtml() {
   const s = pk.search;
   const { near, far, all } = searchList();
   const row = (c) => {
-    const badge = `<span class="pk-ico" aria-hidden="true">${c.kind ? placeIcon(c.kind) : icon('mappin')}</span>`;
+    const badge = `<span class="pk-ico res" aria-hidden="true">${c.kind ? placeIcon(c.kind) : icon('mappin')}</span>`;
     const km = c.km != null ? `<span class="pick-km">${esc(formatDistance(c.km))}</span>` : '';
-    return `<button type="button" class="pick-res" data-s="${all.indexOf(c)}">${badge}
+    return `<button type="button" class="pick-res res" data-s="${all.indexOf(c)}">${badge}
       <span class="sug-txt"><b>${esc(c.name)}</b><span class="muted">${esc(`${c.detail || formatCoords(c.lat, c.lng)}${c.approx ? ' · posición aproximada' : ''}`)}</span></span>${km}</button>`;
   };
   const busy = s.state === 'loading' || s.fsqState === 'loading';
@@ -1619,10 +1619,11 @@ function searchHtml() {
   // Si el pin está lejos de donde se buscó, se ofrece repetir la búsqueda cerca del pin.
   const moved = pk.anchor && s.ref && distanceKm(pk.anchor, s.ref) > 1.5;
   const research = moved ? `<button type="button" class="btn secondary small more-btn" data-research>${icon('search')} Buscar “${esc(s.q)}” cerca del pin</button>` : '';
-  return `${hintHtml()}${pk.anchor ? tabsHtml() : `<div class="pk-bar"><h3 class="sug-h">Resultados de “${esc(s.q)}”</h3></div>`}
+  return `${hintHtml()}${pk.anchor ? tabsHtml() : ''}<section class="pk-sec res">
+    <h3 class="sug-h">Resultados de “${esc(s.q)}”${all.length ? ` <span>${all.length}</span>` : ''}</h3>
     <div class="sug-list" aria-busy="${busy}">${near.map(row).join('')}${status}</div>
     ${far.length ? `<details class="pk-far"${pk.farOpen ? ' open' : ''}><summary>Más lejos (${far.length})</summary><div class="sug-list">${far.map(row).join('')}</div></details>` : ''}
-    <div class="sug-more">${research}${fsq}</div>`;
+    <div class="sug-more">${research}${fsq}</div></section>`;
 }
 
 function paintPick() {

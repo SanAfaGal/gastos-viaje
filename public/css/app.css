@@ -398,6 +398,18 @@ details summary { cursor: pointer; color: var(--muted); font-size: .85rem; margi
 .pick-res.sel .pk-tick { display: grid; }
 .pick-res { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; width: 100%; min-height: 56px; padding: 10px 12px; text-align: left; border: 1.5px solid color-mix(in srgb, var(--control-border) 40%, var(--surface)); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; cursor: pointer; }
 .pick-res:active { background: var(--surface-2); }
+/* Cada origen es un bloque propio con su color: usados = verde, cercanos = ámbar, búsqueda por texto = azul (insignia cuadrada). */
+.pk-sec { --tone: var(--brand); margin-top: 18px; padding: 4px 10px 12px; border-radius: 16px; border: 1.5px solid color-mix(in srgb, var(--tone) 40%, var(--surface)); background: color-mix(in srgb, var(--tone) 8%, var(--surface-2)); }
+.pk-sec.near { --tone: var(--accent); }
+.pk-sec.res { --tone: var(--seg-3); }
+.pk-sec > .sug-h { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; color: var(--text); font-size: .9rem; font-weight: 700; }
+.pk-sec > .sug-h::before { content: ''; flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--tone); }
+.pk-sec.res > .sug-h::before { border-radius: 3px; }
+.pk-sec > .sug-h span { background: color-mix(in srgb, var(--tone) 22%, var(--surface)); }
+.pick-res.known { border-left: 4px solid var(--brand); }
+.pick-res.near { border-left: 4px solid var(--accent); }
+.pick-res.res { border-left: 4px solid var(--seg-3); }
+.pk-ico.res { border-radius: 9px; background: color-mix(in srgb, var(--seg-3) 16%, var(--surface)); color: var(--seg-3); }
 .pick-res.sel { border-color: var(--brand); background: color-mix(in srgb, var(--brand) 9%, var(--surface)); }
 .pick-res .muted { font-size: .8rem; }
 .sug-list { display: grid; gap: 8px; margin-top: 6px; }
