@@ -16,6 +16,10 @@
 // Con otra moneda (la de casa, por ejemplo un vuelo comprado en Colombia, o la de un tercer país) amount_cents está en
 // esa moneda y la tasa es la de ese par hacia la moneda de casa (1 si ya es la de casa).
 //
+// Espacios: cada código de acceso abre un espacio separado, con sus propias personas, viajes y medios de pago. Siempre
+// existe el espacio administrador (is_admin = 1, sin code_hash) que agrupa lo creado antes de los espacios. code_hash es
+// el resumen del código (nunca el código) y es único. active = 0 deja el espacio sin acceso sin borrar sus datos.
+//
 // No usar punto y coma dentro de los comentarios de este archivo: el esquema se parte por punto y coma.
 export default `CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
@@ -28,9 +32,21 @@ CREATE TABLE IF NOT EXISTS auth_failures (
   since INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS spaces (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  code_hash TEXT,
+  is_admin INTEGER NOT NULL DEFAULT 0,
+  active INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS spaces_code ON spaces(code_hash);
+
 CREATE TABLE IF NOT EXISTS people (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL
+  name TEXT NOT NULL,
+  space_id TEXT REFERENCES spaces(id)
 );
 
 CREATE TABLE IF NOT EXISTS trips (
@@ -38,7 +54,8 @@ CREATE TABLE IF NOT EXISTS trips (
   name TEXT NOT NULL,
   dest_currency TEXT NOT NULL,
   home_currency TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  space_id TEXT REFERENCES spaces(id)
 );
 
 CREATE TABLE IF NOT EXISTS trip_people (
@@ -55,7 +72,8 @@ CREATE TABLE IF NOT EXISTS payment_methods (
   card_type TEXT CHECK (card_type IN ('debit', 'credit')),
   owner_person_id TEXT NOT NULL REFERENCES people(id),
   color TEXT,
-  network TEXT
+  network TEXT,
+  space_id TEXT REFERENCES spaces(id)
 );
 
 CREATE TABLE IF NOT EXISTS rates (

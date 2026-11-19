@@ -9,6 +9,9 @@ import schema from './schema.mjs';
 import { currencyByCode, DEFAULT_SETTINGS } from '../public/js/currencies.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
+// Espacio que existe siempre y agrupa lo anterior a los espacios (lo reexporta spaces.mjs).
+export const ADMIN_SPACE_ID = 'space-admin';
+
 const statements = schema.split(';').map((s) => s.trim()).filter(Boolean);
 
 // Bases creadas con la primera versión (solo BRL -> COP): renombra columnas y pasa los pesos a centésimas.
@@ -79,6 +82,24 @@ async function upgradeTrips(db) {
   await db.run('UPDATE expenses SET trip_id = ? WHERE trip_id IS NULL', [(await first())[0].id]);
 }
 
+// Espacios: personas, viajes y medios de pago pertenecen a un espacio. Las bases anteriores (y el viaje inicial que
+// acaba de crear upgradeTrips) pasan al espacio administrador. Es idempotente: corre en cada arranque, y el
+// INSERT OR IGNORE evita duplicar al administrador si dos instancias arrancan a la vez.
+async function upgradeSpaces(db) {
+  const tables = ['people', 'trips', 'payment_methods'];
+  for (const table of tables) {
+    const cols = (await db.all(`PRAGMA table_info(${table})`)).map((c) => c.name);
+    if (!cols.includes('space_id')) await db.run(`ALTER TABLE ${table} ADD COLUMN space_id TEXT REFERENCES spaces(id)`);
+  }
+  await db.run(
+    'INSERT OR IGNORE INTO spaces (id, name, code_hash, is_admin, active, created_at) VALUES (?, ?, NULL, 1, 1, ?)',
+    [ADMIN_SPACE_ID, 'Principal', new Date().toISOString()],
+  );
+  for (const table of tables) {
+    await db.run(`UPDATE ${table} SET space_id = ? WHERE space_id IS NULL`, [ADMIN_SPACE_ID]);
+  }
+}
+
 // Columnas que eran calculables y ya no se guardan: el monto en tu moneda (amount_home) sale de amount_cents y la tasa;
 // "tasa estimada" (rate_estimated) es que el día de la tasa no sea el del gasto; y rate_manual ya no existe (siempre 0).
 // Solo se borran del esquema; el servidor las calcula al leer. Es idempotente.
@@ -93,6 +114,7 @@ async function open(adapter) {
   await migrate(adapter);
   await adapter.batch(statements.map((sql) => ({ sql })));
   await upgradeTrips(adapter);
+  await upgradeSpaces(adapter);
   await dropDerivedColumns(adapter);
   return adapter;
 }
