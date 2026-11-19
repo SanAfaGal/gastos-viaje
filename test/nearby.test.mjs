@@ -1,6 +1,8 @@
-import test from 'node:test';
+import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { knownPlaces, mergeCandidates, nearbyPlaces, parseOverpass, placeIcon, polygonCentroid } from '../public/js/nearby.mjs';
+import { _resetOverpass, knownPlaces, mergeCandidates, nearbyPlaces, parseOverpass, placeIcon, polygonCentroid, recentPlaces } from '../public/js/nearby.mjs';
+
+beforeEach(() => _resetOverpass()); // Overpass caído se recuerda un rato: cada prueba empieza de cero
 
 const REF = { lat: -8.05, lng: -34.9 };
 const ok = (json) => ({ ok: true, status: 200, json: async () => json });
@@ -69,14 +71,15 @@ test('nearbyPlaces: usa Overpass, ordena por distancia y quita duplicados', asyn
   assert.equal(source, 'overpass');
   assert.deepEqual(results.map((r) => r.name), ['Foco', 'Lejos']);
   assert.ok(results[0].km < 0.01);
-  assert.equal(urls.length, 1);
   assert.match(urls[0], /overpass-api\.de/);
+  assert.ok(urls.some((u) => /photon\.komoot\.io\/reverse/.test(u))); // Photon se pide a la vez, como respaldo
   assert.match(decodeURIComponent(urls[0]), /around:80,-8\.05,-34\.9/);
 });
 
 test('nearbyPlaces: si Overpass falla o viene vacío, usa Photon reverse', async () => {
   const photon = { features: [{ geometry: { coordinates: [REF.lng, at(8).lat] }, properties: { name: 'Padaria', city: 'Recife' } }] };
   for (const first of [bad, ok({ elements: [] })]) {
+    _resetOverpass();
     const urls = [];
     const fetchFn = async (url) => { urls.push(String(url)); return urls.length === 1 ? first : ok(photon); };
     const { results, source } = await nearbyPlaces(REF, { fetchFn });
@@ -142,4 +145,69 @@ test('Overpass con geometría: usa el centroide del edificio; nodos y relaciones
   assert.deepEqual(list.map((r) => [r.name, r.hasShape]), [['Edf. L', true], ['Quiosco', false], ['Mall', false]]);
   assert.ok(list[0].lat < 4); // no el centro de la caja (5)
   assert.deepEqual([list[2].lat, list[2].lng], [2, 3]);
+});
+
+test('recientes: los del mismo día primero, luego del más nuevo al más viejo; un lugar con varios gastos sale una vez', () => {
+  const recent = recentPlaces([
+    exp(1, '2026-11-10', 5, 'Foco'),
+    exp(2, '2026-11-12', 500, 'Padaria'),
+    exp(3, '2026-11-12', 504, 'Padaria', { created_at: '2026-11-12T18:00:00Z' }), // mismo lugar, otro pago
+    exp(4, '2026-11-15', 1000, 'Museo'),
+    exp(5, '2026-11-12', 2000, ''),
+    { id: 6, date: '2026-11-16', lat: null, lng: null, place: 'Sin ubicación' },
+  ], { date: '2026-11-12' });
+  assert.deepEqual(recent.map((p) => p.name), ['Padaria', '', 'Museo', 'Foco']); // los de ese día primero (Padaria más nueva), luego Museo y Foco
+  assert.deepEqual(recent.map((p) => p.today), [true, true, false, false]);
+  assert.equal(recent[0].count, 2);
+  assert.equal(recent[0].lat, at(504).lat); // coordenadas del gasto más reciente
+});
+
+test('recientes: sin fecha se ordena por lo más nuevo y se respeta el límite', () => {
+  const list = [1, 2, 3, 4, 5, 6, 7].map((n) => exp(n, `2026-11-0${n}`, n * 300, `L${n}`));
+  const r = recentPlaces(list, { limit: 3 });
+  assert.deepEqual(r.map((p) => p.name), ['L7', 'L6', 'L5']);
+  assert.ok(r.every((p) => p.today === false));
+  assert.deepEqual(recentPlaces([]), []);
+});
+
+test('nearbyPlaces: Overpass y Photon van a la vez; si Photon llega antes avisa un resultado parcial y el final es el de Overpass', async () => {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const photon = { features: [{ geometry: { coordinates: [REF.lng, at(8).lat] }, properties: { name: 'Padaria', osm_key: 'shop' } }] };
+  const fetchFn = async (url) => {
+    if (String(url).includes('overpass')) { await sleep(60); return ok({ elements: [{ lat: at(5).lat, lon: REF.lng, tags: { name: 'Foco' } }] }); }
+    return ok(photon);
+  };
+  const partials = [];
+  const final = await nearbyPlaces(REF, { fetchFn, onPartial: (p) => partials.push(p) });
+  assert.equal(partials.length, 1);
+  assert.equal(partials[0].source, 'photon');
+  assert.deepEqual(partials[0].results.map((r) => r.name), ['Padaria']);
+  assert.equal(final.source, 'overpass');
+  assert.deepEqual(final.results.map((r) => r.name), ['Foco']);
+});
+
+test('nearbyPlaces: si Overpass falla, no se vuelve a esperar durante unos minutos (solo Photon)', async () => {
+  const photon = { features: [{ geometry: { coordinates: [REF.lng, at(8).lat] }, properties: { name: 'Padaria', osm_key: 'shop' } }] };
+  let overpassCalls = 0;
+  const fetchFn = async (url) => {
+    if (String(url).includes('overpass')) { overpassCalls += 1; throw new Error('HTTP 502'); }
+    return ok(photon);
+  };
+  const first = await nearbyPlaces(REF, { fetchFn });
+  assert.equal(first.source, 'photon');
+  const second = await nearbyPlaces(REF, { fetchFn });
+  assert.equal(second.source, 'photon');
+  assert.equal(overpassCalls, 1); // la segunda vez ni lo intentó
+});
+
+test('nearbyPlaces: cancelar por el usuario no cuenta como caída de Overpass', async () => {
+  const ctl = new AbortController();
+  const aborting = async (url, { signal }) => {
+    ctl.abort();
+    if (signal.aborted) throw Object.assign(new Error('abort'), { name: 'AbortError' });
+    return ok({ elements: [], features: [] });
+  };
+  await assert.rejects(nearbyPlaces(REF, { fetchFn: aborting, signal: ctl.signal }), { name: 'AbortError' });
+  const fetchFn = async () => ok({ elements: [{ lat: -8.05, lon: -34.9, tags: { name: 'X' } }], features: [] });
+  assert.equal((await nearbyPlaces(REF, { fetchFn })).source, 'overpass'); // sigue intentándolo
 });

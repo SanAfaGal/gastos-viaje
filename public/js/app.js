@@ -10,8 +10,8 @@ import { MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 import { breakdown, byDay, summary } from './stats.mjs';
 import { distanceKm, formatDistance, searchPlaces } from './geosearch.mjs';
-import { PICK_MIN_ZOOM, TAP_ZOOM, buildList, confirmPlace, dedupeByName, preferOsm, rankSearch, selectionSummary, tapRadiusM } from './picker.mjs';
-import { knownPlaces, mergeCandidates, nearbyPlaces, placeIcon } from './nearby.mjs';
+import { PICK_MIN_ZOOM, TAP_ZOOM, buildList, combineNearby, confirmPlace, dedupeByName, preferOsm, rankSearch, selectionSummary, tapRadiusM } from './picker.mjs';
+import { knownPlaces, nearbyPlaces, placeIcon, recentPlaces } from './nearby.mjs';
 
 const $view = document.getElementById('view');
 const $title = document.getElementById('title');
@@ -393,8 +393,14 @@ function draftFrom(c, id) {
 // Elegir el lugar (mapa, ubicación, búsqueda y sugerencias) es un solo diálogo: ver openPicker.
 function locHtml() {
   if (draft.lat == null) {
+    // Varios gastos en el mismo lugar con distinto medio de pago: se elige una vez y después basta un toque. Los lugares donde ya hubo un
+    // gasto de este mismo día salen primero.
+    draft.recentList = recentPlaces(ctx().expenses, { date: draft.date, limit: 3 });
+    const chips = draft.recentList.map((r, i) => `<button type="button" class="chip loc-chip" data-action="use-recent" data-i="${i}"
+        aria-label="Usar el lugar ${esc(r.name || 'sin nombre')}${r.today ? ', donde ya hay un gasto de este día' : ''}">📍 <span class="loc-chip-t">${esc(r.name || 'Sin nombre')}</span>${r.today ? ' <span class="loc-chip-s">este día</span>' : ''}</button>`).join('');
     return `<div class="loc-box">
       <div class="loc-empty"><span class="loc-ico" aria-hidden="true">📍</span><span>Sin ubicación</span></div>
+      ${chips ? `<div class="loc-recent"><span class="muted">Usar un lugar reciente</span><div class="loc-chips">${chips}</div></div>` : ''}
       <button type="button" class="btn loc-cta" data-action="pick-map">🗺 Elegir lugar en el mapa</button></div>`;
   }
   return `<div class="loc-box set">
@@ -532,13 +538,13 @@ const infoDialog = (id, title, html) => `<dialog id="info-${id}" class="sheet in
 
 function viewForm(editId) {
   const c = ctx();
+    loadHistory();
   if (needsSetup(c)) return setupCard();
   if (!draft || (editId ? draft.id !== editId : draft.id)) {
     draft = editId ? draftFrom(c, editId) : newDraft(c);
     if (!draft) { location.hash = '#/gastos'; return ''; }
     convRate = null;
     loadRate();
-    loadHistory();
   }
   return `
     <form id="exp-form" autocomplete="off" novalidate>
@@ -1091,6 +1097,28 @@ function focusStop(n) {
   marker.openPopup();
 }
 
+// Botón del Mapa de lugares: encuadra todas las paradas (útil después de acercarte a una o de mirar algo lejos).
+function addFitControl(L, map, pts) {
+  const control = L.control({ position: "bottomleft" });
+  control.onAdd = () => {
+    const bar = L.DomUtil.create("div", "leaflet-bar fit-ctl");
+    const btn = L.DomUtil.create("a", "", bar);
+    btn.href = "#";
+    btn.setAttribute("role", "button");
+    btn.setAttribute("aria-label", "Ver todas las paradas");
+    btn.title = "Ver todas las paradas";
+    btn.textContent = "🗺 Ver todo";
+    L.DomEvent.disableClickPropagation(bar);
+    L.DomEvent.on(btn, "click", (ev) => {
+      L.DomEvent.preventDefault(ev);
+      map.closePopup();
+      map.fitBounds(pts, { padding: [30, 30], maxZoom: 16 });
+    });
+    return bar;
+  };
+  control.addTo(map);
+}
+
 async function initMap() {
   const el = document.getElementById('map');
   if (!el) return;
@@ -1132,6 +1160,7 @@ async function initMap() {
     if (mapFocus && p.ids.includes(mapFocus)) focus = { p, marker };
   }
   const pts = places.map((p) => [p.lat, p.lng]);
+  if (pts.length > 1) addFitControl(L, map, pts);
   if (focus) { map.setView([focus.p.lat, focus.p.lng], 16); focus.marker.openPopup(); }
   else if (prev) map.setView(prev.center, prev.zoom);
   else if (pts.length === 1) map.setView(pts[0], 15);
@@ -1171,6 +1200,10 @@ const pk = {
   target: null, anchor: null, known: [], nearby: [], items: [], selKey: 'point', typed: '',
   osm: 'done', more: 'idle', note: '', search: null, radiusM: 60, touched: false, locating: false,
   seq: 0, ctl: null, sseq: 0, sctl: null, locCtl: null,
+  recent: [], // lugares usados hace poco (con los del mismo día primero), para elegirlos de un toque al abrir
+  osmList: [], fsqList: [], // sitios cercanos de cada fuente; pk.nearby es la combinación (se recalcula al pintar)
+  tab: 'near', // con una búsqueda activa: 'near' (Cerca del pin) o 'results' (Resultados); la búsqueda no se pierde al mover el pin
+  farOpen: false, // el bloque "Más lejos" de los resultados está desplegado
   adjusted: new Map(), // llave de la fila -> { lat, lng } corregidos por el usuario (arrastró el pin o usó "Ajustar pin")
   moveMode: false, // mientras está activo, un toque en el mapa mueve el pin en vez de elegir un punto nuevo
 };
@@ -1207,6 +1240,15 @@ function rowHtml(c, i, attr = 'data-i') {
 }
 
 function idleHtml() {
+  // Con lugares recientes se muestran primero (un toque y listo); la ayuda larga solo cuando todavía no hay ninguno.
+  if (pk.recent.length) {
+    const rows = pk.recent.map((r, i) => `<button type="button" class="pick-res" data-r="${i}">
+        <span class="pk-ico" aria-hidden="true">🕘</span>
+        <span class="sug-txt"><b>${esc(r.name || 'Sin nombre')}</b><span class="muted">${esc(`${r.today ? 'Ya hay un gasto de este día' : dayLabel(r.last)} · ${r.count} gasto${r.count === 1 ? '' : 's'}`)}</span></span><span class="pk-tick" aria-hidden="true">✓</span></button>`).join('');
+    return `<h3 class="sug-h">Lugares recientes</h3><div class="sug-list">${rows}</div>
+      <p class="muted pk-tip">O toca el mapa, usa Mi ubicación o busca el nombre.</p>
+      ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
+  }
   return `<div class="pk-help"><p><b>¿Dónde fue el gasto?</b></p>
     <ul><li><span aria-hidden="true">📍</span><span>Toca <b>Mi ubicación</b> para usar tu GPS</span></li>
     <li><span aria-hidden="true">👆</span><span>Toca el mapa donde fue la compra</span></li>
@@ -1222,6 +1264,15 @@ function hintHtml() {
   return '';
 }
 
+// Pestañas "Cerca del pin" / "Resultados": solo cuando hay una búsqueda y un pin. Los resultados siguen ahí aunque muevas el pin.
+function tabsHtml() {
+  if (!pk.search || !pk.anchor) return '';
+  const n = searchList().all.length;
+  const tab = (id, label) => `<button type="button" class="pk-tab${pk.tab === id ? ' on' : ''}" role="tab" aria-selected="${pk.tab === id}" data-tab="${id}">${label}</button>`;
+  return `<div class="pk-tabs" role="tablist">${tab('near', 'Cerca del pin')}${tab('results', `Resultados${n ? ` (${n})` : ''}`)}
+    <button type="button" class="linkbtn" data-clear-search aria-label="Quitar la búsqueda">✕</button></div>`;
+}
+
 function anchorHtml() {
   const [point, ...rest] = pk.items;
   const known = rest.filter((c) => c.kind === 'known');
@@ -1230,10 +1281,10 @@ function anchorHtml() {
   const nameInput = point.key === pk.selKey
     ? `<div class="pk-name"><label for="pick-name" class="sr-only">Nombre del lugar (opcional)</label>
         <input id="pick-name" maxlength="120" autocomplete="off" placeholder="Nombre del lugar (opcional)" value="${esc(pk.typed)}"></div>` : '';
-  const nearStatus = pk.osm === 'loading' ? `<div class="muted" role="status">Buscando sitios cerca…</div>${skeleton(2)}`
+  const nearStatus = pk.osm === 'loading' ? `<div class="muted" role="status">${near.length ? 'Afinando resultados…' : 'Buscando sitios cerca…'}</div>${near.length ? '' : skeleton(2)}`
     : pk.osm === 'error' && !near.length ? '<div class="sug-note">No se pudieron cargar los sitios de OpenStreetMap. Revisa tu conexión.</div>'
     : !near.length && pk.more !== 'loading' ? '<div class="sug-note">No hay sitios con nombre aquí. Usa “Este punto” o busca el nombre.</div>' : '';
-  return `${hintHtml()}${rowHtml(point, 0)}${nameInput}
+  return `${tabsHtml()}${hintHtml()}${rowHtml(point, 0)}${nameInput}
     ${known.length ? `<h3 class="sug-h">Lugares que ya usaste <span>${known.length}</span></h3><div class="sug-list">${known.map((c) => rowHtml(c, idx(c))).join('')}</div>` : ''}
     <h3 class="sug-h">Sitios cercanos${near.length ? ` <span>${near.length}</span>` : ''}</h3>
     <div class="sug-list">${near.map((c) => rowHtml(c, idx(c))).join('')}${nearStatus}</div>
@@ -1247,7 +1298,8 @@ function searchList() {
   // El mismo lugar en las dos fuentes sale una vez, con la posición de OpenStreetMap (la de Foursquare es aproximada).
   const merged = preferOsm(s.fsq, s.osm);
   const found = dedupeByName([...merged.fsq, ...merged.osm]);
-  const { near, far } = rankSearch(found, s.ref);
+  // Se ordena por lo cercano al pin de ahora (no al de cuando se buscó): si lo mueves, el orden se adapta. Nada se oculta: lo lejano va aparte.
+  const { near, far } = rankSearch(found, pk.anchor ? { lat: pk.anchor.lat, lng: pk.anchor.lng } : s.ref, { maxFar: 50 });
   return { near, far, all: [...near, ...far] };
 }
 
@@ -1267,15 +1319,22 @@ function searchHtml() {
   const fsq = s.fsqState === 'idle' ? moreHtml('idle', 'data-more-search')
     : s.fsqState === 'noref' ? '<div class="sug-note">Mueve el mapa o usa Mi ubicación para buscar con más alcance.</div>'
     : moreHtml(s.fsqState, 'data-more-search');
-  return `${hintHtml()}<div class="pk-bar"><h3 class="sug-h">Resultados de “${esc(s.q)}”</h3>${pk.anchor ? '<button type="button" class="linkbtn" data-clear-search>‹ Volver</button>' : ''}</div>
-    <div class="sug-list" aria-busy="${busy}">${near.map(row).join('')}${far.length ? `<h3 class="sug-h">Más lejos</h3>${far.map(row).join('')}` : ''}${status}</div>
-    <div class="sug-more">${fsq}</div>`;
+  // Si el pin está lejos de donde se buscó, se ofrece repetir la búsqueda cerca del pin.
+  const moved = pk.anchor && s.ref && distanceKm(pk.anchor, s.ref) > 1.5;
+  const research = moved ? `<button type="button" class="btn secondary small more-btn" data-research>🔎 Buscar “${esc(s.q)}” cerca del pin</button>` : '';
+  return `${hintHtml()}${pk.anchor ? tabsHtml() : `<div class="pk-bar"><h3 class="sug-h">Resultados de “${esc(s.q)}”</h3></div>`}
+    <div class="sug-list" aria-busy="${busy}">${near.map(row).join('')}${status}</div>
+    ${far.length ? `<details class="pk-far"${pk.farOpen ? ' open' : ''}><summary>Más lejos (${far.length})</summary><div class="sug-list">${far.map(row).join('')}</div></details>` : ''}
+    <div class="sug-more">${research}${fsq}</div>`;
 }
 
 function paintPick() {
+  pk.nearby = combineNearby({ known: pk.known, osm: pk.osmList, fsq: pk.fsqList });
   pk.items = buildList({ anchor: pk.anchor, known: pk.known, nearby: pk.nearby, typed: pk.typed, adjusted: pk.adjusted });
+  if (!pk.items.some((i) => i.key === pk.selKey)) pk.selKey = 'point'; // lo elegido ya no está en la lista (llegó una fuente que lo reemplazó)
   const top = $pickPanel.scrollTop;
-  const mode = pk.search ? 'search' : pk.anchor ? 'anchor' : 'idle';
+  // Con una búsqueda activa y un pin puesto hay dos pestañas: la búsqueda no se pierde al tocar el mapa o mover el pin.
+  const mode = pk.search && (pk.tab === 'results' || !pk.anchor) ? 'search' : pk.anchor ? 'anchor' : 'idle';
   $pickPanel.innerHTML = mode === 'search' ? searchHtml() : mode === 'anchor' ? anchorHtml() : idleHtml();
   if ($pickPanel.dataset.mode === mode) $pickPanel.scrollTop = top; // el redibujo no manda la lista de vuelta al inicio
   $pickPanel.dataset.mode = mode;
@@ -1365,6 +1424,7 @@ function selectPick(i) {
   if (!c) return;
   pk.selKey = c.key;
   pk.moveMode = false;
+  pk.tab = 'near'; // tocar un número del mapa muestra la fila elegida en "Cerca del pin"
   paintPick();
   drawPickMap();
   const ll = [c.lat, c.lng];
@@ -1372,10 +1432,27 @@ function selectPick(i) {
 }
 
 // Fija el ancla y arma la lista: lugares usados al instante (sin red) y sitios cercanos de OpenStreetMap cuando lleguen.
+// Caché de sitios cercanos por punto (10 min): volver a tocar casi el mismo lugar, o reabrir el diálogo, no repite las consultas ni gasta cupo.
+const anchorCache = new Map();
+const CACHE_MS = 10 * 60 * 1000;
+const anchorRadius = (a) => (a.source === 'gps' ? 80 : pk.radiusM);
+const anchorKey = (a) => `${a.lat.toFixed(4)},${a.lng.toFixed(4)}|${anchorRadius(a)}`;
+
+function rememberAnchor() {
+  const a = pk.anchor;
+  if (a && pk.osm === 'done') anchorCache.set(anchorKey(a), { at: Date.now(), osm: pk.osmList, fsq: pk.fsqList, fsqDone: pk.more === 'done' || pk.more === 'none' });
+}
+
+// Fija el ancla y arma la lista: lugares usados al instante (sin red) y los sitios cercanos a medida que llegan. OpenStreetMap (Overpass y
+// Photon) y Foursquare se piden a la vez y la lista se completa con lo que llegue primero; nada espera a que otra fuente termine.
 function setAnchor(at, { source, accuracy = null, name = '', radiusM = 60, approx = false } = {}) {
+  const radius = source === 'gps' ? 80 : radiusM;
+  const hit = anchorCache.get(`${at.lat.toFixed(4)},${at.lng.toFixed(4)}|${radius}`);
+  const cached = hit && Date.now() - hit.at < CACHE_MS ? hit : null;
   Object.assign(pk, {
     anchor: { lat: at.lat, lng: at.lng, source, accuracy, approx }, radiusM, typed: name, selKey: 'point', known: knownPlaces(ctx().expenses, at),
-    nearby: [], more: 'idle', osm: 'loading', note: '', search: null, touched: false, adjusted: new Map(), moveMode: false,
+    osmList: cached?.osm ?? [], fsqList: cached?.fsq ?? [], more: cached?.fsqDone ? 'done' : 'idle', osm: cached ? 'done' : 'loading',
+    note: '', tab: 'near', touched: false, adjusted: new Map(), moveMode: false,
   });
   pk.ctl?.abort();
   pk.ctl = new AbortController();
@@ -1383,21 +1460,25 @@ function setAnchor(at, { source, accuracy = null, name = '', radiusM = 60, appro
   pickMap?.getContainer().addEventListener('pointerdown', () => { pk.touched = true; }, { once: true });
   paintPick();
   drawPickMap();
-  // Con tu ubicación o un resultado, si OpenStreetMap trae poco (lo normal con edificios y negocios pequeños) se completa solo con
-  // Foursquare. Con un toque suelto queda el botón, para no gastar el cupo gratis en cada toque.
+  // Con tu ubicación o un resultado también se pide Foursquare solo (justo ahí suelen faltar edificios y negocios pequeños). Con un toque
+  // suelto queda el botón, para no gastar el cupo gratis en cada toque.
   const auto = source === 'gps' || source === 'result';
-  nearbyPlaces(at, { radiusM: source === 'gps' ? 80 : radiusM, limit: 8, signal: pk.ctl.signal }).then(({ results }) => {
+  if (cached) { if (auto && !cached.fsqDone) loadMorePick(); return; }
+  if (auto) loadMorePick();
+  nearbyPlaces(at, {
+    radiusM: radius, limit: 8, signal: pk.ctl.signal,
+    onPartial: ({ results }) => { if (seq !== pk.seq || pk.osm !== 'loading') return; pk.osmList = results; paintPick(); drawPickMap(); }, // Photon llegó antes
+  }).then(({ results }) => {
     if (seq !== pk.seq) return;
-    pk.nearby = mergeCandidates(pk.known, results);
+    pk.osmList = results;
     pk.osm = 'done';
     paintPick();
     drawPickMap();
-    if (auto && pk.nearby.length < 5) loadMorePick();
+    rememberAnchor();
   }).catch((err) => {
     if (err?.name === 'AbortError' || seq !== pk.seq) return;
     pk.osm = 'error';
     paintPick();
-    if (auto) loadMorePick();
   });
 }
 
@@ -1406,18 +1487,16 @@ async function loadMorePick() {
   const a = pk.anchor;
   if (!a || pk.more === 'loading') return;
   const seq = pk.seq;
-  const set = (state) => { if (seq === pk.seq) { pk.more = state; paintPick(); drawPickMap(); } };
+  const set = (state) => { if (seq === pk.seq) { pk.more = state; paintPick(); drawPickMap(); rememberAnchor(); } };
   set('loading');
   try {
     const radius = a.source === 'gps' ? 150 : Math.max(40, pk.radiusM * 1.5);
     const { configured, results } = await store.fetchMorePlaces({ lat: a.lat, lng: a.lng, radius });
     if (!configured) return set('off');
     if (seq !== pk.seq) return;
-    // Lo que ya está en OpenStreetMap (mismo nombre equivalente, hasta 150 m) no se repite: queda el de OpenStreetMap, con mejor posición.
-    const withKm = results.map((r) => ({ ...r, km: distanceKm(a, r) }));
-    const fresh = mergeCandidates([...pk.known, ...pk.nearby], preferOsm(withKm, pk.nearby).fsq.filter((r) => !r.merged));
-    pk.nearby = [...pk.nearby, ...fresh];
-    set(fresh.length ? 'done' : 'none');
+    const before = combineNearby({ known: pk.known, osm: pk.osmList, fsq: [] }).length;
+    pk.fsqList = results.map((r) => ({ ...r, km: distanceKm(a, r) }));
+    set(combineNearby({ known: pk.known, osm: pk.osmList, fsq: pk.fsqList }).length > before ? 'done' : 'none');
   } catch { set('error'); }
 }
 
@@ -1472,6 +1551,7 @@ async function openPicker() {
   Object.assign(pk, {
     target, anchor: null, known: [], nearby: [], items: [], selKey: 'point', typed: '', osm: 'done', more: 'idle', note: '',
     search: null, touched: false, locating: false, adjusted: new Map(), moveMode: false,
+    recent: target.lat == null ? recentPlaces(ctx().expenses, { date: target.date, limit: 5 }) : [],
   });
   pk.seq += 1;
   pk.sseq += 1;
@@ -1533,6 +1613,9 @@ async function searchFsq() {
   if (!s || s.fsqState === 'loading') return;
   if (!s.ref) { s.fsqState = 'noref'; paintPick(); return; }
   const seq = pk.sseq;
+  const key = `fsq|${searchKey(s.q, s.ref)}`;
+  const hit = searchCache.get(key);
+  if (hit && Date.now() - hit.at < CACHE_MS) { s.fsq = hit.results; s.fsqState = 'done'; paintPick(); return; }
   s.fsqState = 'loading';
   paintPick();
   try {
@@ -1540,6 +1623,7 @@ async function searchFsq() {
     if (seq !== pk.sseq) return;
     s.fsq = results;
     s.fsqState = configured ? 'done' : 'off';
+    if (configured) searchCache.set(key, { at: Date.now(), results });
   } catch {
     if (seq !== pk.sseq) return;
     s.fsqState = 'error';
@@ -1547,33 +1631,54 @@ async function searchFsq() {
   paintPick();
 }
 
+// Caché de búsquedas por nombre (10 min): repetir una búsqueda, o volver a la misma desde otro pin cercano, no vuelve a pedir nada.
+const searchCache = new Map();
+const searchKey = (q, ref) => `${q.toLowerCase()}|${ref ? `${ref.lat.toFixed(2)},${ref.lng.toFixed(2)}` : 'sin-ref'}`;
+
+// Mientras escribes solo se busca con 3 letras o más (menos peticiones); al enviar basta con 2.
 function runPickSearch(q, { auto = false } = {}) {
   const text = q.trim();
   pk.sctl?.abort();
-  if (text.length < 2) { pk.search = null; paintPick(); return; }
+  if (text.length < 2) { pk.search = null; pk.tab = 'near'; paintPick(); return; }
+  if (!auto && text.length < 3) return;
   const ref = pickSearchRef();
   const seq = (pk.sseq += 1);
   pk.sctl = new AbortController();
   const s = { q: text, ref, osm: [], fsq: [], state: 'loading', fsqState: 'idle' };
   pk.search = s;
-  paintPick();
-  searchPlaces(text, { ref, signal: pk.sctl.signal }).then(({ results }) => {
-    if (seq !== pk.sseq) return;
-    s.osm = results;
+  pk.tab = 'results';
+  pk.farOpen = false;
+  const hit = searchCache.get(searchKey(text, ref));
+  if (hit && Date.now() - hit.at < CACHE_MS) {
+    s.osm = hit.results;
     s.state = 'done';
-    paintPick();
-  }).catch((err) => {
-    if (err?.name === 'AbortError' || seq !== pk.sseq) return;
-    s.state = 'error';
-    paintPick();
-  });
+  } else {
+    searchPlaces(text, { ref, signal: pk.sctl.signal }).then(({ results }) => {
+      if (seq !== pk.sseq) return;
+      s.osm = results;
+      s.state = 'done';
+      searchCache.set(searchKey(text, ref), { at: Date.now(), results });
+      paintPick();
+    }).catch((err) => {
+      if (err?.name === 'AbortError' || seq !== pk.sseq) return;
+      s.state = 'error';
+      paintPick();
+    });
+  }
+  paintPick();
   if (auto) searchFsq(); // al enviar la búsqueda siempre se completa con Foursquare: OpenStreetMap suele traer sitios de otras ciudades
+}
+
+// Elegir un lugar reciente: el mapa va ahí y queda como "Este punto" con su nombre y sus coordenadas exactas (listo para confirmar).
+function pickRecent(r) {
+  if (!r) return;
+  if (pickMap) pickMap.setView([r.lat, r.lng], Math.max(pickMap.getZoom(), TAP_ZOOM), { animate: false });
+  setAnchor({ lat: r.lat, lng: r.lng }, { source: 'recent', name: r.name });
 }
 
 // Elegir un resultado: el mapa va ahí, ese punto pasa a ser el ancla y el nombre del resultado queda como nombre del lugar.
 function chooseResult(c) {
-  pk.search = null;
-  pk.sctl?.abort();
+  // La búsqueda se conserva (pestaña "Resultados"): si el lugar elegido no era el correcto, se vuelve a ella sin escribir de nuevo.
   const at = { lat: c.lat, lng: c.lng };
   if (pickMap) pickMap.setView([at.lat, at.lng], Math.max(pickMap.getZoom(), TAP_ZOOM), { animate: false });
   setAnchor(at, { source: 'result', name: c.name.slice(0, 120), approx: Boolean(c.approx) });
@@ -1586,7 +1691,7 @@ document.getElementById('pick-search').addEventListener('submit', (ev) => {
 });
 $pickQ.addEventListener('input', () => {
   clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => runPickSearch($pickQ.value), 450);
+  searchTimer = setTimeout(() => runPickSearch($pickQ.value), 400);
 });
 $pickHere.addEventListener('click', pickLocate);
 
@@ -1594,12 +1699,18 @@ $pickPanel.addEventListener('click', (ev) => {
   const t = ev.target;
   if (t.closest('[data-more]')) return loadMorePick();
   if (t.closest('[data-more-search]')) return searchFsq();
-  if (t.closest('[data-clear-search]')) { pk.search = null; pk.sctl?.abort(); $pickQ.value = ''; paintPick(); return; }
+  if (t.closest('[data-clear-search]')) { pk.search = null; pk.tab = 'near'; pk.sctl?.abort(); $pickQ.value = ''; paintPick(); return; }
+  const tab = t.closest('[data-tab]');
+  if (tab) { pk.tab = tab.dataset.tab; paintPick(); return; }
+  if (t.closest('[data-research]')) { runPickSearch(pk.search?.q ?? '', { auto: true }); return; }
   const s = t.closest('[data-s]');
   if (s) { const c = searchList().all[Number(s.dataset.s)]; if (c) chooseResult(c); return; }
+  const rc = t.closest('[data-r]');
+  if (rc) { pickRecent(pk.recent[Number(rc.dataset.r)]); return; }
   const r = t.closest('[data-i]');
   if (r) selectPick(Number(r.dataset.i));
 });
+$pickPanel.addEventListener('toggle', (ev) => { if (ev.target.classList?.contains('pk-far')) pk.farOpen = ev.target.open; }, true);
 $pickPanel.addEventListener('input', (ev) => {
   if (ev.target.id !== 'pick-name') return;
   pk.typed = ev.target.value;
@@ -1890,6 +2001,10 @@ $view.addEventListener('click', async (ev) => {
     t.classList.toggle('on', draft.approx);
     t.setAttribute('aria-checked', String(draft.approx));
   } else if (action === 'pick-map') openPicker();
+  else if (action === 'use-recent') {
+    const r = draft?.recentList?.[Number(t.dataset.i)];
+    if (r) { draft.lat = r.lat; draft.lng = r.lng; if (r.name) draft.place = r.name; paintLoc(); }
+  }
   else if (action === 'unlocate') { draft.lat = null; draft.lng = null; draft.place = ''; paintLoc(); }
   else if (action === 'bar') {
     const d = homeBars[Number(id ?? t.dataset.i)];
@@ -2131,7 +2246,7 @@ $view.addEventListener('change', (ev) => {
     ev.target.value = ''; // permite elegir otra vez el mismo archivo
     restoreFromFile(file);
   } else if (id === 'date') {
-    if (ev.target.value) { draft.date = ev.target.value; loadRate(); renderChart(); }
+    if (ev.target.value) { draft.date = ev.target.value; loadRate(); renderChart(); if (draft.lat == null) paintLoc(); } // los lugares de ese día pasan al principio
   } else if (id === 'f-method') { filters.method = ev.target.value; render(); }
   else if (id === 'f-person') { filters.person = ev.target.value; render(); }
   else if (id === 'f-payer') { filters.payer = ev.target.value; render(); }

@@ -12,13 +12,14 @@ const SAME_PLACE_KM = 0.04; // gastos a menos de 40 m cuentan como el mismo luga
 const DUP_KM = 0.06; // un sitio cercano a menos de 60 m de un lugar usado con el mismo nombre es el mismo
 const NOT_PLACES = ['highway', 'boundary', 'place', 'waterway']; // calles, límites, barrios y ríos no son "dónde compraste"
 const OVERPASS_URL = 'https://overpass-api.de/api/interpreter';
-const OVERPASS_TIMEOUT_MS = 6000;
+const OVERPASS_TIMEOUT_MS = 4000;
 
 const norm = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase();
 
-// Lugares ya usados cerca de `ref`, del más cercano al más lejano. Agrupa por distancia (no por redondeo) y devuelve las
-// coordenadas exactas del gasto más reciente del grupo, para que elegir un lugar repita el punto tal cual.
-export function knownPlaces(expenses, ref, { maxKm = 0.1 } = {}) {
+// Agrupa los gastos con ubicación por lugar. Se agrupa por distancia (no por redondeo): un gasto a menos de 40 m de otro es el mismo lugar.
+// Cada grupo trae las coordenadas exactas del gasto más reciente (así elegirlo repite el punto tal cual), su nombre más usado, cuántos
+// gastos tiene, sus fechas y la del último.
+function groupPlaces(expenses) {
   const groups = [];
   const recentFirst = [...expenses].filter(hasLocation).sort((a, b) =>
     String(b.date).localeCompare(String(a.date)) || String(b.created_at ?? '').localeCompare(String(a.created_at ?? '')));
@@ -26,17 +27,34 @@ export function knownPlaces(expenses, ref, { maxKm = 0.1 } = {}) {
     const at = { lat: Number(e.lat), lng: Number(e.lng) };
     const g = groups.find((x) => distanceKm(x, at) <= SAME_PLACE_KM);
     const name = String(e.place ?? '').trim();
-    if (g) { g.count += 1; if (name) g.names.set(name, (g.names.get(name) ?? 0) + 1); } else {
-      groups.push({ lat: at.lat, lng: at.lng, count: 1, names: new Map(name ? [[name, 1]] : []) });
+    if (g) {
+      g.count += 1;
+      g.dates.add(e.date);
+      if (name) g.names.set(name, (g.names.get(name) ?? 0) + 1);
+    } else {
+      groups.push({ lat: at.lat, lng: at.lng, count: 1, names: new Map(name ? [[name, 1]] : []), dates: new Set([e.date]), last: String(e.date), lastAt: String(e.created_at ?? '') });
     }
   }
-  return groups
-    .map((g) => ({
-      name: [...g.names].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '',
-      lat: g.lat, lng: g.lng, count: g.count, km: distanceKm(ref, g),
-    }))
+  return groups;
+}
+
+const topName = (g) => [...g.names].sort((a, b) => b[1] - a[1])[0]?.[0] ?? '';
+
+// Lugares ya usados cerca de `ref`, del más cercano al más lejano.
+export function knownPlaces(expenses, ref, { maxKm = 0.1 } = {}) {
+  return groupPlaces(expenses)
+    .map((g) => ({ name: topName(g), lat: g.lat, lng: g.lng, count: g.count, km: distanceKm(ref, g) }))
     .filter((p) => p.km <= maxKm)
     .sort((a, b) => a.km - b.km);
+}
+
+// Lugares usados hace poco, para volver a elegirlos de un toque (varios gastos en el mismo sitio con distinto medio de pago). Primero los
+// que ya tienen un gasto del mismo día (`date`), luego el resto del más reciente al más antiguo.
+export function recentPlaces(expenses, { date = '', limit = 5 } = {}) {
+  return groupPlaces(expenses)
+    .map((g) => ({ name: topName(g), lat: g.lat, lng: g.lng, count: g.count, last: g.last, lastAt: g.lastAt, today: Boolean(date) && g.dates.has(date) }))
+    .sort((a, b) => Number(b.today) - Number(a.today) || b.last.localeCompare(a.last) || b.lastAt.localeCompare(a.lastAt))
+    .slice(0, limit);
 }
 
 // Tipo de sitio de OpenStreetMap (shop/amenity/...) -> [icono, nombre en español]. Lo que no está aquí se muestra sin tipo.
@@ -121,23 +139,48 @@ const dedupe = (list) => {
 
 const byDistance = (found, ref) => dedupe(found.map((r) => ({ ...r, km: distanceKm(ref, r) })).sort((a, b) => a.km - b.km));
 
-// Sitios con nombre cerca de `ref`. Devuelve { results, source }. Lanza si ninguna fuente responde (o si se cancela).
-export async function nearbyPlaces(ref, { radiusM = 80, limit = 10, fetchFn = fetch, signal } = {}) {
+// Sitios con nombre de OpenStreetMap, Overpass: lo más preciso (trae el contorno del edificio) pero el servicio público a veces tarda
+// mucho o se cae. Devuelve null si falla (y recuerda que está caído un rato para no esperar su tope en cada búsqueda).
+let overpassDownUntil = 0;
+const OVERPASS_COOLDOWN_MS = 5 * 60 * 1000;
+export function _resetOverpass() { overpassDownUntil = 0; }
+
+async function overpassNearby(ref, { radiusM, fetchFn, signal }) {
+  if (Date.now() < overpassDownUntil) return null;
   const t = withTimeout(signal, OVERPASS_TIMEOUT_MS);
   try {
     // Sin calles, límites ni barrios (también tienen nombre y llenarían la lista). Se piden bastantes y se ordenan por distancia aquí,
     // porque Overpass no los devuelve del más cercano al más lejano y un tope bajo dejaría fuera justo el edificio que buscas.
-    const query = `[out:json][timeout:5];nwr(around:${radiusM},${ref.lat},${ref.lng})["name"]${NOT_PLACES.map((k) => `[!"${k}"]`).join('')};out geom 80;`;
-    const found = parseOverpass(await get(fetchFn, `${OVERPASS_URL}?${new URLSearchParams({ data: query })}`, { signal: t.signal }));
-    if (found.length) return { results: byDistance(found, ref).slice(0, limit), source: 'overpass' };
+    const query = `[out:json][timeout:4];nwr(around:${radiusM},${ref.lat},${ref.lng})["name"]${NOT_PLACES.map((k) => `[!"${k}"]`).join('')};out geom 80;`;
+    return parseOverpass(await get(fetchFn, `${OVERPASS_URL}?${new URLSearchParams({ data: query })}`, { signal: t.signal }));
   } catch (err) {
-    if (signal?.aborted) throw err;
+    if (signal?.aborted) throw err; // lo canceló el usuario: no es una caída
+    overpassDownUntil = Date.now() + OVERPASS_COOLDOWN_MS;
+    return null;
   } finally {
     t.done();
   }
+}
+
+// Photon (OpenStreetMap): más rápido (~1 s) y más simple, con menos detalle de edificios.
+async function photonNearby(ref, { limit, fetchFn, signal }) {
   const params = new URLSearchParams({ lat: String(ref.lat), lon: String(ref.lng), limit: String(limit), lang: 'default' });
-  const found = parsePhoton(await get(fetchFn, `https://photon.komoot.io/reverse?${params}`, { signal })).filter((r) => !NOT_PLACES.includes(r.key));
-  return { results: byDistance(found, ref).slice(0, limit), source: 'photon' };
+  return parsePhoton(await get(fetchFn, `https://photon.komoot.io/reverse?${params}`, { signal })).filter((r) => !NOT_PLACES.includes(r.key));
+}
+
+// Sitios con nombre cerca de `ref`. Overpass y Photon se piden a la vez: no se espera el tope de Overpass para probar el respaldo. Si Photon
+// llega antes, `onPartial({ results, source })` deja mostrar algo enseguida; la respuesta final usa Overpass si trajo algo y, si no, Photon.
+// Lanza si ninguna fuente responde (o si se cancela).
+export async function nearbyPlaces(ref, { radiusM = 80, limit = 10, fetchFn = fetch, signal, onPartial } = {}) {
+  const overpass = overpassNearby(ref, { radiusM, fetchFn, signal });
+  const photon = photonNearby(ref, { limit, fetchFn, signal });
+  const photonResult = photon.then((r) => r, () => null); // no deja un rechazo sin atender si Overpass alcanza
+  let overpassDone = false;
+  const op = overpass.then((r) => { overpassDone = true; return r; });
+  photonResult.then((r) => { if (r?.length && !overpassDone && !signal?.aborted) onPartial?.({ results: byDistance(r, ref).slice(0, limit), source: 'photon' }); });
+  const found = await op;
+  if (found?.length) return { results: byDistance(found, ref).slice(0, limit), source: 'overpass' };
+  return { results: byDistance(await photon, ref).slice(0, limit), source: 'photon' };
 }
 
 // Quita de los sitios cercanos los que ya salen como lugares usados (mismo nombre y casi el mismo punto).

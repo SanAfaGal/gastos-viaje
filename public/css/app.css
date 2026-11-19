@@ -508,7 +508,7 @@ main:focus-visible { outline: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
 
 /* Corregir la posición del pin: botón del mapa, modo mover y aviso de posición aproximada. */
-.map.leaflet-container .adjust-ctl.leaflet-bar a { width: auto; min-width: 44px; height: 40px; line-height: 40px; padding: 0 14px; font-size: .85rem; font-weight: 700; white-space: nowrap; text-decoration: none; border-bottom: 0; } /* gana a la regla táctil de Leaflet (30 px fijos) */
+.map.leaflet-container .fit-ctl.leaflet-bar a, .map.leaflet-container .adjust-ctl.leaflet-bar a { width: auto; min-width: 44px; height: 40px; line-height: 40px; padding: 0 14px; font-size: .85rem; font-weight: 700; white-space: nowrap; text-decoration: none; border-bottom: 0; } /* gana a la regla táctil de Leaflet (30 px fijos) */
 .map .adjust-ctl[hidden] { display: none; }
 .map .adjust-ctl.on { border: 2px solid var(--brand); }
 .map .adjust-ctl.on a { background: var(--brand); color: var(--brand-ink); }
@@ -516,3 +516,23 @@ main:focus-visible { outline: none; }
 .map.moving { cursor: crosshair; }
 .pk-hint { margin: 2px 0 10px; padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--accent) 20%, var(--surface)); border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--surface)); color: var(--text); font-size: .85rem; line-height: 1.35; }
 .pk-hint.move { background: color-mix(in srgb, var(--brand) 12%, var(--surface)); border-color: var(--brand); }
+
+/* Atajos de lugares recientes en la fila Ubicación del formulario, y lista de recientes del diálogo. */
+.loc-recent { display: grid; gap: 6px; }
+.loc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.loc-chip { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-height: 40px; padding: 8px 14px; border-color: var(--control-border); }
+.loc-chip-t { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.loc-chip-s { flex: none; padding: 1px 7px; border-radius: 99px; background: color-mix(in srgb, var(--brand) 16%, var(--surface)); color: var(--brand); font-size: .72rem; font-weight: 700; }
+.pk-tip { margin: 12px 0 0; }
+
+/* Pestañas "Cerca del pin" / "Resultados" y bloque "Más lejos" de la búsqueda. */
+.pk-tabs { display: flex; align-items: center; gap: 6px; margin: 0 0 10px; }
+.pk-tab { min-height: 40px; padding: 0 14px; border: 1.5px solid color-mix(in srgb, var(--control-border) 45%, var(--surface)); border-radius: 99px; background: var(--surface); color: var(--text); font: inherit; font-size: .88rem; font-weight: 600; cursor: pointer; }
+.pk-tab.on { border-color: var(--brand); background: var(--brand); color: var(--brand-ink); }
+.pk-tabs .linkbtn { margin-left: auto; min-width: 40px; min-height: 40px; padding: 0; color: var(--muted); font-size: 1rem; }
+.pk-far { margin-top: 12px; }
+.pk-far summary { min-height: 40px; display: flex; align-items: center; color: var(--muted); font-size: .85rem; font-weight: 600; cursor: pointer; }
+.pk-far .sug-list { margin-top: 6px; }
+/* Un nombre largo en un atajo no debe ensanchar la pantalla: los hijos de la tarjeta pueden encogerse. */
+.loc-box > * { min-width: 0; }
+.loc-recent, .loc-chips { min-width: 0; max-width: 100%; }

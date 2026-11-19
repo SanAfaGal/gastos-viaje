@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildList, confirmPlace, dedupeByName, normalizeName, preferOsm, rankSearch, selectionSummary, tapRadiusM } from '../public/js/picker.mjs';
+import { buildList, combineNearby, confirmPlace, dedupeByName, normalizeName, preferOsm, rankSearch, selectionSummary, tapRadiusM } from '../public/js/picker.mjs';
 
 const REF = { lat: -8.05, lng: -34.9 };
 const at = (m, extra = {}) => ({ lat: REF.lat + m * 0.000009, lng: REF.lng, ...extra });
@@ -119,4 +119,28 @@ test('pie: avisa si la posición es aproximada o fue ajustada', () => {
   assert.match(selectionSummary({ kind: 'near', name: 'Bar', detail: 'Edificio', lat: 1, lng: 2, approx: true }).sub, /posición aproximada$/);
   assert.match(selectionSummary({ kind: 'near', name: 'Bar', detail: 'Edificio', lat: 1, lng: 2, adjusted: true }).sub, /posición ajustada$/);
   assert.match(selectionSummary({ kind: 'point', name: '', lat: 1, lng: 2, source: 'tap', adjusted: true }).sub, /posición ajustada$/);
+});
+
+test('sitios cercanos de dos fuentes: sin repetidos, sin los ya usados, con la posición de OSM y ordenados por cercanía', () => {
+  const known = [{ name: 'Casa', ...at(5), km: 0.005 }];
+  const osm = [{ name: 'Edifício Athenas', ...at(0), km: 0.04 }, { name: 'Casa', ...at(6), km: 0.006 }, { name: 'Farmácia', ...at(5), km: 0.005 }];
+  const fsq = [
+    { name: 'Edf. Athenas', ...at(40), km: 0.04, approx: true }, // mismo edificio que el de OSM
+    { name: 'Padaria Sol', ...at(30), km: 0.03, approx: true },
+    { name: 'Casa', ...at(5), km: 0.005, approx: true }, // ya es un lugar usado
+  ];
+  const list = combineNearby({ known, osm, fsq });
+  assert.deepEqual(list.map((x) => x.name), ['Farmácia', 'Padaria Sol', 'Edifício Athenas']);
+  assert.equal(list.find((x) => x.name === 'Padaria Sol').approx, true);
+  assert.deepEqual(combineNearby({ known, osm: [], fsq: [] }), []);
+  // llega primero Foursquare y después OSM: el resultado es el mismo
+  assert.deepEqual(combineNearby({ known, osm: [], fsq }).map((x) => x.name), ['Padaria Sol', 'Edf. Athenas']);
+});
+
+test('llave de un sitio cercano: no cambia aunque otra fuente afine sus coordenadas', () => {
+  const anchor = { ...at(0), source: 'gps' };
+  const a = buildList({ anchor, nearby: [{ name: 'Bar', ...at(20), km: 0.02 }, { name: 'Bar', ...at(90), km: 0.09 }] });
+  const b = buildList({ anchor, nearby: [{ name: 'Bar', ...at(23), km: 0.023 }, { name: 'Bar', ...at(88), km: 0.088 }] });
+  assert.deepEqual(a.map((x) => x.key), b.map((x) => x.key));
+  assert.equal(new Set(a.map((x) => x.key)).size, 3); // dos "Bar" distintos: llaves distintas
 });

@@ -6,6 +6,7 @@
 
 import { distanceKm } from './geosearch.mjs';
 import { formatCoords } from './places.mjs';
+import { mergeCandidates } from './nearby.mjs';
 
 export const PICK_MIN_ZOOM = 15; // con menos zoom un toque no distingue una tienda de otra
 export const TAP_ZOOM = 17; // a donde se acerca el mapa si tocas estando muy alejado
@@ -58,6 +59,14 @@ export function preferOsm(fsqList, osmList, { maxM = 150 } = {}) {
   return { fsq, osm: osmList.filter((_, i) => !used.has(i)) };
 }
 
+// Los sitios cercanos llegan de dos fuentes y en momentos distintos (OpenStreetMap y Foursquare). Cada vez que llega una se recalcula la lista
+// completa: sin los ya usados, sin repetidos (el mismo lugar en las dos fuentes sale con la posición de OpenStreetMap) y del más cercano al más lejano.
+export function combineNearby({ known = [], osm = [], fsq = [] }) {
+  const o = mergeCandidates(known, osm);
+  const f = mergeCandidates([...known, ...o], preferOsm(fsq, o).fsq.filter((r) => !r.merged));
+  return [...o, ...f].sort((a, b) => (a.km ?? 1e9) - (b.km ?? 1e9));
+}
+
 // Resultados de una búsqueda por nombre: lo cercano a `ref` (hasta farKm) primero, con su distancia. Lo lejano se limita a maxFar
 // y va aparte, porque el buscador mezcla sitios de otras ciudades. Si no hay nada cerca, lo lejano es lo único que hay y se muestra.
 export function rankSearch(results, ref, { farKm = 100, maxFar = 3 } = {}) {
@@ -78,8 +87,9 @@ export function buildList({ anchor, known = [], nearby = [], typed = '', adjuste
     });
   }
   let n = 0;
+  const seen = new Map();
   for (const c of known) { n += 1; items.push({ ...c, key: `known:${c.lat.toFixed(6)},${c.lng.toFixed(6)}`, kind: 'known', n }); }
-  for (const c of nearby) { n += 1; items.push({ ...c, key: `near:${c.lat.toFixed(6)},${c.lng.toFixed(6)}:${c.name}`, kind: 'near', n }); }
+  for (const c of nearby) { n += 1; const nth = (seen.get(c.name) ?? 0) + 1; seen.set(c.name, nth); items.push({ ...c, key: `near:${c.name}#${nth}`, kind: 'near', n }); }
   // Posición corregida por el usuario (arrastró el pin o tocó "Ajustar"): la llave sigue siendo la original, solo cambian las coordenadas.
   return items.map((it) => {
     const adj = adjusted.get(it.key);
@@ -91,7 +101,7 @@ export function buildList({ anchor, known = [], nearby = [], typed = '', adjuste
 export function selectionSummary(sel) {
   if (!sel) return { title: 'Nada elegido', sub: 'Toca el mapa, busca un nombre o usa Mi ubicación.' };
   if (sel.kind === 'point') {
-    const where = sel.source === 'gps' ? 'Tu ubicación' : sel.source === 'saved' ? 'Ubicación guardada' : 'Punto del mapa';
+    const where = sel.source === 'gps' ? 'Tu ubicación' : sel.source === 'saved' ? 'Ubicación guardada' : sel.source === 'recent' ? 'Lugar reciente' : 'Punto del mapa';
     return {
       title: sel.name.trim() || where,
       sub: `${sel.name.trim() ? `${where} · ` : ''}${formatCoords(sel.lat, sel.lng)}${sel.accuracy ? ` · ±${Math.max(5, Math.round(sel.accuracy))} m` : ''}${sel.adjusted ? ' · posición ajustada' : ''}`,
