@@ -268,6 +268,14 @@ dialog.info .chart { margin-top: 12px; }
 .sel-opt:disabled { opacity: .45; cursor: default; }
 .sel-opt-t { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .sel-opt .sel-ck { margin: 0; color: var(--brand); }
+/* Selección múltiple: casilla a la izquierda y títulos de grupo (por ejemplo, el dueño de cada medio de pago) */
+.sel-box { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border: 1.5px solid var(--control-border); border-radius: 6px; background: var(--surface); }
+.sel-opt.on .sel-box { border-color: var(--brand); background: var(--brand); }
+.sel-opt.on .sel-box .sel-ck { width: 15px; height: 15px; color: var(--brand-ink); }
+.sel-group { padding: 12px 6px 4px; font-size: .78rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted); }
+.sel-group:first-child { padding-top: 2px; }
+.sel-foot[hidden] { display: none; }
+.sel-foot .btn.secondary { flex: none; }
 /* Día: Hoy / Ayer / otro día. */
 .date-chips { margin-bottom: 12px; }
 .date-chips .chip { min-height: 38px; display: inline-flex; align-items: center; gap: 4px; }
