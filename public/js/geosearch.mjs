@@ -28,13 +28,109 @@ const valid = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng) && Math
 
 const num = (s) => (s == null ? NaN : Number(String(s).replace(',', '.')));
 
-// Coordenadas pegadas en el buscador: "6.1732244, -75.62967" o un enlace largo de Google Maps. Devuelve { lat, lng, name? } o null.
+// --- Plus Codes (Open Location Code): "8FVC9G8F+6W", o corto "9G8F+6W Medellín" (necesita un punto de referencia cercano) ---
+const OLC = '23456789CFGHJMPQRVWX';
+const OLC_RE = /^([23456789CFGHJMPQRVWX]{4,8})\+([23456789CFGHJMPQRVWX]{2,})(?=$|[\s,])/i;
+
+// Código completo (8 caracteres antes del +) -> centro del recuadro que describe. Los códigos con más dígitos son más precisos.
+function decodeFull(code) {
+  const digits = code.replace('+', '').toUpperCase();
+  let lat = -90;
+  let lng = -180;
+  let size = 20;
+  const pairs = Math.min(digits.length, 10);
+  for (let i = 0; i < pairs; i += 2) {
+    lat += OLC.indexOf(digits[i]) * size;
+    lng += OLC.indexOf(digits[i + 1]) * size;
+    if (i + 2 < pairs) size /= 20;
+  }
+  let latSize = size;
+  let lngSize = size;
+  for (let i = 10; i < digits.length; i += 1) { // dígitos de cuadrícula: el recuadro se parte en 5 filas x 4 columnas
+    const d = OLC.indexOf(digits[i]);
+    latSize /= 5;
+    lngSize /= 4;
+    lat += Math.floor(d / 4) * latSize;
+    lng += (d % 4) * lngSize;
+  }
+  return { lat: lat + latSize / 2, lng: lng + lngSize / 2 };
+}
+
+// Primeros `n` caracteres (pares lat/lng) del código del punto de referencia.
+function encodePrefix(lat, lng, n) {
+  let l = Math.min(Math.max(lat, -90), 90 - 1e-9) + 90;
+  let g = lng + 180;
+  let size = 20;
+  let out = '';
+  for (let i = 0; i < n / 2; i += 1) {
+    const a = Math.floor(l / size);
+    const b = Math.floor(g / size);
+    out += OLC[a] + OLC[b];
+    l -= a * size;
+    g -= b * size;
+    size /= 20;
+  }
+  return out;
+}
+
+// Plus Code -> { lat, lng } o null. Un código corto ("9G8F+6W") se completa con el punto de referencia: el lugar más cercano a él.
+export function parsePlusCode(text, { ref } = {}) {
+  const m = String(text ?? '').trim().match(OLC_RE);
+  if (!m) return null;
+  const head = m[1];
+  if (head.length % 2 !== 0) return null;
+  const code = `${head}+${m[2]}`;
+  if (head.length === 8) {
+    const p = decodeFull(code);
+    return valid(p.lat, p.lng) ? p : null;
+  }
+  if (!ref || !valid(ref.lat, ref.lng)) return null;
+  const padding = 8 - head.length;
+  const full = decodeFull(`${encodePrefix(ref.lat, ref.lng, padding)}${code}`);
+  const resolution = 20 ** (2 - padding / 2);
+  const half = resolution / 2;
+  let { lat, lng } = full;
+  if (ref.lat + half < lat && lat - resolution >= -90) lat -= resolution;
+  else if (ref.lat - half > lat && lat + resolution <= 90) lat += resolution;
+  if (ref.lng + half < lng) lng -= resolution;
+  else if (ref.lng - half > lng) lng += resolution;
+  return valid(lat, lng) ? { lat, lng } : null;
+}
+
+// Plus Code corto con la ciudad escrita después ("59FC+73 Itagüí, Antioquia, Colombia") -> { code, place }, o null si no es un código corto
+// con ciudad. Un código corto solo dice dónde está dentro de su zona (unos 50 km), así que hace falta ubicar esa ciudad primero y
+// completar el código con ella: usar el mapa o el último gasto, que pueden estar en otro país, lo mandaría a cualquier parte.
+export function shortPlusCodeWithPlace(text) {
+  const t = String(text ?? '').trim();
+  const m = t.match(OLC_RE);
+  if (!m || m[1].length >= 8 || m[1].length % 2) return null;
+  const place = t.slice(m[0].length).replace(/^[\s,]+/, '').trim();
+  return place ? { code: `${m[1]}+${m[2]}`.toUpperCase(), place } : null;
+}
+
+// Plus Code corto sin ciudad ("59FC+73"): solo dice dónde está dentro de su zona, así que sin la ciudad no se puede completar con seguridad.
+export const isBareShortPlusCode = (text) => {
+  const m = String(text ?? '').trim().match(OLC_RE);
+  return Boolean(m) && m[1].length < 8 && m[1].length % 2 === 0 && String(text).trim().length === m[0].length;
+};
+
+// Dirección de Google Maps centrada en un punto (sin pin): ahí se busca el lugar y se copia el enlace, las coordenadas o el Plus Code.
+// Sin punto, abre Google Maps a secas.
+export const googleMapsUrl = (at, zoom = 17) => (valid(at?.lat, at?.lng) ? `https://www.google.com/maps/@${at.lat.toFixed(6)},${at.lng.toFixed(6)},${zoom}z` : 'https://www.google.com/maps');
+
+// ¿Es un enlace corto de Google Maps (que solo el servidor puede abrir)? No trae coordenadas hasta seguir su redirección.
+export const isShortMapLink = (text) => /^https:\/\/(?:maps\.app\.goo\.gl\/|goo\.gl\/maps\/|g\.co\/kgs\/)\S+$/i.test(String(text ?? '').trim());
+
+// Coordenadas pegadas en el buscador: "6.1732244, -75.62967", un enlace largo de Google Maps o un Plus Code. Devuelve { lat, lng, name? } o null.
 // Google sabe lugares (y números de puerta) que OpenStreetMap no tiene: se abre el lugar allí, se copian las coordenadas y se pegan aquí.
-// Los enlaces cortos (maps.app.goo.gl) no sirven: no traen coordenadas hasta que el navegador los abre.
-export function parseCoordinates(text) {
+// Los enlaces cortos (maps.app.goo.gl) no se resuelven aquí: no traen coordenadas hasta seguir su redirección (ver isShortMapLink y /api/resolve-place).
+// `ref` ({ lat, lng }) solo hace falta para un Plus Code corto.
+export function parseCoordinates(text, { ref } = {}) {
   const t = String(text ?? '').trim();
   if (!t) return null;
   const done = (lat, lng, name) => (valid(lat, lng) ? { lat, lng, ...(name ? { name } : {}) } : null);
+  const plus = parsePlusCode(t, { ref });
+  if (plus) return plus;
   if (/^https?:\/\//i.test(t)) {
     let decoded = t;
     try { decoded = decodeURIComponent(t); } catch { /* queda el texto crudo */ }
@@ -61,6 +157,31 @@ export function parseCoordinates(text) {
   // Un par de números, los dos con decimales: así "65 36" o "36-61" (números de una dirección) no se toman por coordenadas.
   const m = t.match(/^(-?\d{1,2}\.\d+)\s*°?\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*°?$/);
   return m ? done(num(m[1]), num(m[2])) : null;
+}
+
+// Nombre para un punto sin nombre, a partir de lo que Photon sabe de ese sitio: la dirección ("Carrera 65 36-61"), que es lo que identifica
+// un punto; si no hay calle, el barrio o la ciudad; y solo si no hay nada más, el nombre del sitio más cercano (puede ser un negocio vecino,
+// así que va de último). Devuelve null si Photon no sabe nada de ese punto.
+export function addressName(json) {
+  for (const f of json?.features ?? []) {
+    const p = f?.properties ?? {};
+    const street = p.street ? [p.street, p.housenumber].filter(Boolean).join(' ') : ''; // un número sin calle no dice nada
+    const where = p.district ?? p.locality ?? p.city ?? p.county;
+    const name = street || (p.name && !p.housenumber ? p.name : '') || where;
+    if (name) return String(street && p.city && !p.housenumber ? `${street}, ${p.city}` : name).slice(0, 120);
+  }
+  return null;
+}
+
+// Pide a Photon (gratis, sin clave) cómo se llama el sitio de un punto. Devuelve el nombre o null (sin red, sin datos).
+export async function reverseAddress(ref, { fetchFn = fetch, signal } = {}) {
+  try {
+    const params = new URLSearchParams({ lat: String(ref.lat), lon: String(ref.lng), limit: '1', lang: 'default' });
+    return addressName(await get(fetchFn, `https://photon.komoot.io/reverse?${params}`, signal));
+  } catch (err) {
+    if (err?.name === 'AbortError') throw err;
+    return null;
+  }
 }
 
 export function parsePhoton(json) {

@@ -6,7 +6,7 @@ import { currencyByCode } from '../public/js/currencies.mjs';
 import { NETWORKS, isHexColor } from '../public/js/cards.mjs';
 import { rateHistory, refreshRates, resolveRate } from './rates.mjs';
 import { dumpBackup, restoreBackup } from './backup.mjs';
-import { PlacesError, searchFoursquare } from './places.mjs';
+import { MapLinkError, resolveMapLink } from './maplink.mjs';
 
 class HttpError extends Error {
   constructor(status, message) {
@@ -574,24 +574,15 @@ async function getState(db) {
   };
 }
 
-// ---------- lugares cercanos (Foursquare) ----------
+// ---------- lugares (enlaces de Google Maps) ----------
 
-async function foursquarePlaces(query) {
-  const key = process.env.FOURSQUARE_API_KEY?.trim();
-  if (!key) return { configured: false, results: [] };
-  const lat = Number(query.get('lat'));
-  const lng = Number(query.get('lng'));
-  if (query.get('lat') == null || query.get('lng') == null || !Number.isFinite(lat) || !Number.isFinite(lng)
-    || Math.abs(lat) > 90 || Math.abs(lng) > 180) fail(400, 'La ubicación no es válida');
-  const q = String(query.get('q') ?? '').trim().slice(0, 80);
-  // Sin texto el radio es corto (es "lo que hay aquí"); con texto puede ser mayor porque el nombre ya filtra.
-  const [min, max] = q ? [200, 20000] : [20, 500];
-  const radius = Math.min(max, Math.max(min, Math.round(Number(query.get('radius')) || (q ? 5000 : 120))));
+// Enlace corto de Google Maps -> coordenadas (el servidor sigue la redirección). Ver maplink.mjs.
+async function resolvePlaceLink(query) {
   try {
-    return { configured: true, results: await searchFoursquare({ lat, lng, radius, query: q, key }) };
+    return await resolveMapLink(query.get('url'));
   } catch (err) {
-    if (err instanceof PlacesError) fail(err.status, err.message);
-    fail(502, 'Foursquare no respondió');
+    if (err instanceof MapLinkError) fail(err.status, err.message);
+    throw err;
   }
 }
 
@@ -639,8 +630,7 @@ export async function handle({ method, path, query = new URLSearchParams(), body
 
     if (resource === 'order' && method === 'POST') return ok(await saveOrder(db, body));
 
-    // Lugares de Foursquare cerca de un punto (segunda fuente, tras OpenStreetMap). La clave vive solo en el servidor.
-    if (resource === 'places' && method === 'GET') return ok(await foursquarePlaces(query));
+    if (resource === 'resolve-place' && method === 'GET') return ok(await resolvePlaceLink(query));
 
     // Respaldo: copia cruda de todas las tablas. Restaurar solo agrega lo que falta (con ?dry=1 solo cuenta).
     if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db));

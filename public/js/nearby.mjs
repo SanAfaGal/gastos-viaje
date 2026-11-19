@@ -58,6 +58,18 @@ export function recentPlaces(expenses, { date = '', limit = 5 } = {}) {
     .slice(0, limit);
 }
 
+// Todos los lugares con ubicación de los gastos (los de un viaje), para volver a elegir uno ya visitado sin ir a Google Maps. Gastos a pocos metros
+// son el mismo lugar. Con `query` se filtra por el nombre (sin acentos ni mayúsculas) y los que empiezan por lo escrito van primero; el resto,
+// del más reciente al más antiguo.
+export function visitedPlaces(expenses, { query = '' } = {}) {
+  const q = norm(query).trim();
+  return groupPlaces(expenses)
+    .map((g) => ({ name: topName(g), lat: g.lat, lng: g.lng, count: g.count, last: g.last, lastAt: g.lastAt }))
+    .filter((p) => !q || norm(p.name).includes(q))
+    .sort((a, b) => (q ? Number(norm(b.name).startsWith(q)) - Number(norm(a.name).startsWith(q)) : 0)
+      || b.last.localeCompare(a.last) || b.lastAt.localeCompare(a.lastAt) || a.name.localeCompare(b.name));
+}
+
 // Tipo de sitio de OpenStreetMap (shop/amenity/...) -> [nombre del icono (ver icons.mjs), nombre en español]. Lo que no está aquí se muestra sin tipo.
 const KINDS = {
   supermarket: ['cart', 'Supermercado'], convenience: ['bag', 'Tienda'], mall: ['bag', 'Centro comercial'], department_store: ['bag', 'Almacén'],

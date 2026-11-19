@@ -56,7 +56,6 @@ Netlify no guarda archivos, por eso en línea la base es Turso (SQLite en la nub
    - `TURSO_DATABASE_URL`
    - `TURSO_AUTH_TOKEN`
    - `APP_PASSCODE`: código de acceso. La URL de Netlify es pública, así que ponlo siempre.
-   - `FOURSQUARE_API_KEY` (opcional): activa “Buscar más lugares”. Sin ella la app funciona igual solo con OpenStreetMap. Ponla junto con `APP_PASSCODE`: cada consulta gasta cupo de tu cuenta de Foursquare.
 4. Abrir la URL en el celular y “Agregar a pantalla de inicio”.
 
 Para llevar los datos que ya tengas en local a Turso: `turso db create gastos-viaje --from-file data/gastos.db`.
@@ -76,7 +75,15 @@ Todos los montos se guardan como enteros en centésimas. Las tasas vienen de fue
 
 ### Lugar del gasto
 
-En el formulario, “Elegir lugar en el mapa” abre un solo diálogo: arriba el buscador y el botón **Mi ubicación**, en medio el mapa y debajo la lista. Todo fija un punto (tu GPS, un toque en el mapa o un resultado de búsqueda); alrededor de ese punto la lista ofrece **Este punto** (el punto exacto, con campo de nombre), los **lugares que ya usaste** (se copian tal cual, así el mismo sitio queda con las mismas coordenadas) y los **sitios cercanos**. Se elige una fila y se confirma con “Usar este lugar”. Las posiciones de Foursquare son aproximadas (un punto por dirección, que suele caer en la calle): si el lugar está en OpenStreetMap con su edificio dibujado se usa esa posición, y si el pin no coincide se puede **arrastrar** o usar “📌 Ajustar pin”. La posición corregida se guarda con el gasto y vuelve a salir en “Lugares que ya usaste”.
+En el formulario, “Elegir lugar” abre un solo diálogo con dos botones en una fila: **1)** “Abrir Google Maps” abre Google Maps (en otra pestaña o en la app de Mapas) centrado donde estás mirando; ahí buscas el lugar y copias el enlace, las coordenadas o el Plus Code; **2)** vuelves y tocas “Pegar”, que lee el portapapeles (si el navegador no lo deja, pide pegarlo a mano). También se puede tocar el mapa. La app no busca lugares por nombre: el punto lo da Google Maps, que es lo más preciso.
+
+Qué se acepta al pegar:
+
+- **Enlace** de Google Maps, corto (`maps.app.goo.gl/…`) o largo. El servidor sigue la redirección del enlace corto (solo hacia dominios de Google) y saca las coordenadas y el nombre.
+- **Coordenadas** en decimales (`6.1732, -75.6298`) o en grados (`6°10′23″N 75°37′47″W`).
+- **Plus Code**: completo (`67R659FC+73`) o corto con la ciudad (`59FC+73 Itagüí, Antioquia`; la ciudad se ubica con Photon para completar el código). Un código corto sin ciudad se rechaza.
+
+Todo lugar lleva nombre: el del enlace si lo trae; si no, la dirección del punto (Photon), que se puede cambiar. El botón **Visitados** abre la lista de todos los lugares con ubicación de este viaje, con un buscador (sin acentos ni mayúsculas), del más reciente al más antiguo: elegir uno es un toque y no hace falta volver a Google Maps. Además, debajo del mapa salen los **lugares que ya usaste** cerca del punto, que se copian tal cual. Si el punto quedó corrido, se toca el mapa donde es. Al abrir el diálogo el mapa se centra donde estás (GPS, con un punto azul y su precisión) y el botón de la mira lo vuelve a centrar; el GPS solo orienta: no elige el lugar.
 
 ### Servicios externos
 
@@ -84,9 +91,8 @@ Solo se usan desde el navegador o el servidor para lo siguiente, y ninguno recib
 
 - Tasas de cambio: `cdn.jsdelivr.net` y `currency-api.pages.dev` (principal) y `api.frankfurter.dev` (respaldo).
 - Mapa: teselas de Stadia Maps (`tiles.stadiamaps.com`, estilos OSM Bright y Alidade Smooth Dark, datos de OpenStreetMap), sin clave: Stadia identifica el sitio por su dirección. En su panel (Manage Properties, Authentication Configuration) hay que registrar el dominio de Netlify; `localhost` no necesita nada. Si Stadia falla, la app usa teselas de OpenStreetMap. Reciben las zonas del mapa que miras, no tus gastos.
-- Búsqueda de lugares: Photon (`photon.komoot.io`) y, si falla, Nominatim (`nominatim.openstreetmap.org`). Reciben el texto que buscas y tu ubicación aproximada o el centro del mapa para poner primero lo cercano.
-- Más lugares (opcional; se consulta al usar “Mi ubicación”, al enviar una búsqueda por nombre o al tocar “Buscar más lugares”): Foursquare Places (`places-api.foursquare.com`), consultado desde el servidor con tu clave. Recibe el punto del gasto, nunca tus gastos. Encuentra edificios y negocios que no están en OpenStreetMap.
-- Sitios cercanos en el diálogo “Lugar del gasto” (al usar Mi ubicación, tocar el mapa o elegir un resultado): Overpass (`overpass-api.de`) y, si falla, Photon (`photon.komoot.io/reverse`). Reciben el punto elegido para devolver los sitios con nombre cercanos.
+- Nombre de un punto y ciudad de un Plus Code corto: Photon (`photon.komoot.io`) y, si falla, Nominatim (`nominatim.openstreetmap.org`). Reciben el punto o el texto de la ciudad, no tus gastos.
+- Enlaces cortos de Google Maps: el servidor abre el enlace (`maps.app.goo.gl`, `google.com`) para leer sus coordenadas. No es una API de pago ni usa clave.
 
 ### Tasas de cambio: fuentes y límites
 

@@ -1,6 +1,6 @@
 import test, { beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
-import { _resetOverpass, knownPlaces, mergeCandidates, nearbyPlaces, parseOverpass, placeIcon, polygonCentroid, recentPlaces } from '../public/js/nearby.mjs';
+import { _resetOverpass, knownPlaces, mergeCandidates, nearbyPlaces, parseOverpass, placeIcon, polygonCentroid, recentPlaces, visitedPlaces } from '../public/js/nearby.mjs';
 
 beforeEach(() => _resetOverpass()); // Overpass caído se recuerda un rato: cada prueba empieza de cero
 
@@ -211,4 +211,38 @@ test('nearbyPlaces: cancelar por el usuario no cuenta como caída de Overpass', 
   await assert.rejects(nearbyPlaces(REF, { fetchFn: aborting, signal: ctl.signal }), { name: 'AbortError' });
   const fetchFn = async () => ok({ elements: [{ lat: -8.05, lon: -34.9, tags: { name: 'X' } }], features: [] });
   assert.equal((await nearbyPlaces(REF, { fetchFn })).source, 'overpass'); // sigue intentándolo
+});
+
+test('visitedPlaces: todos los lugares del viaje, del más reciente al más antiguo, sin repetir el mismo sitio', () => {
+  const expenses = [
+    exp(1, '2026-11-01', 0, 'Foco'),
+    exp(2, '2026-11-05', 4, 'Foco'), // a 4 m: es el mismo lugar
+    exp(3, '2026-11-03', 500, 'Panadería Pão Quente'),
+    exp(4, '2026-11-02', 1000, 'Playa de Boa Viagem'),
+    exp(5, '2026-11-04', 1500, ''), // sin nombre: sale igual
+    { id: 6, date: '2026-11-06', created_at: '2026-11-06T10:00:00Z', place: 'Sin ubicación', lat: null, lng: null }, // sin ubicación: no cuenta
+  ];
+  const list = visitedPlaces(expenses);
+  assert.deepEqual(list.map((p) => p.name), ['Foco', '', 'Panadería Pão Quente', 'Playa de Boa Viagem']);
+  assert.equal(list[0].count, 2);
+  assert.equal(list[0].last, '2026-11-05');
+  assert.equal(list[0].lat, at(4).lat); // las coordenadas del gasto más reciente
+  assert.deepEqual(visitedPlaces([]), []);
+});
+
+test('visitedPlaces: la búsqueda ignora acentos y mayúsculas, y lo que empieza por lo escrito va primero', () => {
+  const expenses = [
+    exp(1, '2026-11-09', 0, 'Supermercado Pão de Açúcar'),
+    exp(2, '2026-11-01', 500, 'Açaí da Praia'),
+    exp(3, '2026-11-05', 1000, 'Padaria Estação'),
+    exp(4, '2026-11-07', 1500, 'Casa de la Praia'),
+  ];
+  assert.deepEqual(visitedPlaces(expenses, { query: 'acai' }).map((p) => p.name), ['Açaí da Praia']);
+  assert.deepEqual(visitedPlaces(expenses, { query: 'PÃO' }).map((p) => p.name), ['Supermercado Pão de Açúcar']);
+  // Ninguno empieza por 'praia': quedan los dos que lo contienen, el más reciente primero.
+  assert.deepEqual(visitedPlaces(expenses, { query: 'praia' }).map((p) => p.name), ['Casa de la Praia', 'Açaí da Praia']);
+  // Empieza por lo escrito primero, aunque sea más antiguo.
+  assert.equal(visitedPlaces(expenses, { query: 'pa' }).map((p) => p.name)[0], 'Padaria Estação');
+  assert.deepEqual(visitedPlaces(expenses, { query: 'zzz' }), []);
+  assert.equal(visitedPlaces(expenses, { query: '   ' }).length, 4); // solo espacios = sin filtro
 });

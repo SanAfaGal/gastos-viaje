@@ -35,6 +35,8 @@
   <link rel="modulepreload" href="/js/chart.mjs">
   <link rel="modulepreload" href="/js/places.mjs">
   <link rel="modulepreload" href="/js/order.mjs">
+  <link rel="modulepreload" href="/js/filters.mjs">
+  <link rel="modulepreload" href="/js/geolocate.mjs">
   <link rel="modulepreload" href="/js/theme.js">
   <link rel="modulepreload" href="/js/stats.mjs">
   <link rel="modulepreload" href="/js/geosearch.mjs">
@@ -62,19 +64,35 @@
   </dialog>
   <dialog id="map-pick" class="sheet pick-sheet" aria-labelledby="mp-title">
     <header class="sheet-head"><h2 id="mp-title">Lugar del gasto</h2>
-      <button type="button" class="sheet-x" data-pick-cancel aria-label="Cerrar">×</button></header>
-    <form id="pick-search" class="pick-search" role="search" autocomplete="off">
-      <input id="pick-q" type="search" enterkeyhint="search" maxlength="120" placeholder="Buscar lugar, dirección o pegar coordenadas" aria-label="Buscar un lugar por nombre">
-      <button type="button" class="pick-here" id="pick-here" aria-label="Usar mi ubicación">
-        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/><path d="M12 2v3.5M12 18.5V22M2 12h3.5M18.5 12H22" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
-        <span id="pick-here-t">Mi ubicación</span></button>
-    </form>
+      <span class="head-end"><button type="button" class="info-btn" id="pick-info" aria-haspopup="dialog" aria-label="Más información: formas de encontrar el lugar">i</button>
+      <button type="button" class="sheet-x" data-pick-cancel aria-label="Cerrar">×</button></span></header>
+    <div class="pick-steps">
+      <div class="pick-actions">
+        <button type="button" class="pick-here" id="pick-gmaps" aria-label="Paso 1: abrir Google Maps">
+          <span class="pick-n" aria-hidden="true">1</span>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
+          <span>Google Maps</span></button>
+        <button type="button" class="pick-here" id="pick-paste" aria-label="Paso 2: pegar lo que copiaste">
+          <span class="pick-n" aria-hidden="true">2</span>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><rect x="8" y="3" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Pegar</span></button>
+        <button type="button" class="pick-here" id="pick-visited" aria-pressed="false" aria-label="Elegir entre los lugares ya visitados">
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Visitados</span></button>
+      </div>
+      <p class="pick-or muted">Busca el lugar en Google Maps, copia el enlace, las coordenadas o el Plus Code y pégalo. O toca el mapa, o elige uno de los lugares ya visitados.</p>
+    </div>
     <div id="pick-map" class="map pick" role="region" aria-label="Mapa para elegir el lugar"></div>
     <div id="pick-panel" class="pick-panel"></div>
     <footer class="sheet-foot pick-foot">
       <div class="pick-sel" id="pick-sel" aria-live="polite"></div>
       <button type="button" class="btn" id="pick-ok" disabled>Usar este lugar</button>
     </footer>
+  </dialog>
+  <dialog id="pick-help" class="sheet info" aria-labelledby="pick-help-t">
+    <header class="sheet-head"><h2 id="pick-help-t">Formas de encontrar el lugar</h2>
+      <button type="button" class="sheet-x" data-help-close aria-label="Cerrar">×</button></header>
+    <div class="sheet-body" id="pick-help-body"></div>
   </dialog>
   <div id="toast" class="toast"></div>
   <div id="live-status" class="sr-only" role="status"></div>

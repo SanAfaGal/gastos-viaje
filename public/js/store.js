@@ -170,13 +170,8 @@ export async function fetchRate(date, currency) {
   }
 }
 
-// Más lugares cerca de un punto (Foursquare, vía el servidor). Devuelve { configured, results }; lanza si no hay conexión o falla.
-export function fetchMorePlaces({ lat, lng, radius, q }) {
-  const params = new URLSearchParams({ lat: String(lat), lng: String(lng) });
-  if (radius) params.set('radius', String(Math.round(radius)));
-  if (q) params.set('q', q);
-  return request('GET', `/api/places?${params}`);
-}
+// Enlace corto de Google Maps (maps.app.goo.gl/...): el servidor sigue la redirección. Devuelve { url, lat?, lng?, name? }.
+export const resolvePlaceLink = (url) => request('GET', `/api/resolve-place?url=${encodeURIComponent(url)}`);
 
 // Historial de tasas para el gráfico: lo pide al servidor y guarda una copia por si no hay internet.
 export async function fetchHistory(days = 30) {
