@@ -220,27 +220,84 @@ const setupCard = () => {
   return `<div class="card"><h2>Primero lo primero</h2><p>${text}</p><a class="btn small" href="#/ajustes">Ir a Ajustes</a></div>`;
 };
 
+// Estados de un gasto como iconos pequeños junto al título (en vez de etiquetas con texto): caben en una línea aunque haya varios.
+// Cada uno tiene su explicación en el ⓘ del listado (ver legendHtml).
+const STATUS = {
+  nomethod: ['danger', 'cardoff', 'Sin medio de pago: no entra en Cuentas hasta que lo elijas'],
+  rate: ['warn', 'clock', 'Esperando la tasa del día'],
+  estimated: ['warn', 'clock', 'Tasa estimada: puede cambiar un poco'],
+  approx: ['approx', null, 'Monto aproximado'],
+  unsent: ['info', 'upload', 'Sin enviar: se envía cuando haya internet'],
+};
+
+function statusOf(e) {
+  const out = [];
+  if (e.payment_method_id == null) out.push('nomethod');
+  if (e.amount_home == null) out.push('rate'); else if (e.rate_estimated) out.push('estimated');
+  if (e.amount_approx) out.push('approx');
+  if (e.pending) out.push('unsent');
+  return out;
+}
+
+const statusHtml = (keys, extra = '') => (keys.length || extra
+  ? `<span class="bds">${keys.map((k) => { const [tone, ic, label] = STATUS[k]; return `<span class="bd ${tone}" role="img" aria-label="${esc(label)}" title="${esc(label)}">${ic ? icon(ic) : '≈'}</span>`; }).join('')}${extra}</span>`
+  : '');
+
+// Quién va en el gasto: círculos con la inicial (cada persona siempre del mismo color). Hasta 3 y "+N".
+function whoHtml(c, e) {
+  const ids = e.beneficiary_ids;
+  const shown = ids.slice(0, 3).map((id) => {
+    const i = Math.max(0, c.people.findIndex((p) => p.id === id));
+    return `<span class="av" style="background:var(--seg-${(i % 5) + 1})">${esc(initials(personName(c, id)))}</span>`;
+  }).join('');
+  return `<span class="avs sm" role="img" aria-label="${esc(forWho(c, e))}" title="${esc(forWho(c, e))}">${shown}${ids.length > 3 ? `<span class="av more">+${ids.length - 3}</span>` : ''}</span>`;
+}
+
+// Iniciales para el círculo de una persona: la de cada palabra del nombre, hasta dos ("Ana María" es AM, "Santiago" es S).
+const initials = (name) => String(name ?? '').trim().split(/\s+/).filter(Boolean).slice(0, 2).map((w) => [...w][0].toUpperCase()).join('') || '?';
+
+const METHOD_ICON = { card: 'card', pix: 'transfer', cash: 'banknote' };
+
 // `n`: posición del gasto dentro de su día (solo en la lista, cuando el día tiene varios gastos).
 function expenseItem(c, e, n) {
   const m = c.methodsById[e.payment_method_id];
   const cop = e.amount_home == null ? 'Por convertir' : fmtHome(e.amount_home);
   const { dest, home } = currencies();
   const cur = e.currency ?? dest.code;
-  // Monto original: en su propia moneda. Si ya es la de casa no hay nada más que mostrar (no se convierte).
-  const original = cur === home.code ? '' : fmtMoney(cur, e.amount_cents);
+  // Debajo del monto va el original, en su propia moneda. Si ya es la de casa no se convierte y se dice cuál es.
+  const original = cur === home.code ? `en ${home.code}` : fmtMoney(cur, e.amount_cents);
+  const keys = statusOf(e);
+  const paint = m ? cardPaint(cardColor(m)) : null;
+  const tile = m
+    ? `<span class="tile" style="background:color-mix(in srgb, ${paint.c1} 50%, transparent)" aria-hidden="true">${icon(METHOD_ICON[m.kind] ?? 'card')}</span>`
+    : '<span class="tile none" aria-hidden="true">' + icon('cardoff') + '</span>';
+  const multiOwner = new Set(c.payMethods.map((x) => x.owner_person_id)).size > 1;
+  const methodText = e.payment_method_id == null ? 'Medio por definir'
+    : m ? `${esc(m.name)}${m.last4 ? ` ••${esc(m.last4)}` : ''}${multiOwner ? ` <span class="own">de ${esc(personName(c, m.owner_person_id))}</span>` : ''}`
+      : 'Medio borrado';
+  const title = e.description || 'Gasto';
+  // La última palabra del título y los iconos van juntos en un bloque que no se parte: así los iconos nunca quedan solos en otra línea.
+  // El botón (para el teclado) lleva el resto del título y su nombre completo en aria-label.
+  const words = title.trim().split(/\s+/);
+  const split = words.length > 1 && words.at(-1).length <= 18;
+  const head = split ? `${words.slice(0, -1).join(' ')} ` : title;
+  const tail = split ? `<span aria-hidden="true">${esc(words.at(-1))}</span>` : '';
+  const pinBtn = hasLocation(e)
+    ? `<button type="button" class="bd pinb pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">${icon('mappin')}</button>` : '';
   return `<div class="item" data-action="edit" data-id="${esc(e.id)}">
-    <div><div class="t">${n ? `<span class="ord" title="Orden dentro del día">${n}</span>` : ''}<button type="button" class="item-open" data-action="edit" data-id="${esc(e.id)}" aria-label="${esc(`Editar: ${e.description || 'Gasto'}, ${cop}`)}">${esc(e.description || 'Gasto')}</button>${hasLocation(e)
-      ? ` <button type="button" class="pin" data-action="show-place" data-id="${esc(e.id)}" aria-label="Ver en el mapa" title="Ver en el mapa">${icon('mappin')}</button>` : ''}</div>
-      <div class="muted">${e.payment_method_id == null ? 'Medio por definir' : m ? `${esc(methodLabel(m))} · <span class="nw">de ${esc(personName(c, m.owner_person_id))}</span>` : esc(methodLabel(m))}</div>
-      <span class="tag">${esc(forWho(c, e))}</span>
-      ${e.payment_method_id == null ? '<span class="tag danger">Sin medio de pago</span>' : ''}
-      ${e.pending ? '<span class="tag info">Sin enviar</span>' : ''}
-      ${e.amount_home == null ? '<span class="tag warn">Esperando tasa</span>' : ''}
-      ${e.rate_estimated ? '<span class="tag warn">Tasa estimada</span>' : ''}
-      ${e.amount_approx ? '<span class="tag approx">Monto aproximado</span>' : ''}
-      ${cur !== dest.code ? `<span class="tag">${esc(cur === home.code ? `En ${cur}, sin conversión` : `En ${cur}`)}</span>` : ''}</div>
+    ${tile}
+    <div class="im"><div class="t">${n ? `<span class="ord" title="Orden dentro del día">${n}</span>` : ''}<button type="button" class="item-open" data-action="edit" data-id="${esc(e.id)}" aria-label="${esc(`Editar: ${title}, ${cop}`)}">${esc(head)}</button><span class="tail">${tail}${statusHtml(keys, pinBtn)}</span></div>
+      <div class="sub"><span class="mt">${methodText}</span>${whoHtml(c, e)}</div></div>
     <div class="r"><div class="num">${cop}</div><div class="muted">${esc(original)}</div></div>
   </div>`;
+}
+
+// Qué significa cada icono del listado (se abre con el ⓘ de arriba).
+function legendHtml() {
+  const row = (k) => { const [tone, ic, label] = STATUS[k]; const [t, rest] = label.split(': '); return `<li><span class="bd ${tone}" aria-hidden="true">${ic ? icon(ic) : '≈'}</span><span><b>${esc(t)}</b>${rest ? `<span class="muted">${esc(rest)}</span>` : ''}</span></li>`; };
+  return `<ul class="legend">${['nomethod', 'rate', 'estimated', 'approx', 'unsent'].map(row).join('')}
+    <li><span class="bd pinb" aria-hidden="true">${icon('mappin')}</span><span><b>Tiene ubicación</b><span class="muted">Tócalo para verlo en el mapa</span></span></li>
+    <li><span class="avs sm" aria-hidden="true"><span class="av" style="background:var(--seg-1)">S</span><span class="av" style="background:var(--seg-2)">A</span></span><span><b>Para quién es</b><span class="muted">Un círculo con la inicial de cada persona</span></span></li></ul>`;
 }
 
 // ---------- pantallas ----------
@@ -366,14 +423,15 @@ function viewList() {
   return `
     <div class="card sum">
       <div class="sum-top"><h2>${filtered ? 'Con filtros' : 'Todos los gastos'}</h2>
-        <a class="pill-link" href="#/mapa">${MAP_ICON}Mapa</a></div>
+        <span class="sum-tools"><a class="pill-link" href="#/mapa">${MAP_ICON}Mapa</a>${infoBtn('legend', 'Qué significan los iconos')}</span></div>
       <div class="sum-vals">
         <div><div class="big">${fmtHome(sumHome(list))}</div><div class="muted">en ${esc(cur.home.code)}</div></div>
         <div><div class="big alt">${fmtDest(sumDest(list))}</div><div class="muted">en ${esc(cur.dest.code)}, lo que se pagó</div></div>
       </div>
-      <div class="sum-foot"><span class="muted">${list.length} gasto(s)${unconverted ? ` · ${unconverted} sin convertir` : ''}</span>
+      <div class="sum-foot"><span class="muted">${list.length} gasto(s)</span>${unconverted ? `<span class="bd warn wide">${icon('clock')} ${unconverted} sin convertir</span>` : ''}
         ${filtered ? '<button type="button" class="chip small" data-action="f-clear">Quitar filtros</button>' : ''}</div>
     </div>
+    ${infoDialog('legend', 'Qué significan los iconos', legendHtml())}
     <div class="filters">
       <div class="filt-bar">
         <input id="f-q" type="search" aria-label="Buscar en la descripción" placeholder="Buscar descripción" value="${esc(filters.q)}">
@@ -381,7 +439,7 @@ function viewList() {
       </div>
       <div class="filt-panel" id="f-panel" ${filtersOpen ? '' : 'hidden'}>
       <select id="f-day" aria-label="Día"><option value="">Todos los días</option>
-        ${dayList.map((d) => `<option value="${esc(d)}" ${filters.day === d ? 'selected' : ''}>${esc(dayLabel(d))} · ${c.expenses.filter((e) => e.date === d).length}</option>`).join('')}</select>
+        ${dayList.map((d) => `<option value="${esc(d)}" ${filters.day === d ? 'selected' : ''}>${esc(dayLabel(d))} (${c.expenses.filter((e) => e.date === d).length})</option>`).join('')}</select>
       <select id="f-method" aria-label="Medio de pago"><option value="">Todos los medios</option>
         ${c.payMethods.map((m) => `<option value="${esc(m.id)}" ${filters.method === m.id ? 'selected' : ''}>${esc(methodLabel(m))}</option>`).join('')}
         ${c.expenses.some((e) => e.payment_method_id == null) ? `<option value="${PENDING}" ${filters.method === PENDING ? 'selected' : ''}>Por definir</option>` : ''}</select>
@@ -397,7 +455,7 @@ function viewList() {
       </div>
     </div>
     ${sortable && days.some((d) => d.items.length > 1) ? '<div class="muted hint">Mantén presionado un gasto y arrástralo para ordenarlo dentro de su día. Con teclado: Alt + ↑ o ↓ sobre el gasto.</div>' : ''}
-    ${days.length ? days.map((d) => `<div class="day"><span>${esc(dayLabel(d.date))}</span><span class="day-tot">${fmtHome(sumHome(d.items))} · ${fmtDest(sumDest(d.items))}</span></div>
+    ${days.length ? days.map((d) => `<div class="day"><span>${esc(dayLabel(d.date))}</span><span class="day-tot"><b>${fmtHome(sumHome(d.items))}</b>${sumDest(d.items) ? ` <span class="muted">${fmtDest(sumDest(d.items))}</span>` : ''}</span></div>
       <div class="card day-card" ${sortable ? `data-day="${esc(d.date)}"` : ''} style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e, orderOf.get(e.id))).join('')}</div>`).join('')
       : '<div class="empty">No hay gastos con ese filtro.</div>'}`;
 }
@@ -772,7 +830,7 @@ function benesHtml(c) {
   if (c.people.length >= 3 && chosen.length && !draft.benesOpen) {
     const all = chosen.length === c.people.length;
     const names = all ? `Todos (${chosen.length})` : chosen.map((p) => personName(c, p.id)).join(', ');
-    const dots = chosen.slice(0, 4).map((p) => `<span class="av">${esc(personName(c, p.id).trim().charAt(0).toUpperCase())}</span>`).join('');
+    const dots = chosen.slice(0, 4).map((p) => `<span class="av">${esc(initials(personName(c, p.id)))}</span>`).join('');
     return `<button type="button" class="benes-sum" data-action="benes-open" aria-label="Para quién es: ${esc(names)}. Cambiar">
       <span class="avs" aria-hidden="true">${dots}</span><span class="benes-t">${esc(names)}</span><span class="benes-c">Cambiar ›</span></button>`;
   }

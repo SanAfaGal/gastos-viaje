@@ -126,7 +126,7 @@ main { padding: 4px 16px calc(110px + env(safe-area-inset-bottom)); max-width: 6
 
 /* La fila tiene su propio aire a los lados (margen negativo + relleno): al presionarla o arrastrarla el resaltado
    queda con esquinas redondeadas y espacio alrededor del texto, no cortado contra el borde de la tarjeta. */
-.item { position: relative; display: flex; justify-content: space-between; gap: 12px; margin: 0 -8px; padding: 12px 8px; border-radius: 12px; cursor: pointer; }
+.item { position: relative; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 -8px; padding: 12px 8px; border-radius: 12px; cursor: pointer; }
 .item:not(:last-child)::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 0; height: 1px; background: var(--border); }
 .item:active::after, .item.pressed::after, .item.dragging::after { opacity: 0; }
 .day-card[data-day] .item { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
@@ -274,7 +274,7 @@ dialog.info .chart { margin-top: 12px; }
 /* ¿Para quién? plegado en una línea. */
 .benes-sum { display: flex; align-items: center; gap: 12px; width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
 .avs { display: flex; flex: none; }
-.av { display: grid; place-items: center; width: 30px; height: 30px; margin-left: -8px; border: 2px solid var(--surface-2); border-radius: 50%; background: var(--brand); color: var(--brand-ink); font-size: .8rem; font-weight: 800; }
+.av { display: grid; place-items: center; min-width: 30px; width: auto; height: 30px; padding: 0 5px; margin-left: -8px; border: 2px solid var(--surface-2); border-radius: 50%; background: var(--brand); color: var(--brand-ink); font-size: .8rem; font-weight: 800; }
 .av:first-child { margin-left: 0; }
 .benes-t { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .benes-c { flex: none; font-size: .82rem; font-weight: 600; color: var(--brand); }
@@ -649,3 +649,43 @@ main:focus-visible { outline: none; }
 .cdot::after { content: ''; position: absolute; inset: -12px -6px; } /* área de toque grande para un punto pequeño */
 .cdot.on { width: 22px; border-radius: 99px; background: var(--brand); }
 @media (prefers-reduced-motion: reduce) { .cdot { transition: none; } }
+
+/* Listado de gastos: icono del medio de pago, título con iconos de estado, y el monto a la derecha. */
+:root { --av-ink: #ffffff; }
+:root[data-scheme="dark"] { --av-ink: #06130d; }
+.item .tile { flex: none; display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; color: var(--text); } /* color plano al 50 % de opacidad: no resalta tanto, y el icono toma el color del texto para leerse en claro y oscuro */
+.item .tile .ic { width: 19px; height: 19px; margin: 0; }
+.item .tile.none { background: var(--surface-2); color: var(--muted); border: 1.5px dashed var(--control-border); box-shadow: none; }
+.item .im { flex: 1; min-width: 0; }
+.item .t { overflow-wrap: anywhere; } /* texto del título e iconos de estado en una misma línea que se parte sola */
+.item .t .tail { white-space: nowrap; }
+.item .t .item-open { display: contents; } /* el botón (para el teclado) no hace caja: su texto fluye con los iconos */
+.item .sub { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 8px; margin-top: 3px; font-size: .85rem; color: var(--muted); }
+.item .sub .own { color: var(--text); opacity: .75; }
+.bds { display: inline-flex; align-items: center; gap: 4px; margin-left: 8px; vertical-align: middle; position: relative; top: -3px; } /* vertical-align: middle los dejaba ~2,5 px bajo el centro del texto */
+.bd { display: inline-grid; place-items: center; flex: none; width: 20px; height: 20px; border-radius: 50%; background: var(--surface-2); color: var(--muted); font-size: .8rem; font-weight: 800; line-height: 1; }
+.bd .ic { width: 12px; height: 12px; margin: 0; }
+.bd.warn { background: var(--warn-bg); color: var(--warn-text); }
+.bd.danger { background: var(--tag-danger-bg); color: var(--tag-danger-text); }
+.bd.info { background: var(--tag-info-bg); color: var(--tag-info-text); }
+.bd.approx { background: var(--tag-approx-bg); color: var(--tag-approx-text); }
+.bd.pinb { background: color-mix(in srgb, var(--brand) 16%, var(--surface)); color: var(--brand); }
+.bd.wide { width: auto; gap: 5px; padding: 0 10px; height: 24px; border-radius: 99px; font-size: .75rem; font-weight: 700; }
+.bd.wide .ic { width: 13px; height: 13px; }
+.avs.sm .av { min-width: 20px; width: auto; height: 20px; padding: 0 3px; border-radius: 99px; margin-left: -6px; border: 2px solid var(--surface); color: var(--av-ink); font-size: .62rem; }
+.avs.sm .av:first-child { margin-left: 0; }
+.avs.sm .av.more { background: var(--surface-2); color: var(--muted); }
+/* El pin del mapa es un círculo más del grupo de iconos: mismo tamaño, centrado, y el área de toque crece con ::after. */
+.bds .pin { width: 20px; height: 20px; min-width: 20px; min-height: 20px; margin: 0; padding: 0; border: 0; vertical-align: middle; }
+.bds .pin:active { background: color-mix(in srgb, var(--brand) 30%, var(--surface)); }
+.sum-tools { display: inline-flex; align-items: center; gap: 8px; }
+.sum-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.day-tot b { font-weight: 700; color: var(--text); }
+.day-tot .muted { margin-left: 6px; }
+.legend { display: grid; gap: 14px; margin: 6px 0 0; padding: 0; list-style: none; }
+.legend li { display: flex; align-items: center; gap: 12px; }
+.legend b { color: var(--text); }
+.legend li > span:last-child { display: grid; gap: 1px; min-width: 0; }
+.legend .bd { width: 28px; height: 28px; font-size: 1rem; }
+.legend .bd .ic { width: 15px; height: 15px; }
+.legend .avs.sm .av { width: 24px; height: 24px; font-size: .72rem; }
