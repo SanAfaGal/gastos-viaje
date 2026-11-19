@@ -10,7 +10,7 @@ import { downloadBackup, downloadCsv, editMethod, editPerson, editTrip, onMethod
 import { barRead, chartDays, homeBars, loadHistory, setChartDays } from './view-home.js';
 import { filters, filtersOpen, picked, resetFilters, setFiltersOpen } from './view-list.js';
 import { clearFieldError, draft, paintBenes, paintCards, paintCur, paintLoc, setDraft, setDraftDate, submitForm, updateConv } from './view-form.js';
-import { centsText, payDraft, readPayDraft, setPayDraft, setPayOpen } from './view-accounts.js';
+import { applyQuick, centsText, newPayDraft, paintPay, payDraft, readPayDraft, setPayCurrency, setPayDate, setPayDraft, setPayHist, setPayOpen, swapPay } from './view-accounts.js';
 import { focusStop } from './view-map.js';
 import { openPicker } from './place-picker.js';
 import { render, sync } from './router.js';
@@ -96,8 +96,7 @@ $view.addEventListener('click', async (ev) => {
     else if (action === 'new-person') { setEditPerson(null); setPersonOpen(true); render(); }
     else if (action === 'cancel-person') document.getElementById('person-dialog')?.close();
     else if (action === 'pay-new') {
-      const amount = Number(t.dataset.amount);
-      setPayDraft({ id: null, from: t.dataset.from ?? '', to: t.dataset.to ?? '', amountText: amount > 0 ? centsText(amount) : '', currency: currencies().home.code, date: todayStr(), note: '' });
+      setPayDraft(newPayDraft(ctx(), t.dataset.from ?? '', t.dataset.to ?? '', Number(t.dataset.amount)));
       setPayOpen(true);
       render();
     } else if (action === 'pay-edit') {
@@ -108,6 +107,11 @@ $view.addEventListener('click', async (ev) => {
         render();
       }
     } else if (action === 'pay-cancel') document.getElementById('pay-dialog')?.close();
+    else if (action === 'pay-swap') swapPay();
+    else if (action === 'pay-cur') setPayCurrency(id);
+    else if (action === 'pay-quick') applyQuick(id);
+    else if (action === 'pay-date-q') setPayDate(id === 'yesterday' ? addDays(todayStr(), -1) : todayStr());
+    else if (action === 'pay-date-open') { readPayDraft(); openDatePicker({ value: payDraft.date, onPick: setPayDate }); }
     else if (action === 'pay-del') {
       if (confirm('¿Borrar este abono?')) await busy(t, () => guard(async () => { await store.deletePayment(id); setPayOpen(false); setPayDraft(null); toast('Abono borrado'); render(); }), 'Borrando…');
     }
@@ -159,13 +163,14 @@ Se usa la tasa que hoy da la fuente para el día de cada gasto. ¿Actualizar?`;
     else if (action === 'csv') downloadCsv();
     else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
   });
+$view.addEventListener('toggle', (ev) => { if (ev.target.id === 'pay-hist') setPayHist(ev.target.open); }, true);
 $view.addEventListener('input', (ev) => {
     const id = ev.target.id;
     if (id === 'amount') { draft.amountText = ev.target.value; clearFieldError('amount'); updateConv(); }
     else if (id === 'desc') draft.desc = ev.target.value;
     else if (id === 'f-q') { filters.q = ev.target.value; const pos = ev.target.selectionStart; render(); const el = document.getElementById('f-q'); el.focus(); el.setSelectionRange(pos, pos); }
     else if (id.startsWith('m-')) onMethodForm(id);
-    else if (id.startsWith('pay-')) readPayDraft();
+    else if (id.startsWith('pay-')) paintPay();
   });
 $view.addEventListener('change', (ev) => {
     const id = ev.target.id;
@@ -174,7 +179,7 @@ $view.addEventListener('change', (ev) => {
       ev.target.value = ''; // permite elegir otra vez el mismo archivo
       restoreFromFile(file);
     } else if (id.startsWith('pay-')) {
-      readPayDraft();
+      paintPay();
     } else if (id === 'cur-other') {
       if (ev.target.value && currencyByCode(ev.target.value)) { draft.currency = ev.target.value; paintCur(); }
     } else if (id === 'f-method') { filters.method = picked(ev.target); render(); }
@@ -238,6 +243,8 @@ $view.addEventListener('submit', async (ev) => {
       await busy(btn, () => guardIn('pay-error', async () => {
         readPayDraft();
         const cents = parseAmount(payDraft.amountText);
+        if (!payDraft.from || !payDraft.to) throw new Error('Elige quién paga y a quién');
+        if (payDraft.from === payDraft.to) throw new Error('Quien paga y quien recibe deben ser personas distintas');
         if (!cents) throw new Error('Escribe un monto válido');
         await store.savePayment({
           id: payDraft.id ?? undefined, from_person_id: payDraft.from, to_person_id: payDraft.to,

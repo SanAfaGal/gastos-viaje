@@ -348,3 +348,51 @@ main:focus-visible { outline: none; }
 .legend .bd { width: 28px; height: 28px; font-size: 1rem; }
 .legend .bd .ic { width: 15px; height: 15px; }
 .legend .avs.sm .av { width: 24px; height: 24px; font-size: .72rem; }
+
+/* Cuentas: total, una tarjeta por deuda con su avance, saldos con barra, historial de abonos y gasto por medio. */
+.acc-h { margin: 14px 4px 6px; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }
+.acc-hero { background: linear-gradient(135deg, var(--brand), var(--brand-2)); color: var(--brand-ink); border: 0; }
+.acc-hero h2 { color: inherit; opacity: .85; }
+.acc-total { font-size: 2rem; font-weight: 800; letter-spacing: -.02em; }
+.acc-sub { margin-top: 4px; font-size: .85rem; opacity: .92; overflow-wrap: anywhere; }
+.acc-debt { display: grid; gap: 10px; }
+.acc-who { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.acc-av { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; color: #fff; font-weight: 700; font-size: .95rem; }
+.acc-arrow { color: var(--muted); display: inline-flex; }
+.acc-arrow .ic { width: 18px; height: 18px; transform: rotate(-90deg); }
+.acc-left { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.acc-big { font-size: 1.9rem; font-weight: 800; letter-spacing: -.02em; }
+.acc-track { height: 10px; border-radius: 99px; background: var(--surface-2); overflow: hidden; }
+.acc-track.thin { height: 8px; margin: 6px 0; }
+.acc-fill { height: 100%; border-radius: 99px; background: var(--brand); }
+.acc-fill.neg { background: var(--neg); } .acc-fill.pos { background: var(--pos); } .acc-fill.meth { background: var(--seg-3); } .acc-fill.zero { background: transparent; }
+.acc-debt .btn { margin-top: 2px; }
+.acc-ok { display: flex; align-items: center; gap: 12px; }
+.acc-ok > .ic { flex: none; width: 28px; height: 28px; color: var(--pos); }
+.acc-ok span { display: grid; }
+.acc-bal, .acc-meth { padding: 8px 0; border-bottom: 1px solid var(--border); }
+.acc-bal:last-child, .acc-meth:last-child { border-bottom: 0; }
+/* La regla global `details summary` (gris, chica, con margen arriba) es para textos de ayuda: aquí el título es parte de la tarjeta. */
+.acc-hist summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-height: 44px; margin: -6px 0; color: var(--text); font-size: 1rem; cursor: pointer; list-style: none; }
+.acc-hist[open] summary { margin-bottom: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.acc-hist .empty { padding: 16px 8px; }
+.acc-hist .when-open, .acc-hist[open] .when-closed { display: none; }
+.acc-hist[open] .when-open { display: inline; }
+.acc-hist summary::-webkit-details-marker { display: none; }
+.acc-hist .acc-more { display: inline-flex; align-items: center; gap: 6px; font-size: .85rem; }
+.acc-hist[open] .acc-more .ic { transform: rotate(180deg); }
+.acc-count { margin-left: 4px; padding: 1px 8px; border-radius: 99px; background: var(--surface-2); font-size: .75rem; font-weight: 700; }
+.acc-hist .btn { margin-top: 10px; }
+
+/* Diálogo de abono: quién a quién, monto grande (la misma franja del formulario de gasto), efecto en la cuenta, fecha y nota. */
+.pay-sheet .sheet-body { display: grid; gap: 14px; }
+.pay-who { display: grid; grid-template-columns: minmax(0, 1fr) 44px minmax(0, 1fr); align-items: end; gap: 8px; }
+.pay-swap { display: grid; place-items: center; width: 44px; height: 44px; border: 1.5px solid var(--control-border); border-radius: 50%; background: var(--surface); color: var(--text); cursor: pointer; }
+.pay-swap .ic { width: 20px; height: 20px; }
+.pay-sheet .cur-chips .chip { min-height: 44px; }
+.pay-sheet .cur-chips:empty { display: none; }
+.pay-effect { display: flex; align-items: center; gap: 10px; padding: 12px 14px; border-radius: 14px; font-size: .92rem; background: var(--surface-2); color: var(--text); }
+.pay-effect.ok { background: color-mix(in srgb, var(--brand) 14%, var(--surface)); font-weight: 600; }
+.pay-effect.ok .ic { flex: none; width: 22px; height: 22px; color: var(--pos); }
+.pay-effect.warn { background: var(--warn-bg); color: var(--warn-text); font-weight: 600; }
+.pay-sheet .fsub .flab { margin-bottom: 8px; }

@@ -8,7 +8,7 @@ Registro de gastos de viajes con amigos o familia. Por cada viaje eliges el paí
 - **Inicio** con el resumen del viaje: total, gasto de hoy, promedio por día, gasto mayor, gasto por día y reparto por medio de pago y por quién pagó.
 - **Gastos**: lista por día con totales en las dos monedas, filtros (día, medio, para quién, quién pagó, aproximados, sin ubicación, tasa pendiente) y orden manual dentro de cada día (mantén presionado y arrastra).
 - **Mapa** del recorrido con los lugares numerados por su primera visita.
-- **Cuentas**: saldo por persona y los pagos que dejan todo en cero.
+- **Cuentas**: lo que falta por saldar entre cada par de personas, con el avance de lo ya abonado, saldo por persona y gasto por medio de pago. **Abonos**: se registran en cualquier moneda del viaje (con la tasa del día) y el diálogo muestra cómo queda la cuenta antes de guardar.
 - Al borrar un gasto aparece **Deshacer**.
 - Exportar a CSV, **respaldo** completo en JSON y **restaurar** (solo agrega lo que falte).
 - Tema a gusto: modo automático, claro u oscuro (la app es siempre verde).
@@ -74,7 +74,7 @@ El esquema se actualiza solo: la primera petición después de desplegar corre l
   - `view-home.js` (inicio y gráfico de la tasa), `view-list.js` (gastos, filtros y reordenar arrastrando), `view-form.js` (formulario de gasto), `view-accounts.js` (cuentas y abonos), `view-settings.js` (ajustes), `view-map.js` (mapa del viaje) y `place-picker.js` (diálogo "Lugar del gasto").
   - Un módulo nuevo debe agregarse a la lista `SHELL` de `sw.js` (si no, falla `test/shell.test.mjs`) y, si se carga al abrir, a la precarga de `index.html`.
   - El estado que comparten varios módulos (`draft`, `payOpen`…) vive en el módulo que lo declara; quien lo cambia desde otro módulo usa su función `set…`.
-- Módulos sin DOM que usan el navegador y las pruebas: `settlement.mjs` (cuentas), `money.mjs` y `currencies.mjs` (dinero y monedas), `stats.mjs` (resumen del Inicio), `order.mjs` (orden de los gastos), `places.mjs` (recorrido del mapa), `geosearch.mjs` (búsqueda de lugares), `nearby.mjs` (lugares usados y sitios cercanos), `picker.mjs` (lógica del diálogo “Lugar del gasto”), `chart.mjs` (gráfico de la tasa) y `cards.mjs` (aspecto de las tarjetas).
+- Módulos sin DOM que usan el navegador y las pruebas: `settlement.mjs` (cuentas) y `accounts.mjs` (deuda entre dos personas, avance y efecto de un abono), `money.mjs` y `currencies.mjs` (dinero y monedas), `stats.mjs` (resumen del Inicio), `order.mjs` (orden de los gastos), `places.mjs` (recorrido del mapa), `geosearch.mjs` (búsqueda de lugares), `nearby.mjs` (lugares usados y sitios cercanos), `picker.mjs` (lógica del diálogo “Lugar del gasto”), `chart.mjs` (gráfico de la tasa) y `cards.mjs` (aspecto de las tarjetas).
 - `src/handlers.mjs`: la API. `src/db.mjs`: SQLite local (`node:sqlite`) o Turso, con migración de bases antiguas. `src/rates.mjs`: tasas. `src/backup.mjs`: respaldo y restauración.
 - `server.mjs`: servidor local. `netlify/functions/api.mjs`: la misma API en Netlify.
 
