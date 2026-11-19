@@ -26,6 +26,43 @@ export function formatDistance(km) {
 
 const valid = (lat, lng) => Number.isFinite(lat) && Number.isFinite(lng) && Math.abs(lat) <= 90 && Math.abs(lng) <= 180;
 
+const num = (s) => (s == null ? NaN : Number(String(s).replace(',', '.')));
+
+// Coordenadas pegadas en el buscador: "6.1732244, -75.62967" o un enlace largo de Google Maps. Devuelve { lat, lng, name? } o null.
+// Google sabe lugares (y números de puerta) que OpenStreetMap no tiene: se abre el lugar allí, se copian las coordenadas y se pegan aquí.
+// Los enlaces cortos (maps.app.goo.gl) no sirven: no traen coordenadas hasta que el navegador los abre.
+export function parseCoordinates(text) {
+  const t = String(text ?? '').trim();
+  if (!t) return null;
+  const done = (lat, lng, name) => (valid(lat, lng) ? { lat, lng, ...(name ? { name } : {}) } : null);
+  if (/^https?:\/\//i.test(t)) {
+    let decoded = t;
+    try { decoded = decodeURIComponent(t); } catch { /* queda el texto crudo */ }
+    const pin = decoded.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/); // el pin exacto del lugar
+    const query = decoded.match(/[?&](?:q|ll|query|destination)=(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)/);
+    const view = decoded.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/); // el centro de la vista: casi siempre el mismo sitio
+    const m = pin ?? query ?? view;
+    if (!m) return null;
+    const place = decoded.match(/\/place\/([^/@?]+)/);
+    const name = place ? place[1].replace(/\+/g, ' ').split(',')[0].trim().slice(0, 120) : '';
+    return done(Number(m[1]), Number(m[2]), name);
+  }
+  // Grados, minutos y segundos como los muestra Google Maps: 8°13'31.2"S 34°56'34.7"W (S y W son negativos).
+  const part = String.raw`(\d{1,3})\s*°\s*(?:(\d{1,2})\s*['′’]\s*)?(?:(\d{1,2}(?:\.\d+)?)\s*(?:["″”]|'')\s*)?([NSEW])`;
+  const dms = t.match(new RegExp(String.raw`^${part}[\s,;]*${part}$`, 'i'));
+  if (dms) {
+    const sign = (h) => (/[SW]/i.test(h) ? -1 : 1);
+    const toDeg = (d, m, sec, h) => sign(h) * (Number(d) + Number(m ?? 0) / 60 + Number(sec ?? 0) / 3600);
+    if (/[NS]/i.test(dms[4]) === /[NS]/i.test(dms[8])) return null; // los dos son latitud o los dos longitud
+    const a = toDeg(dms[1], dms[2], dms[3], dms[4]);
+    const b = toDeg(dms[5], dms[6], dms[7], dms[8]);
+    return /[NS]/i.test(dms[4]) ? done(a, b) : done(b, a);
+  }
+  // Un par de números, los dos con decimales: así "65 36" o "36-61" (números de una dirección) no se toman por coordenadas.
+  const m = t.match(/^(-?\d{1,2}\.\d+)\s*°?\s*[,;\s]\s*(-?\d{1,3}\.\d+)\s*°?$/);
+  return m ? done(num(m[1]), num(m[2])) : null;
+}
+
 export function parsePhoton(json) {
   const out = [];
   for (const f of json?.features ?? []) {

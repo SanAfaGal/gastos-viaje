@@ -9,7 +9,7 @@ import { compareChronological, sameOrder } from './order.mjs';
 import { MODES, getTheme, setTheme } from './theme.js';
 import * as store from './store.js';
 import { breakdown, byDay, summary } from './stats.mjs';
-import { distanceKm, formatDistance, searchPlaces } from './geosearch.mjs';
+import { distanceKm, formatDistance, parseCoordinates, searchPlaces } from './geosearch.mjs';
 import { PICK_MIN_ZOOM, TAP_ZOOM, buildList, combineNearby, confirmPlace, dedupeByName, preferOsm, rankSearch, selectionSummary, tapRadiusM } from './picker.mjs';
 import { icon } from './icons.mjs';
 import { initSelects } from './select.mjs';
@@ -1711,7 +1711,7 @@ function drawPickMap() {
   }
   // Con tu ubicación o un resultado se encuadra el ancla con sus candidatos; con un toque suelto no se toca la vista (el usuario ya
   // eligió dónde mirar). Si moviste el mapa tú, tampoco.
-  if (!pk.touched && pk.anchor && ['gps', 'result'].includes(pk.anchor.source) && pts.length) {
+  if (!pk.touched && pk.anchor && ['gps', 'result', 'coords'].includes(pk.anchor.source) && pts.length) {
     pickMap.fitBounds([[pk.anchor.lat, pk.anchor.lng], ...pts], { padding: [40, 40], maxZoom: 18, animate: false });
   }
 }
@@ -1759,7 +1759,7 @@ function setAnchor(at, { source, accuracy = null, name = '', radiusM = 60, appro
   drawPickMap();
   // Con tu ubicación o un resultado también se pide Foursquare solo (justo ahí suelen faltar edificios y negocios pequeños). Con un toque
   // suelto queda el botón, para no gastar el cupo gratis en cada toque.
-  const auto = source === 'gps' || source === 'result';
+  const auto = source === 'gps' || source === 'result' || source === 'coords';
   if (cached) { if (auto && !cached.fsqDone) loadMorePick(); return; }
   if (auto) loadMorePick();
   nearbyPlaces(at, {
@@ -1936,6 +1936,12 @@ const searchKey = (q, ref) => `${q.toLowerCase()}|${ref ? `${ref.lat.toFixed(2)}
 function runPickSearch(q, { auto = false } = {}) {
   const text = q.trim();
   pk.sctl?.abort();
+  // Coordenadas o enlace de Google Maps: no es una búsqueda, es el punto exacto. Solo al enviar o pegar (no a medio escribir).
+  const pasted = parseCoordinates(text);
+  if (pasted) {
+    if (auto) { pk.search = null; chooseCoords(pasted); }
+    return;
+  }
   if (text.length < 2) { pk.search = null; pk.tab = 'near'; paintPick(); return; }
   if (!auto && text.length < 3) return;
   const ref = pickSearchRef();
@@ -1980,6 +1986,16 @@ function chooseResult(c) {
   if (pickMap) pickMap.setView([at.lat, at.lng], Math.max(pickMap.getZoom(), TAP_ZOOM), { animate: false });
   setAnchor(at, { source: 'result', name: c.name.slice(0, 120), approx: Boolean(c.approx) });
 }
+
+// Punto pegado desde Google Maps: igual que un resultado (el mapa va ahí y se piden los sitios cercanos), con el nombre del enlace si traía.
+function chooseCoords(c) {
+  if (pickMap) pickMap.setView([c.lat, c.lng], Math.max(pickMap.getZoom(), TAP_ZOOM), { animate: false });
+  setAnchor({ lat: c.lat, lng: c.lng }, { source: 'coords', name: (c.name ?? '').slice(0, 120) });
+}
+
+$pickQ.addEventListener('paste', (ev) => {
+  if (parseCoordinates(ev.clipboardData?.getData('text'))) setTimeout(() => { clearTimeout(searchTimer); runPickSearch($pickQ.value, { auto: true }); }, 0);
+});
 
 document.getElementById('pick-search').addEventListener('submit', (ev) => {
   ev.preventDefault();

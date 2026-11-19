@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { distanceKm, formatDistance, parseNominatim, parsePhoton, rankByNearby, searchPlaces } from '../public/js/geosearch.mjs';
+import { distanceKm, formatDistance, parseCoordinates, parseNominatim, parsePhoton, rankByNearby, searchPlaces } from '../public/js/geosearch.mjs';
 
 const RECIFE = { lat: -8.05, lng: -34.9 };
 const feat = (name, lng, lat, extra = {}) => ({ geometry: { coordinates: [lng, lat] }, properties: { name, ...extra } });
@@ -82,4 +82,31 @@ test('búsqueda: texto muy corto no consulta, cancelar se propaga y sin red lanz
   await assert.rejects(() => searchPlaces('foco', { fetchFn: abort }), { name: 'AbortError' });
   const down = async () => { throw new TypeError('sin red'); };
   await assert.rejects(() => searchPlaces('foco', { ref: RECIFE, fetchFn: down }));
+});
+
+test('coordenadas: pares pegados, con o sin coma, y enlaces largos de Google Maps', () => {
+  const ok = { lat: 6.1732244, lng: -75.62967 };
+  assert.deepEqual(parseCoordinates('6.1732244, -75.62967'), ok);
+  assert.deepEqual(parseCoordinates('  6.1732244 -75.62967 '), ok);
+  assert.deepEqual(parseCoordinates('6.1732244°, -75.62967°'), ok);
+  // Google Maps: el pin exacto (!3d!4d) gana sobre el centro de la vista (@)
+  const url = 'https://www.google.com/maps/place/Samaria+Apartamentos/@6.1735,-75.6300,17z/data=!3m1!4b1!4m6!3m5!1s0x8e:0x1!8m2!3d6.1732244!4d-75.62967';
+  assert.deepEqual(parseCoordinates(url), { ...ok, name: 'Samaria Apartamentos' });
+  assert.deepEqual(parseCoordinates('https://www.google.com/maps/@6.1735,-75.63,17z'), { lat: 6.1735, lng: -75.63 });
+  assert.deepEqual(parseCoordinates('https://maps.google.com/?q=6.1732244,-75.62967'), ok);
+  assert.deepEqual(parseCoordinates('https://www.google.com/maps/search/?api=1&query=6.1732244%2C-75.62967'), ok);
+});
+
+test('coordenadas: lo que no es un par válido no cuenta (direcciones, números sueltos, fuera de rango)', () => {
+  for (const t of ['Samaria Apartamentos', 'Cra. 65 #36-61', '65 36', '6, -75', '95.5, -75.6', '6.1, -190.5', '', null]) assert.equal(parseCoordinates(t), null, String(t));
+});
+
+test('coordenadas: grados, minutos y segundos como los muestra Google Maps', () => {
+  const r = parseCoordinates('8°13\'31.2"S 34°56\'34.7"W');
+  assert.ok(Math.abs(r.lat - -8.2253333) < 1e-6 && Math.abs(r.lng - -34.9429722) < 1e-6, JSON.stringify(r));
+  const n = parseCoordinates('6°10\'23.6"N 75°37\'46.8"W');
+  assert.ok(n.lat > 6.17 && n.lat < 6.18 && n.lng < -75.62 && n.lng > -75.63, JSON.stringify(n));
+  assert.ok(parseCoordinates('34°56\'34.7"W 8°13\'31.2"S').lat < -8, 'longitud primero también');
+  assert.equal(parseCoordinates('8°13\'31.2"S 8°13\'31.2"N'), null);
+  assert.equal(parseCoordinates('95°13\'31.2"S 34°56\'34.7"W'), null);
 });

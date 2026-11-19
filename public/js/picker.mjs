@@ -101,7 +101,7 @@ export function buildList({ anchor, known = [], nearby = [], typed = '', adjuste
 export function selectionSummary(sel) {
   if (!sel) return { title: 'Nada elegido', sub: 'Toca el mapa, busca un nombre o usa Mi ubicación.' };
   if (sel.kind === 'point') {
-    const where = sel.source === 'gps' ? 'Tu ubicación' : sel.source === 'saved' ? 'Ubicación guardada' : sel.source === 'recent' ? 'Lugar reciente' : 'Punto del mapa';
+    const where = sel.source === 'gps' ? 'Tu ubicación' : sel.source === 'saved' ? 'Ubicación guardada' : sel.source === 'recent' ? 'Lugar reciente' : sel.source === 'coords' ? 'Coordenadas de Google Maps' : 'Punto del mapa';
     return {
       title: sel.name.trim() || where,
       sub: `${sel.name.trim() ? `${where} · ` : ''}${formatCoords(sel.lat, sel.lng)}${sel.accuracy ? ` · ±${Math.max(5, Math.round(sel.accuracy))} m` : ''}${sel.adjusted ? ' · posición ajustada' : ''}`,
