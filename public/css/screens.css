@@ -396,7 +396,7 @@ main:focus-visible { outline: none; }
 .pay-effect.ok .ic { flex: none; width: 22px; height: 22px; color: var(--pos); }
 .pay-effect.warn { background: var(--warn-bg); color: var(--warn-text); font-weight: 600; }
 .pay-sheet .fsub .flab { margin-bottom: 8px; }
-/* Ajustes, Espacios (administrador): filas como las de Viajes, que pasan los botones abajo si no caben, y el código recién creado */
+/* Espacios, en la pantalla de Administración: filas como las de Viajes, que pasan los botones abajo si no caben, y el código recién creado */
 .space-row { flex-wrap: wrap; }
 .space-row > span:first-child { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
 .space-acts { display: flex; flex-wrap: wrap; gap: 8px; }

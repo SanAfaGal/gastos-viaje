@@ -540,7 +540,7 @@ test('renombrar: un espacio de datos y quien no es administración reciben 404',
   assert.deepEqual(despues, antes);
 });
 
-test('text() con un nombre que no es cadena da 400: al crear un espacio', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+test('createSpace: crear un espacio con un nombre que no es cadena da 400 y no escribe nada',() => conEntorno({ admin: ADMIN, app: APP }, async () => {
   const db = await conDatos();
   const antes = await fotoDeTablas(db);
   for (const name of [123, 0, true, {}, [], ['Hola'], null, undefined]) {

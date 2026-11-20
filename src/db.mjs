@@ -94,8 +94,8 @@ async function upgradeTrips(db) {
 }
 
 // Espacios: personas, viajes y medios de pago pertenecen a un espacio. Las bases anteriores (y el viaje inicial que
-// acaba de crear upgradeTrips) pasan al espacio administrador. Es idempotente: corre en cada arranque, y el
-// INSERT OR IGNORE evita duplicar al administrador si dos instancias arrancan a la vez.
+// acaba de crear upgradeTrips) pasan a Principal (id space-admin, la columna is_admin es solo historia). Es idempotente:
+// corre en cada arranque, y el INSERT OR IGNORE evita duplicar Principal si dos instancias arrancan a la vez.
 async function upgradeSpaces(db) {
   const tables = ['people', 'trips', 'payment_methods'];
   for (const table of tables) {

@@ -26,7 +26,8 @@ export function resetSpaces() {
   spaceOpen = false;
   renaming = null;
 }
-// Carga la lista al abrir la administración y tras cada acción. 404 = este servidor no tiene administración (sin APP_PASSCODE).
+// Carga la lista al abrir la administración y tras cada acción. 404 = este servidor no tiene
+// administración (sin ADMIN_PASSCODE). Hoy 'na' casi no puede darse: sin ADMIN_PASSCODE nadie llega a esta pantalla.
 export async function loadSpaces() {
   if (!isAdmin() || status === 'loading') return;
   status = 'loading';

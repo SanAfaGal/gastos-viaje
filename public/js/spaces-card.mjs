@@ -1,4 +1,4 @@
-// Tarjeta "Espacios" (solo la ve el administrador de los datos). HTML puro: no toca `document`, así que se prueba en Node.
+// Tarjeta "Espacios" (solo la ve la administración, que gestiona los espacios sin ver sus datos). HTML puro: no toca `document`, así que se prueba en Node.
 // `esc` lo pasa quien llama (ui.js necesita el navegador). `spaces` es null mientras carga; `shown` es el código recién
 // creado o regenerado ({ name, code }), que se muestra una sola vez.
 const dayOf = (iso) => String(iso ?? '').slice(0, 10);
