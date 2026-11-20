@@ -11,6 +11,7 @@ const CODE_B = 'DDDD-EEEE-FFFF';
 const DIA = '2026-11-14';
 
 delete process.env.APP_PASSCODE;
+delete process.env.ADMIN_PASSCODE;
 delete process.env.TURSO_DATABASE_URL;
 delete process.env.TURSO_AUTH_TOKEN;
 

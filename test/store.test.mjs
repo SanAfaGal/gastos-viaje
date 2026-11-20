@@ -6,6 +6,7 @@ import { handle } from '../src/handlers.mjs';
 
 // Las pruebas no dependen del entorno: Netlify define APP_PASSCODE y TURSO_* al construir.
 delete process.env.APP_PASSCODE;
+delete process.env.ADMIN_PASSCODE;
 delete process.env.TURSO_DATABASE_URL;
 delete process.env.TURSO_AUTH_TOKEN;
 

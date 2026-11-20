@@ -6,6 +6,7 @@ import { isAllowedMapUrl, resolveMapLink } from '../src/maplink.mjs';
 import { googleMapsUrl, isBareShortPlusCode, isShortMapLink, parseCoordinates, parsePlusCode, shortPlusCodeWithPlace } from '../public/js/geosearch.mjs';
 
 delete process.env.APP_PASSCODE;
+delete process.env.ADMIN_PASSCODE;
 delete process.env.TURSO_DATABASE_URL;
 delete process.env.TURSO_AUTH_TOKEN;
 

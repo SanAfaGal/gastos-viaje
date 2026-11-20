@@ -10,6 +10,7 @@ import { _resetFailures } from '../src/rates.mjs';
 import { addDays, todayStr } from '../public/js/money.mjs';
 
 delete process.env.APP_PASSCODE;
+delete process.env.ADMIN_PASSCODE;
 delete process.env.TURSO_DATABASE_URL;
 delete process.env.TURSO_AUTH_TOKEN;
 

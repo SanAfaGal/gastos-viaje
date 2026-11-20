@@ -12,6 +12,7 @@ import { getDb, openFileDb } from '../src/db.mjs';
 import api from '../netlify/functions/api.mjs';
 
 delete process.env.APP_PASSCODE;
+delete process.env.ADMIN_PASSCODE;
 delete process.env.TURSO_DATABASE_URL;
 delete process.env.TURSO_AUTH_TOKEN;
 

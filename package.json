@@ -7,7 +7,7 @@
   "engines": { "node": ">=22.9" },
   "scripts": {
     "dev": "node --env-file-if-exists=.env server.mjs",
-    "test": "node --test --disable-warning=ExperimentalWarning"
+    "test": "node --import ./scripts/entorno-limpio.mjs --test --disable-warning=ExperimentalWarning"
   },
   "dependencies": {
     "@libsql/client": "0.18.0"
