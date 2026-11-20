@@ -4,7 +4,7 @@ import { setCurrencies, toHome, todayStr } from './money.mjs';
 import { currencyByCode, DEFAULT_SETTINGS } from './currencies.mjs';
 import { compareExpenses } from './order.mjs';
 
-const K = { state: 'bg_state2', queue: 'bg_queue', pass: 'bg_pass', open: 'bg_open', rates: 'bg_rates2', hist: 'bg_hist', trip: 'bg_trip' };
+const K = { state: 'bg_state2', queue: 'bg_queue', pass: 'bg_pass', open: 'bg_open', rates: 'bg_rates2', hist: 'bg_hist', trip: 'bg_trip', space: 'bg_space' };
 
 function read(key, fallback) {
   try {
@@ -28,7 +28,7 @@ export const uuid = () =>
 export const listeners = new Set();
 const notify = () => listeners.forEach((fn) => fn());
 
-const getPass = () => localStorage.getItem(K.pass) ?? '';
+export const getPass = () => localStorage.getItem(K.pass) ?? '';
 
 // Sin código guardado y sin saber que este servidor abre sin pedirlo, se muestra el acceso desde el primer
 // instante en vez de dibujar la app vacía y esperar al 401. K.open = '1': el servidor respondió sin código.
@@ -106,7 +106,8 @@ async function request(method, path, body, extraHeaders = {}) {
 
 // ---------- estado ----------
 
-let server = read(K.state, { today: todayStr(), trips: [], people: [], payment_methods: [], expenses: [], payments: [] });
+const emptyState = () => ({ today: todayStr(), trips: [], people: [], payment_methods: [], expenses: [], payments: [] });
+let server = read(K.state, emptyState());
 let serverJson = JSON.stringify(server); // para saber si lo que llega del servidor cambió algo
 // Cola guardada por la primera versión (solo BRL): mismos datos con el nombre de campo nuevo.
 let queue = read(K.queue, []).map((o) => {
@@ -148,6 +149,68 @@ export const activeTrip = () => tripById(activeId) ?? tripsList()[0];
 const pairKey = (trip = activeTrip(), currency = trip.dest) => `${currency ?? trip.dest}-${trip.home}`;
 const applySettings = () => setCurrencies(activeTrip().dest, activeTrip().home);
 applySettings();
+
+// ---------- espacios ----------
+// Cada código abre su propio espacio. Si el celular pasa a otro espacio, su copia local (estado, cola, tasas,
+// historial y viaje activo) es del anterior y se descarta: los datos nunca se mezclan en un mismo celular.
+
+function savedSpaceId() {
+  try {
+    return localStorage.getItem(K.space);
+  } catch {
+    return null;
+  }
+}
+
+const hasLocalData = () =>
+  queue.length > 0 || Object.keys(rates).length > 0 ||
+  ['trips', 'people', 'payment_methods', 'expenses', 'payments'].some((k) => server[k]?.length > 0);
+
+// El espacio anterior no se conoce (copia de antes de los espacios): esos datos eran del administrador, así
+// que solo se descartan al entrar con un espacio que no lo es.
+const changesSpace = (space) => {
+  const prev = savedSpaceId();
+  return prev ? prev !== space.id : !space.is_admin && hasLocalData();
+};
+
+// Gastos sin enviar que se perderían al entrar en `space`.
+export function discardCount(space) {
+  return space?.id && changesSpace(space) ? queue.length : 0;
+}
+
+// Devuelve true si descartó la copia local. Antes de llamarla, avisar con `discardCount` si hay gastos en cola.
+export function adoptSpace(space) {
+  if (!space?.id) return false; // un servidor viejo no manda espacio: no hay con qué comparar
+  const reset = changesSpace(space);
+  if (reset) {
+    // El módulo lee todo esto al importarse, así que se limpian la memoria y el almacenamiento a la vez.
+    server = emptyState();
+    serverJson = JSON.stringify(server);
+    queue = [];
+    rates = {};
+    activeId = null;
+    stateEtag = null; // el 304 de un estado del espacio anterior no debe tapar el del nuevo
+    for (const k of [K.state, K.queue, K.rates, K.hist, K.trip]) {
+      try {
+        localStorage.removeItem(k);
+      } catch {
+        /* sin almacenamiento: queda solo la memoria, ya limpia */
+      }
+    }
+  }
+  if (savedSpaceId() !== space.id) {
+    try {
+      localStorage.setItem(K.space, space.id);
+    } catch {
+      /* sin almacenamiento */
+    }
+  }
+  if (reset) {
+    applySettings();
+    notify();
+  }
+  return reset;
+}
 
 export function setActiveTrip(id) {
   activeId = id;
@@ -227,6 +290,8 @@ export async function refresh() {
       if (!wasOnline) notify();
       return true;
     }
+    const etag = stateEtag; // adoptSpace lo borra si cambió el espacio, pero este estado ya es del espacio nuevo
+    if (adoptSpace(fresh.space)) stateEtag = etag;
     const json = JSON.stringify(fresh);
     if (json !== serverJson) {
       server = fresh;
@@ -325,6 +390,7 @@ export async function flush() {
   let sent = 0;
   try {
     for (const op of [...queue]) {
+      if (!queue.includes(op)) continue; // la cola se descartó mientras tanto (cambio de espacio)
       try {
         if (op.op === 'save') await request('PUT', `/api/expenses/${op.id}`, op.expense);
         else if (op.op === 'order') await request('POST', '/api/order', { ids: op.ids });
