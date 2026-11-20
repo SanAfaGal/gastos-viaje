@@ -17,7 +17,8 @@
 // esa moneda y la tasa es la de ese par hacia la moneda de casa (1 si ya es la de casa).
 //
 // Espacios: cada código de acceso abre un espacio separado, con sus propias personas, viajes y medios de pago. Siempre
-// existe el espacio administrador (is_admin = 1, sin code_hash) que agrupa lo creado antes de los espacios. code_hash es
+// existe el espacio Principal (id space-admin) que agrupa lo creado antes de los espacios. is_admin y ese id son
+// históricos: is_admin ya no decide permisos (la administración no es un espacio y no tiene fila aquí). code_hash es
 // el resumen del código (nunca el código) y es único. active = 0 deja el espacio sin acceso sin borrar sus datos.
 //
 // No usar punto y coma dentro de los comentarios de este archivo: el esquema se parte por punto y coma.

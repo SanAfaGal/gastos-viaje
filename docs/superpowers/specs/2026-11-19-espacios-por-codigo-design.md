@@ -1,5 +1,7 @@
 # Espacios por código: grupos separados en la misma app
 
+Nota: el apartado del administrador de este diseño fue reemplazado por `2026-11-19-administrador-separado-design.md` (el administrador ya no es el espacio Principal).
+
 Fecha: 2026-11-19. Estado: pendiente de aprobación.
 
 ## Intención

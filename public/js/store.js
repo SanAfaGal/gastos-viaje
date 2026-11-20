@@ -64,7 +64,7 @@ let stateEtag = null; // versión del estado que ya tenemos: el servidor respond
 
 // Con un código guardado que aún no se comprobó en esta carga, solo sale UNA petición; las demás esperan su resultado.
 // Cada intento con código cuenta para el límite del servidor (10 por red cada 15 minutos) y una recarga lanza varias
-// peticiones a la vez: con el código ya muerto (se cambió APP_PASSCODE, se regeneró o se desactivó el espacio) eso
+// peticiones a la vez: con el código ya muerto (se regeneró el código o se desactivó el espacio) eso
 // bloqueaba a la persona sin que hubiera escrito nada. Si la primera recibe 401, las demás ni salen.
 let checkedPass = null; // último código que el servidor aceptó en esta carga
 let checking = null; // { pass, done }: la petición que está comprobando el código guardado
@@ -574,8 +574,9 @@ export async function restoreBackup(data, dry) {
   if (!dry) await refresh();
   return out;
 }
-// Espacios (solo el administrador; sin APP_PASSCODE el servidor responde 404). No refrescan el estado: no cambian lo que
-// ve el administrador. El código en claro solo viene al crear y al regenerar: quien llama no debe guardarlo.
+// Espacios (solo con ADMIN_PASSCODE: con otro código, o sin esa variable, el servidor responde 404). No refrescan el
+// estado: no cambian lo que ve el administrador. El código en claro solo viene al crear y al regenerar: quien llama no
+// debe guardarlo.
 export const listSpaces = () => request('GET', '/api/spaces');
 export const createSpace = (name) => request('POST', '/api/spaces', { name });
 export const regenerateSpace = (id) => request('POST', `/api/spaces/${encodeURIComponent(id)}/regenerate`);

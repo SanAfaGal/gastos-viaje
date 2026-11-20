@@ -25,7 +25,7 @@ npm run dev
 
 Abre http://localhost:3000. Los datos quedan en `data/gastos.db`.
 
-La configuración local está en `.env` (copia `.env.example` si no existe): puerto, archivo de la base, `HOST` y un código de acceso opcional. No pongas ahí `TURSO_*`, porque la app local usaría la base de producción.
+La configuración local está en `.env` (copia `.env.example` si no existe): puerto, archivo de la base, `HOST` y los códigos de acceso (opcionales; ver "Varios grupos (espacios)"). No pongas ahí `TURSO_*`, porque la app local usaría la base de producción.
 
 Para abrirlo desde el celular en la misma red wifi: pon `HOST=0.0.0.0` en `.env` y entra a `http://IP-DE-TU-PC:3000`. Por ser `http`, el celular no puede instalarla ni usarla sin internet así; eso requiere la versión desplegada (https).
 
@@ -37,18 +37,35 @@ Para abrirlo desde el celular en la misma red wifi: pon `HOST=0.0.0.0` en `.env`
 4. Botón +: registra gastos. Puedes poner el día de ayer o antier.
 5. Inicio y Cuentas: el resumen del viaje, el saldo por persona y los pagos que dejan todo en cero.
 
-En Ajustes, lo que afecta solo al viaje activo (mapa, actualizar tasas, exportar CSV) está arriba, bajo "Este viaje"; lo común a todos los viajes (viajes, personas, medios de pago, apariencia, espacios (solo el administrador), sincronizar, respaldo, restaurar y código de acceso) está abajo, bajo "Global".
+En Ajustes, lo que afecta solo al viaje activo (mapa, actualizar tasas, exportar CSV) está arriba, bajo "Este viaje"; lo común a todos los viajes (viajes, personas, medios de pago, apariencia, sincronizar, respaldo, restaurar y código de acceso) está abajo, bajo "Global".
 
 ## Varios grupos (espacios)
 
-Cada grupo (una familia, unos amigos) tiene su propio código y sus propios viajes, personas, medios de pago, abonos y gastos; nadie ve los datos de otro grupo. El administrador los gestiona en Ajustes, Espacios: crear un espacio, generar un código nuevo o desactivarlo.
+Cada grupo (una familia, unos amigos) es un espacio con su propio código y sus propios viajes, personas, medios de pago, abonos y gastos; nadie ve los datos de otro espacio. El espacio del dueño se llama **Principal** y es uno más: se usa con su código, igual que los demás. Aparte hay un **administrador**, que solo gestiona los espacios y no ve ningún dato.
 
-- La sección Espacios y las rutas `/api/spaces` solo existen si el servidor tiene `APP_PASSCODE`. Sin él la app queda abierta y no hay rutas de administrador, que es el caso del desarrollo local salvo que lo pongas en `.env`.
-- `APP_PASSCODE` es el código del administrador y también la vía de recuperación si lo pierdes: cámbialo en Netlify. Como da acceso a la administración y alguien podría intentar adivinarlo (a ritmo limitado: 10 intentos por red cada 15 minutos), usa uno **largo y aleatorio**, por ejemplo `openssl rand -base64 24`, no una palabra ni un número corto.
-- El código de cada grupo se muestra una sola vez, al crearlo o regenerarlo; el servidor guarda solo su hash.
-- Regenerar un código hace que el anterior deje de funcionar de inmediato.
-- Desactivar un espacio impide que entre, pero conserva sus datos; se puede reactivar.
-- **Antes de desplegar esta versión haz un respaldo JSON** (Ajustes, Respaldo): la migración de la base agrega columnas y una tabla nueva. Haz también una copia completa en Turso, que incluye todos los espacios (el respaldo JSON trae solo el espacio de quien lo descarga): `turso db shell gastos-viaje .dump > respaldo-antes-de-espacios.sql`.
+- **`ADMIN_PASSCODE`** es el código del administrador. Ponlo **largo y aleatorio** (por ejemplo `openssl rand -base64 24`), distinto de `APP_PASSCODE` y de cualquier código de espacio: alguien podría intentar adivinarlo (a ritmo limitado: 10 intentos por red cada 15 minutos). Sin esta variable no hay administración: la pantalla de Administración y las rutas `/api/spaces` no existen. Si coincide con `APP_PASSCODE`, gana el administrador y ese código ya no abre Principal hasta que el administrador le regenere el código.
+- Al entrar con `ADMIN_PASSCODE` la app muestra solo la pantalla de Administración. Ahí se puede crear, renombrar, regenerar el código y desactivar o reactivar cualquier espacio, Principal incluido. No muestra datos: para ver un espacio hay que tocar "Cambiar código" y escribir el código de ese espacio.
+- El código de cada espacio se muestra una sola vez, al crearlo o regenerarlo; el servidor guarda solo su hash. Al compararlo se ignoran mayúsculas, guiones, espacios y signos.
+- Regenerar un código hace que el anterior deje de funcionar de inmediato. Un celular con un código que dejó de servir vuelve a la pantalla de acceso, y sus gastos sin enviar se conservan hasta que se vuelva a entrar al mismo espacio.
+- Desactivar un espacio impide que entre pero conserva sus datos, y se puede reactivar. Quien escribe el código de un espacio desactivado ve "Este espacio está desactivado. Habla con quien te dio el código." (y eso no gasta intentos).
+- **`APP_PASSCODE`** ya no es una clave permanente: solo **siembra** el código de Principal. La primera vez que alguien entra con ella, su hash queda guardado como código de Principal (si Principal aún no tenía uno); desde entonces ese código se reconoce como el de cualquier espacio y la variable se puede borrar de Netlify. Si solo `APP_PASSCODE` está definida (sin `ADMIN_PASSCODE`) la app sigue pidiendo código: nunca queda abierta.
+- **Cambiar o borrar `APP_PASSCODE` no revoca el código ya sembrado**: su hash queda guardado en la base. Para quitarle el acceso a un código viejo o filtrado hay que regenerar el código de Principal en Administración (todos los celulares tendrán que escribir el nuevo una vez). Además, `APP_PASSCODE` suele ser una clave que escribió una persona, y el código de un espacio se guarda con un hash sin sal, pensado para códigos aleatorios de 12 caracteres. Por eso conviene regenerar Principal a un código aleatorio en cuanto compruebes que todo funciona.
+- Restaurar un respaldo JSON en otro espacio (con otro código) copia las filas con ids nuevos, sin tocar las que ya tiene ese espacio.
+
+### Pasar a producción desde la versión de un solo código
+
+En este orden:
+
+1. Haz un respaldo JSON (Ajustes, Respaldo) y una copia completa en Turso, que incluye todos los espacios (el respaldo JSON trae solo el espacio de quien lo descarga): `turso db shell gastos-viaje .dump > respaldo-antes-del-administrador.sql`.
+2. En Netlify pon `ADMIN_PASSCODE`.
+3. Despliega dejando `APP_PASSCODE` como está.
+4. Entra una vez con el código de siempre desde el celular del dueño: eso siembra el código de Principal.
+5. Opcional: borra `APP_PASSCODE` de Netlify. **No lo borres antes del paso 4**: si nadie ha entrado todavía, el dueño se queda sin código (el administrador lo arregla regenerando el código de Principal y dándoselo).
+6. Entra con `ADMIN_PASSCODE` y comprueba que Principal aparece en la lista.
+
+### Desarrollo local
+
+Sin ninguna de las dos variables la app queda abierta (todos entran a Principal) y no hay administración. Para probar la administración en local pon en `.env` un `ADMIN_PASSCODE` y un `APP_PASSCODE` distintos.
 
 ## Desplegar en Netlify (con Turso)
 
@@ -66,7 +83,8 @@ Netlify no guarda archivos, por eso en línea la base es Turso (SQLite en la nub
 3. En Netlify, Site configuration, Environment variables:
    - `TURSO_DATABASE_URL`
    - `TURSO_AUTH_TOKEN`
-   - `APP_PASSCODE`: código del administrador (y necesario para la sección Espacios). La URL de Netlify es pública, así que ponlo siempre, largo y aleatorio.
+   - `ADMIN_PASSCODE`: código del administrador (largo y aleatorio). La URL de Netlify es pública, así que ponlo siempre. Sin él no hay administración de espacios.
+   - `APP_PASSCODE`: solo si vienes de la versión de un solo código: siembra el código de Principal la primera vez que alguien entra con él y después se puede borrar (ver "Pasar a producción" más arriba).
 4. Abrir la URL en el celular y “Agregar a pantalla de inicio”.
 
 Para llevar los datos que ya tengas en local a Turso: `turso db create gastos-viaje --from-file data/gastos.db`.
