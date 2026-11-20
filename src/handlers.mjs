@@ -9,6 +9,7 @@ import { dumpBackup, restoreBackup } from './backup.mjs';
 import { MapLinkError, resolveMapLink } from './maplink.mjs';
 import { HttpError, fail, text } from './errors.mjs';
 import { checkAuth } from './auth.mjs';
+import { createSpace, listSpaces, regenerateSpace, setSpaceActive } from './spaces.mjs';
 import { assertNotForeign, owns, ownedIds } from './scope.mjs';
 
 // Topes para que un dato absurdo no desborde los cálculos (cents * rate debe quedar bajo 2^53).
@@ -591,6 +592,17 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     // restaura (con ?dry=1 solo cuenta).
     if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db, sp));
     if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail, sp }));
+
+    // Administración de espacios: solo el administrador. Para los demás la ruta no existe (se decide antes de leer
+    // el cuerpo o tocar la base) y no pueden saber si existe.
+    if (resource === 'spaces') {
+      if (!space.is_admin) fail(404, 'Ruta no encontrada');
+      const action = parts[2];
+      if (method === 'GET' && !id) return ok(await listSpaces(db));
+      if (method === 'POST' && !id) return ok(await createSpace(db, body), 201);
+      if (method === 'POST' && id && action === 'regenerate' && parts.length === 3) return ok(await regenerateSpace(db, id));
+      if (method === 'PUT' && id && parts.length === 2) return ok(await setSpaceActive(db, id, body));
+    }
 
     const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense], payments: [savePayment, deletePayment] };
     if (writers[resource]) {
