@@ -67,3 +67,19 @@ test('setPass("") (cerrar sesión) borra la marca de abierto', async () => {
   store.setPass('');
   assert.equal(localStorage.getItem('bg_open'), null);
 });
+
+test('un 500 en la primera visita no marca el servidor como abierto', async () => {
+  const store = await arrancar(8);
+  globalThis.fetch = responder(500);
+  await assert.rejects(store.ping(), { status: 500 });
+  assert.equal(store.net.needsLogin, true);
+  assert.equal(localStorage.getItem('bg_open'), null);
+});
+
+test('un 429 sin código tampoco marca el servidor como abierto', async () => {
+  const store = await arrancar(9);
+  globalThis.fetch = responder(429);
+  await assert.rejects(store.ping(), { status: 429 });
+  assert.equal(store.net.needsLogin, true);
+  assert.equal(localStorage.getItem('bg_open'), null);
+});

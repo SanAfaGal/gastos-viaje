@@ -22,7 +22,9 @@ let online = true;
 let puts = []; // envíos de gastos que el servidor aceptó
 let retener = null; // (ruta, código) => promesa | null: la respuesta de esa petición llega cuando la promesa se cumple
 let fallar = null; // (ruta, código) => true: el servidor responde 500
+let pedidos = 0; // peticiones que salieron del celular
 globalThis.fetch = async (url, opts = {}) => {
+  pedidos += 1;
   if (!online) throw new TypeError('network down');
   const u = new URL(url, 'http://x');
   const code = opts.headers?.['x-passcode'];
@@ -69,11 +71,13 @@ async function arrancar(caso, antes = () => {}) {
   puts = [];
   retener = null;
   fallar = null;
+  pedidos = 0;
   antes();
   return import(`../public/js/store.js?caso=${caso}`);
 }
 
-// Lo mismo que hace la rama de acceso de events.js cuando no hay nada que confirmar.
+// Entra con un código de forma directa (guardarlo, comprobarlo, adoptar su espacio y leer el estado), sin pasar por
+// trySwitchSpace: sirve para dejar el celular en un espacio antes de cada caso. No es lo que hace events.js.
 async function entrar(store, code) {
   store.setPass(code);
   const info = await store.ping();
@@ -413,6 +417,9 @@ test('un refresh con el código anterior que llega después del cambio no deshac
 
   soltar(); // llega la respuesta del espacio A
   await viejo;
+  assert.equal(store.getState().trip.id, 'trip-b', 'justo al llegar la respuesta vieja');
+  assert.equal(mem.get('bg_space'), 'b');
+  assert.equal(store.net.needsLogin, false);
   await store.refresh();
   const s = store.getState();
   assert.equal(s.trip.id, 'trip-b');
@@ -420,4 +427,54 @@ test('un refresh con el código anterior que llega después del cambio no deshac
   assert.equal(mem.get('bg_space'), 'b');
   assert.ok(!mem.get('bg_state2').includes('Yo'));
   assert.ok(!mem.get('bg_state2').includes('Nuevo'));
+}));
+
+// ---------- código muerto: no gasta intentos ni cierra una sesión nueva ----------
+
+test('con la sesión cerrada por un código que ya no sirve, sincronizar no hace ninguna petición', () => conProceso(async () => {
+  const store = await arrancar(19);
+  await prepararA(store);
+  await db.run("UPDATE spaces SET code_hash = ? WHERE id = 'a'", [hashCode('CCCC-CCCC-CCCC')]); // el administrador lo regeneró
+  await store.flush();
+  assert.equal(store.net.needsLogin, true);
+  assert.equal(mem.get('bg_pass'), CODE_A, 'el código viejo sigue guardado');
+
+  pedidos = 0;
+  await store.syncNow();
+  await store.syncNow();
+  assert.equal(pedidos, 0, 'cada petición con el código viejo contaría como un intento fallido');
+  assert.equal(store.pendingCount(), 1, 'la cola sigue intacta');
+}));
+
+test('sin código guardado (primera visita), sincronizar sí pregunta al servidor si está abierto', () => conProceso(async () => {
+  const store = await arrancar(20);
+  assert.equal(store.net.needsLogin, true);
+  await assert.rejects(store.syncNow(), { status: 401 }); // sin código: no cuenta como intento en el servidor
+  assert.ok(pedidos > 0);
+  assert.equal(store.net.needsLogin, true, 'este servidor pide código');
+}));
+
+test('un 401 tardío del código anterior no cierra la sesión recién abierta con otro código', () => conProceso(async () => {
+  const store = await arrancar(21);
+  await prepararA(store);
+  await db.run("UPDATE spaces SET active = 0 WHERE id = 'a'"); // la respuesta a la petición vieja será 401
+  const soltar = retenerRespuesta((ruta, code) => ruta === '/api/ping' && code === CODE_A);
+  const viejo = store.ping(); // sale con el código A
+
+  assert.deepEqual(await store.trySwitchSpace(CODE_B, () => true), { switched: true });
+  assert.equal(store.net.needsLogin, false);
+  let avisos = 0;
+  const oyente = () => { avisos += 1; };
+  store.listeners.add(oyente);
+  try {
+    soltar();
+    await assert.rejects(viejo, { status: 401 });
+  } finally {
+    store.listeners.delete(oyente);
+  }
+  assert.equal(store.net.needsLogin, false, 'el 401 era del código anterior');
+  assert.equal(avisos, 0, 'no se redibuja (ni se muestra "Código incorrecto")');
+  assert.equal(mem.get('bg_pass'), CODE_B);
+  await store.refresh();
+  assert.equal(store.getState().trip.id, 'trip-b');
 }));

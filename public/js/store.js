@@ -87,11 +87,15 @@ async function request(method, path, body, extraHeaders = {}) {
   // Si el código cambió mientras tanto, esta respuesta es del espacio anterior: su versión no se guarda.
   if (path === '/api/state' && res.ok && getPass() === pass) stateEtag = res.headers?.get?.('etag') ?? null;
   if (res.status === 401) {
-    setOpenMark(false);
-    net.needsLogin = true;
-    notify();
-  } else if (!getPass()) {
-    // Respondió sin que mandáramos código: este servidor está abierto.
+    // Solo si el código no cambió mientras tanto: un 401 tardío del código anterior no cierra la sesión nueva.
+    if (getPass() === pass) {
+      setOpenMark(false);
+      net.needsLogin = true;
+      notify();
+    }
+  } else if (res.ok && !pass && !getPass()) {
+    // Respondió bien sin que mandáramos código: este servidor está abierto. Un 5xx (por ejemplo durante un
+    // despliegue) no dice nada de eso.
     setOpenMark(true);
     if (net.needsLogin) {
       net.needsLogin = false;
@@ -403,7 +407,8 @@ export async function flush() {
         queue = queue.filter((o) => o !== op);
         sent += 1;
       } catch (err) {
-        if (err.offline || err.status === 401) break;
+        // Sin red, sin acceso, límite de intentos o falla del servidor: el gasto no es inválido, se reintenta luego.
+        if (err.offline || err.status === 401 || err.status === 429 || err.status >= 500) break;
         errors.push(err.message);
         queue = queue.filter((o) => o !== op); // dato inválido: no reintentar para siempre
       }
@@ -415,6 +420,17 @@ export async function flush() {
   if (sent || errors.length) await refresh();
   notify();
   return { sent, errors };
+}
+
+// Sincronización de fondo (cada minuto y al volver a la app): envía la cola, lee el estado y la tasa de hoy.
+// Con la sesión cerrada y un código guardado, ese código ya no sirve: cada petición contaría como un intento
+// fallido y acabaría bloqueando el acceso de este celular (y sumando al límite global), así que no se pide nada
+// hasta que se escriba un código. Sin código guardado sí se pregunta: así se sabe si el servidor está abierto.
+export async function syncNow() {
+  if (net.needsLogin && getPass()) return;
+  await flush();
+  await refresh();
+  fetchRate(todayStr());
 }
 
 // ---------- personas y medios de pago (requieren internet) ----------

@@ -1,5 +1,4 @@
 // Rutas, dibujo de la pantalla actual, cambio de viaje, estado de conexión y sincronización.
-import { todayStr } from './money.mjs';
 import * as store from './store.js';
 import { icon } from './icons.mjs';
 import { $status, $title, $tripBtn, $tripSwitch, $view, esc, toast } from './ui.js';
@@ -149,9 +148,7 @@ const formActive = () => isFormRoute() && draft && !store.net.needsLogin;
 
 export async function sync() {
   try {
-    await store.flush();
-    await store.refresh();
-    store.fetchRate(todayStr());
+    await store.syncNow();
   } catch { /* 401 o sin red: el estado ya lo muestra */ }
   updateStatus();
 }

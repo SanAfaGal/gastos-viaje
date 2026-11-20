@@ -3,7 +3,7 @@ import * as store from './store.js';
 import { busy, esc, toast } from './ui.js';
 import { ctx } from './shared.js';
 import { render } from './router.js';
-import { spacesCardHtml } from './spaces-card.mjs';
+import { spaceName, spacesCardHtml } from './spaces-card.mjs';
 
 let spaces = null; // null = cargando; arreglo = lista
 let status = 'idle'; // idle | loading | ready | na (el servidor no ofrece la administración) | error
@@ -73,7 +73,7 @@ export async function submitSpace(name) {
   render(); // cierra el diálogo y muestra el código; ensureSpaces vuelve a cargar la lista
 }
 
-const nameOf = (id) => spaces?.find((s) => s.id === id)?.name ?? '';
+const nameOf = (id) => spaceName(spaces, id);
 async function guarded(fn) {
   try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error'); }
 }

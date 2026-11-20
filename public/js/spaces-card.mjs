@@ -3,6 +3,10 @@
 // creado o regenerado ({ name, code }), que se muestra una sola vez.
 const dayOf = (iso) => String(iso ?? '').slice(0, 10);
 
+// Nombre de un espacio para los textos de las acciones. Si la lista aún no cargó (o no lo trae), un texto genérico
+// en vez de comillas vacías.
+export const spaceName = (spaces, id) => spaces?.find((s) => s.id === id)?.name || 'este espacio';
+
 function codeBlock(shown, canShare, esc) {
   return `<div class="code-box" role="status">
       <p><b>Código de "${esc(shown.name)}"</b></p>

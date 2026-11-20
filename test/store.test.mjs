@@ -19,10 +19,15 @@ globalThis.localStorage = {
 const db = await openMemoryDb();
 let online = true;
 let calls = 0;
+let forzar = null; // (método, ruta) => estado: el servidor responde ese error sin procesar la petición
+let enviados = []; // gastos que el servidor guardó (PUT aceptados)
 globalThis.fetch = async (url, opts = {}) => {
   if (!online) throw new TypeError('network down');
   calls += 1;
   const u = new URL(url, 'http://x');
+  const status = forzar?.(opts.method ?? 'GET', u.pathname);
+  if (status) return { ok: false, status, json: async () => (status === 429 ? { error: 'Demasiados intentos. Espera 15 minutos.' } : null) };
+  if (opts.method === 'PUT' && u.pathname.startsWith('/api/expenses/')) enviados.push(u.pathname);
   const out = await handle({
     method: opts.method ?? 'GET',
     path: u.pathname,
@@ -173,4 +178,43 @@ test('refresh solo avisa a la pantalla cuando lo recibido cambió algo', async (
   } finally {
     store.listeners.delete(oyente);
   }
+});
+
+// Error del servidor (5xx, página de error de Netlify) o límite de intentos (429): el gasto no es inválido, solo no
+// se pudo guardar ahora. Se queda en la cola y se envía una sola vez cuando el servidor vuelve.
+for (const status of [500, 502, 429]) {
+  test(`un ${status} al enviar la cola no descarta el gasto: se envía una sola vez después`, async () => {
+    store.setActiveTrip('trip-1');
+    const id = `srv-${status}`;
+    online = false;
+    await store.saveExpense({ id, date: '2026-11-14', amount_cents: 700, description: '', payment_method_id: 'cash', beneficiary_ids: ['yo'] });
+    online = true;
+    const pend = store.pendingCount();
+    enviados = [];
+    forzar = (method, ruta) => (method === 'PUT' && ruta === `/api/expenses/${id}` ? status : 0);
+    const r = await store.flush();
+    assert.equal(r.sent, 0);
+    assert.deepEqual(r.errors, []);
+    assert.equal(store.pendingCount(), pend, 'el gasto sigue en la cola');
+    assert.ok(JSON.parse(localStorage.getItem('bg_queue')).some((o) => o.id === id), 'y en la copia guardada');
+    assert.ok(store.getState().expenses.find((e) => e.id === id)?.pending);
+
+    forzar = null;
+    await store.flush();
+    await store.flush();
+    assert.equal(store.pendingCount(), 0);
+    assert.deepEqual(enviados, [`/api/expenses/${id}`]);
+    assert.equal((await db.all('SELECT id FROM expenses WHERE id = ?', [id])).length, 1);
+  });
+}
+
+test('un 400 al enviar la cola sí descarta el gasto (dato inválido) y avisa el error', async () => {
+  store.setActiveTrip('trip-1');
+  online = false;
+  await store.saveExpense({ id: 'malo', date: '2026-11-14', amount_cents: 700, description: '', payment_method_id: 'no-existe', beneficiary_ids: ['yo'] });
+  online = true;
+  const r = await store.flush();
+  assert.deepEqual(r.errors, ['El medio de pago no existe']);
+  assert.equal(store.pendingCount(), 0);
+  assert.equal((await db.all("SELECT id FROM expenses WHERE id = 'malo'")).length, 0);
 });

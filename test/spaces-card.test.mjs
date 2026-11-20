@@ -1,7 +1,7 @@
 // La tarjeta "Espacios" de Ajustes: HTML puro (sin DOM), así que se prueba importando solo spaces-card.mjs.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { spacesCardHtml } from '../public/js/spaces-card.mjs';
+import { spaceName, spacesCardHtml } from '../public/js/spaces-card.mjs';
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[ch]);
 const admin = { id: 'sp-admin', name: 'Principal', created_at: '2026-01-05T10:00:00.000Z', active: true, is_admin: true };
@@ -75,4 +75,11 @@ test('con error y sin código solo se ve el aviso de error, sin caja de código 
   assert.match(html, /No se pudo cargar la lista de espacios/);
   assert.doesNotMatch(html, /code-box|copy-code|dismiss-code/);
   assert.doesNotMatch(html, /Familia Gómez/);
+});
+
+test('spaceName: el nombre del espacio, o "este espacio" si la lista no cargó o no lo trae', () => {
+  assert.equal(spaceName([admin, familia], 'sp-1'), 'Familia Gómez');
+  assert.equal(spaceName(null, 'sp-1'), 'este espacio');
+  assert.equal(spaceName([admin], 'sp-1'), 'este espacio');
+  assert.equal(spaceName([{ ...familia, name: '' }], 'sp-1'), 'este espacio');
 });
