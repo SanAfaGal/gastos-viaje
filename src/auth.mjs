@@ -60,8 +60,11 @@ export async function checkAuth(db, passcode, ip) {
   if (mine > MAX_FAILS || all > MAX_GLOBAL) fail(429, 'Demasiados intentos. Espera 15 minutos.');
   const space = isAdminPasscode(passcode) ? await getAdminSpace(db) : await findSpaceByCode(db, passcode);
   if (space) {
-    // acierto: este intento no cuenta contra nadie
-    await db.run('DELETE FROM auth_failures WHERE ip = ?', [key]);
+    // Acierto: este intento no cuenta contra nadie. Solo el código del administrador reinicia el contador de la red;
+    // con el de un espacio se descuenta solo este intento, para que un miembro de un grupo no pueda intercalar
+    // aciertos entre sus intentos de adivinar APP_PASSCODE y reiniciar así su límite.
+    if (space.is_admin) await db.run('DELETE FROM auth_failures WHERE ip = ?', [key]);
+    else await db.run('UPDATE auth_failures SET fails = MAX(fails - 1, 0) WHERE ip = ?', [key]);
     await db.run('UPDATE auth_failures SET fails = MAX(fails - 1, 0) WHERE ip = ?', ['global']);
     return space;
   }
