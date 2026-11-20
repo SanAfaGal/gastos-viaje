@@ -270,6 +270,7 @@ dialog.info .chart { margin-top: 12px; }
 .chip.selbtn .ic.selbtn-ch, .btn .ic.selbtn-ch { margin-right: 0; }
 .sheet-x { display: grid; place-items: center; }
 .sheet-x .ic { width: 20px; height: 20px; margin: 0; }
+.info-btn svg { width: 16px; height: 16px; fill: currentColor; }
 /* Menús desplegables propios (ver select.mjs): el <select> queda oculto y en su lugar sale este botón. */
 .sel-native { position: absolute !important; width: 1px; height: 1px; opacity: 0; pointer-events: none; overflow: hidden; }
 .selbtn { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; padding: 13px 14px; border: 1px solid var(--control-border); border-radius: 12px; background: var(--surface); color: var(--text); font: inherit; text-align: left; cursor: pointer; }

@@ -4,6 +4,7 @@ import * as store from './store.js';
 import { busy, esc, toast } from './ui.js';
 import { render } from './router.js';
 import { renameDialogHtml, spaceName, spacesCardHtml } from './spaces-card.mjs';
+import { icon } from './icons.mjs';
 
 let spaces = null; // null = cargando; arreglo = lista
 let status = 'idle'; // idle | loading | ready | na (el servidor no ofrece la administración) | error
@@ -58,7 +59,7 @@ export function viewSpaces() {
   const dialog = toRename ? renameDialogHtml({ space: toRename, esc }) : spaceOpen ? `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
       <form id="space-form" autocomplete="off">
         <header class="sheet-head"><h2 id="sd-title">Nuevo espacio</h2>
-          <button type="button" class="sheet-x" data-action="cancel-space" aria-label="Cerrar">×</button></header>
+          <button type="button" class="sheet-x" data-action="cancel-space" aria-label="Cerrar">${icon('x')}</button></header>
         <div class="sheet-body">
           <label for="s-name">Nombre del grupo</label>
           <input id="s-name" maxlength="40" placeholder="Ej: Familia Gómez" required>

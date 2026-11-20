@@ -1,6 +1,7 @@
 // Tarjeta "Espacios" (solo la ve la administración, que gestiona los espacios sin ver sus datos). HTML puro: no toca `document`, así que se prueba en Node.
 // `esc` lo pasa quien llama (ui.js necesita el navegador). `spaces` es null mientras carga; `shown` es el código recién
 // creado o regenerado ({ name, code }), que se muestra una sola vez.
+import { icon } from './icons.mjs';
 const dayOf = (iso) => String(iso ?? '').slice(0, 10);
 
 // Nombre de un espacio para los textos de las acciones. Si la lista aún no cargó (o no lo trae), un texto genérico
@@ -35,7 +36,7 @@ export function renameDialogHtml({ space, esc }) {
   return `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
       <form id="space-rename-form" data-id="${esc(space.id)}" autocomplete="off">
         <header class="sheet-head"><h2 id="sd-title">Renombrar espacio</h2>
-          <button type="button" class="sheet-x" data-action="cancel-rename" aria-label="Cerrar">×</button></header>
+          <button type="button" class="sheet-x" data-action="cancel-rename" aria-label="Cerrar">${icon('x')}</button></header>
         <div class="sheet-body">
           <label for="s-rename">Nombre del grupo</label>
           <input id="s-rename" maxlength="40" value="${esc(space.name)}" required>

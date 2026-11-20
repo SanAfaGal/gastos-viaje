@@ -9,6 +9,7 @@ import * as store from './store.js';
 import { busy, esc, toast } from './ui.js';
 import { cardColor, cardHtml, ctx, methodLabel, personName, rateSourceLabel } from './shared.js';
 import { render } from './router.js';
+import { icon } from './icons.mjs';
 
 // Vista previa de la tarjeta en el formulario de Ajustes, con lo que se va escribiendo.
 export function paintPreview() {
@@ -89,7 +90,7 @@ export function viewSettings() {
       ${tripOpen ? `<dialog id="trip-dialog" class="sheet" aria-labelledby="td-title">
       <form id="trip-form" autocomplete="off">
         <header class="sheet-head"><h2 id="td-title">${t.id ? 'Editar viaje' : 'Nuevo viaje'}</h2>
-          <button type="button" class="sheet-x" data-action="cancel-trip" aria-label="Cerrar">×</button></header>
+          <button type="button" class="sheet-x" data-action="cancel-trip" aria-label="Cerrar">${icon('x')}</button></header>
         <div class="sheet-body">
           <label for="t-name">Nombre del viaje</label>
           <input id="t-name" maxlength="40" placeholder="Ej: Brasil 2026" value="${esc(t.name ?? '')}" required>
@@ -121,7 +122,7 @@ export function viewSettings() {
       ${personOpen ? `<dialog id="person-dialog" class="sheet" aria-labelledby="pd-title">
       <form id="person-form" autocomplete="off">
         <header class="sheet-head"><h2 id="pd-title">${editPerson ? 'Editar persona' : 'Nueva persona'}</h2>
-          <button type="button" class="sheet-x" data-action="cancel-person" aria-label="Cerrar">×</button></header>
+          <button type="button" class="sheet-x" data-action="cancel-person" aria-label="Cerrar">${icon('x')}</button></header>
         <div class="sheet-body">
           <label for="p-name">Nombre</label>
           <input id="p-name" maxlength="40" placeholder="Nombre" value="${esc(p.name ?? '')}" required>
@@ -141,7 +142,7 @@ export function viewSettings() {
       ${methodOpen ? `<dialog id="method-dialog" class="sheet" aria-labelledby="md-title">
       <form id="method-form" autocomplete="off">
         <header class="sheet-head"><h2 id="md-title">${editMethod ? 'Editar medio de pago' : 'Nuevo medio de pago'}</h2>
-          <button type="button" class="sheet-x" data-action="cancel-method" aria-label="Cerrar">×</button></header>
+          <button type="button" class="sheet-x" data-action="cancel-method" aria-label="Cerrar">${icon('x')}</button></header>
         <div id="card-preview" class="sheet-preview">${cardHtml(m.kind ? m : { kind: 'card', card_type: 'debit' }, { owner: m.owner_person_id ? personName(c, m.owner_person_id) : '' })}</div>
         <div class="sheet-body">
         <label for="m-kind">Tipo de medio</label>

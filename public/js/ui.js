@@ -1,4 +1,5 @@
 // Piezas básicas de la interfaz: elementos fijos de la página, escape de HTML, avisos (toast), diálogos de ayuda y el candado que evita acciones dobles.
+import { icon, infoGlyph } from './icons.mjs';
 
 export const $view = document.getElementById('view');
 export const $title = document.getElementById('title');
@@ -45,9 +46,9 @@ let toastMs = 4000;
 const armToast = () => { clearTimeout(toastTimer); toastTimer = setTimeout(() => $toast.classList.remove('show'), toastMs); };
 // Icono ⓘ que abre o cierra una explicación corta (ver la acción 'info'). Mantiene el formulario limpio.
 // La explicación sale en un diálogo (hoja desde abajo en celular), así no mueve ni deforma el formulario.
-export const infoBtn = (id, label) => `<button type="button" class="info-btn" data-action="info" data-id="${id}" aria-haspopup="dialog" aria-label="Más información: ${esc(label)}">i</button>`;
+export const infoBtn = (id, label) => `<button type="button" class="info-btn" data-action="info" data-id="${id}" aria-haspopup="dialog" aria-label="Más información: ${esc(label)}">${infoGlyph()}</button>`;
 export const infoDialog = (id, title, html) => `<dialog id="info-${id}" class="sheet info" aria-labelledby="info-${id}-t">
-  <header class="sheet-head"><h2 id="info-${id}-t">${esc(title)}</h2><button type="button" class="sheet-x" data-action="info-close" aria-label="Cerrar">×</button></header>
+  <header class="sheet-head"><h2 id="info-${id}-t">${esc(title)}</h2><button type="button" class="sheet-x" data-action="info-close" aria-label="Cerrar">${icon('x')}</button></header>
   <div class="sheet-body">${html}</div></dialog>`;
 // Acción en curso: mientras una acción que tarda (red) no termina se ignoran los demás toques, y el botón
 // muestra un giro y su texto de "trabajando". Así no se ejecuta nada dos veces.

@@ -103,7 +103,7 @@ function payDialog(c) {
   return `<dialog id="pay-dialog" class="sheet pay-sheet" aria-labelledby="pay-title">
     <form id="pay-form" autocomplete="off">
       <header class="sheet-head"><h2 id="pay-title">${d.id ? 'Editar abono' : 'Registrar abono'}</h2>
-        <button type="button" class="sheet-x" data-action="pay-cancel" aria-label="Cerrar">×</button></header>
+        <button type="button" class="sheet-x" data-action="pay-cancel" aria-label="Cerrar">${icon('x')}</button></header>
       <div class="sheet-body">
         <div class="pay-who">
           <div><label class="flab" for="pay-from">Quién paga</label><select id="pay-from" required><option value="" hidden>Elegir…</option>${who(d.from)}</select></div>
