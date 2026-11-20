@@ -71,7 +71,7 @@ Columna `space_id TEXT REFERENCES spaces(id)` en `people`, `trips` y `payment_me
 ### Resolución del código
 
 - Si el código recibido coincide (comparación en tiempo constante, como hoy) con `APP_PASSCODE`, el espacio es el administrador. `APP_PASSCODE` es la única forma de entrar como administrador, y también el respaldo si se pierde: cambiar la variable en Netlify restablece el acceso.
-- Si no, se busca un espacio activo cuyo `code_hash` sea el hash del código. Un código inexistente y uno de un espacio desactivado responden igual (401 "Código incorrecto"), para no revelar qué espacios existen.
+- Si no, se busca un espacio activo cuyo `code_hash` sea el hash del código. Un código inexistente da 401 "Código incorrecto". El código exacto de un espacio desactivado da 403 "Este espacio está desactivado. Habla con quien te dio el código." y ese intento no cuenta para el límite (decisión posterior al diseño inicial, que daba el mismo error a los dos: solo lo ve quien ya tiene el código completo de 12 caracteres al azar, así que no revela qué espacios existen).
 - El conteo de intentos y el bloqueo de `checkAuth` no cambian: cada intento con código se cuenta antes de resolverlo.
 - Sin `APP_PASSCODE` configurado y sin código: se usa el espacio administrador, como hoy.
 - `handle()` resuelve el espacio una vez y se lo pasa a cada función. Ninguna función acepta consultas sin espacio.
@@ -122,7 +122,7 @@ Los celulares de hoy siguen usando `APP_PASSCODE` y ven lo mismo que antes.
 - Aislamiento: con dos espacios, probar cada ruta (estado, viajes, personas, medios, gastos, abonos, tasas, respaldo, restauración, orden) leyendo y escribiendo con ids del otro espacio; nunca debe filtrar datos ni modificar filas ajenas.
 - Referencias cruzadas rechazadas (gasto con medio de pago o persona de otro espacio, abono entre personas de otro espacio).
 - `PUT` con un id que ya existe en otro espacio no lo pisa.
-- Resolución del código: administrador, espacio activo, espacio desactivado, código inexistente (misma respuesta), código regenerado (el viejo falla), código sin guiones o en minúsculas.
+- Resolución del código: administrador, espacio activo, espacio desactivado, código inexistente (401) y de un espacio desactivado (403, sin gastar intentos), código regenerado (el viejo falla), código sin guiones o en minúsculas.
 - Límite de intentos con varios espacios sigue funcionando.
 - Rutas de administración: un espacio normal recibe 404; el administrador crea, lista, regenera y desactiva; las respuestas nunca incluyen datos de otros espacios ni hashes; el código solo aparece en la respuesta de crear y regenerar.
 - Migración: una base con datos actuales pasa a tener espacio administrador con todas las filas, sin pérdidas, y es idempotente.
@@ -141,6 +141,6 @@ Los celulares de hoy siguen usando `APP_PASSCODE` y ven lo mismo que antes.
 - El espacio administrador usa `APP_PASSCODE` como único código; no se regenera desde la app y la variable sirve de respaldo.
 - Cada espacio nuevo nace con un "Viaje 1" para respetar la regla de que siempre existe un viaje.
 - Los códigos son de 12 caracteres sin ambiguos y se entregan una sola vez.
-- Un código inexistente y uno de un espacio desactivado dan el mismo error.
+- Un código inexistente da 401 y el de un espacio desactivado da 403 con su motivo (cambio posterior: ver la resolución del código).
 - Las rutas de administración devuelven 404 (no 403) a quien no es administrador.
 - `rates` y `settings` siguen globales.
