@@ -14,6 +14,17 @@ export const ADMIN_SPACE_ID = 'space-admin';
 
 const statements = schema.split(';').map((s) => s.trim()).filter(Boolean);
 
+// Agrega una columna si falta. Dos instancias que arrancan a la vez pueden leer el esquema viejo y correr las dos el
+// ALTER: la segunda falla con "duplicate column", que solo significa que la otra ya la agregó. Cualquier otro error
+// se propaga. `table`, `col` y `type` son textos fijos de este archivo, nunca datos de una petición.
+async function addColumn(db, table, col, type) {
+  try {
+    await db.run(`ALTER TABLE ${table} ADD COLUMN ${col} ${type}`);
+  } catch (err) {
+    if (!/duplicate column/i.test(err?.message ?? '')) throw err;
+  }
+}
+
 // Bases creadas con la primera versión (solo BRL -> COP): renombra columnas y pasa los pesos a centésimas.
 async function migrate(db) {
   const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
@@ -29,7 +40,7 @@ async function migrate(db) {
   const methodCols = (await db.all('PRAGMA table_info(payment_methods)')).map((c) => c.name);
   if (methodCols.length) {
     for (const col of ['color', 'network']) {
-      if (!methodCols.includes(col)) await db.run(`ALTER TABLE payment_methods ADD COLUMN ${col} TEXT`);
+      if (!methodCols.includes(col)) await addColumn(db, 'payment_methods', col, 'TEXT');
     }
   }
   const rateCols =(await db.all('PRAGMA table_info(rates)')).map((c) => c.name);
@@ -43,7 +54,7 @@ async function migrate(db) {
 // sus personas. Es idempotente: corre en cada arranque, y el id fijo evita duplicados si dos arrancan a la vez.
 async function upgradeTrips(db) {
   const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
-  if (!cols.includes('trip_id')) await db.run('ALTER TABLE expenses ADD COLUMN trip_id TEXT REFERENCES trips(id)');
+  if (!cols.includes('trip_id')) await addColumn(db, 'expenses', 'trip_id', 'TEXT REFERENCES trips(id)');
 
   // Ubicación opcional del gasto y marca de monto aproximado.
   const extra = [
@@ -57,12 +68,12 @@ async function upgradeTrips(db) {
     ['currency', 'TEXT'], // moneda del gasto (vacío = la del destino del viaje)
   ];
   for (const [col, type] of extra) {
-    if (!cols.includes(col)) await db.run(`ALTER TABLE expenses ADD COLUMN ${col} ${type}`);
+    if (!cols.includes(col)) await addColumn(db, 'expenses', col, type);
   }
   // Fuente y momento de consulta de cada tasa guardada.
   const rateCols = (await db.all('PRAGMA table_info(rates)')).map((c) => c.name);
   for (const col of ['source', 'fetched_at']) {
-    if (!rateCols.includes(col)) await db.run(`ALTER TABLE rates ADD COLUMN ${col} TEXT`);
+    if (!rateCols.includes(col)) await addColumn(db, 'rates', col, 'TEXT');
   }
 
   const first = () => db.all('SELECT id FROM trips ORDER BY rowid LIMIT 1');
@@ -89,7 +100,7 @@ async function upgradeSpaces(db) {
   const tables = ['people', 'trips', 'payment_methods'];
   for (const table of tables) {
     const cols = (await db.all(`PRAGMA table_info(${table})`)).map((c) => c.name);
-    if (!cols.includes('space_id')) await db.run(`ALTER TABLE ${table} ADD COLUMN space_id TEXT REFERENCES spaces(id)`);
+    if (!cols.includes('space_id')) await addColumn(db, table, 'space_id', 'TEXT REFERENCES spaces(id)');
   }
   await db.run(
     'INSERT OR IGNORE INTO spaces (id, name, code_hash, is_admin, active, created_at) VALUES (?, ?, NULL, 1, 1, ?)',
@@ -106,7 +117,12 @@ async function upgradeSpaces(db) {
 async function dropDerivedColumns(db) {
   const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
   for (const col of ['rate_estimated', 'rate_manual', 'amount_home']) {
-    if (cols.includes(col)) await db.run(`ALTER TABLE expenses DROP COLUMN ${col}`);
+    if (!cols.includes(col)) continue;
+    try {
+      await db.run(`ALTER TABLE expenses DROP COLUMN ${col}`);
+    } catch (err) {
+      if (!/no such column/i.test(err?.message ?? '')) throw err; // otra instancia ya la borró
+    }
   }
 }
 
@@ -165,10 +181,18 @@ async function openTurso(url, authToken) {
 let cached;
 
 // Con TURSO_DATABASE_URL usa Turso; si no, un archivo local (DB_FILE o ./data/gastos.db).
+// Si abrir falla (la base no responde, una migración choca), no se guarda la falla: la próxima petición vuelve a
+// intentar en vez de responder 500 hasta que se reinicie la instancia.
 export function getDb() {
-  cached ??= process.env.TURSO_DATABASE_URL
-    ? openTurso(process.env.TURSO_DATABASE_URL, process.env.TURSO_AUTH_TOKEN)
-    : openLocal(process.env.DB_FILE ?? resolve(here, '..', 'data', 'gastos.db'));
+  if (!cached) {
+    const opening = process.env.TURSO_DATABASE_URL
+      ? openTurso(process.env.TURSO_DATABASE_URL, process.env.TURSO_AUTH_TOKEN)
+      : openLocal(process.env.DB_FILE ?? resolve(here, '..', 'data', 'gastos.db'));
+    cached = opening;
+    opening.catch(() => {
+      if (cached === opening) cached = undefined;
+    });
+  }
   return cached;
 }
 

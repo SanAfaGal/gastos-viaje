@@ -41,6 +41,15 @@ const server = createServer(async (req, res) => {
         res.writeHead(400, { 'content-type': 'application/json' });
         return res.end(JSON.stringify({ error: 'JSON inválido' }));
       }
+      let db;
+      try {
+        db = await getDb();
+      } catch (err) {
+        // La base no abrió: un 500 normal (la próxima petición vuelve a intentar abrirla).
+        console.error(err);
+        res.writeHead(500, { 'content-type': 'application/json' });
+        return res.end(JSON.stringify({ error: 'Error interno' }));
+      }
       const out = await handle({
         method: req.method,
         path: url.pathname,
@@ -48,7 +57,7 @@ const server = createServer(async (req, res) => {
         body,
         passcode: req.headers['x-passcode'],
         ip: req.socket.remoteAddress,
-        db: await getDb(),
+        db,
       });
       const http = toHttp(out, { method: req.method, path: url.pathname, ifNoneMatch: req.headers['if-none-match'] });
       res.writeHead(http.status, http.headers);

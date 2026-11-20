@@ -13,6 +13,14 @@ export default async (req, context) => {
       body = null;
     }
   }
+  let db;
+  try {
+    db = await getDb();
+  } catch (err) {
+    // La base no abrió: un 500 normal (la próxima petición vuelve a intentar abrirla).
+    console.error(err);
+    return Response.json({ error: 'Error interno' }, { status: 500 });
+  }
   const out = await handle({
     method: req.method,
     path: url.pathname,
@@ -20,7 +28,7 @@ export default async (req, context) => {
     body,
     passcode: req.headers.get('x-passcode'),
     ip: req.headers.get('x-nf-client-connection-ip') ?? context?.ip,
-    db: await getDb(),
+    db,
   });
   const res = toHttp(out, { method: req.method, path: url.pathname, ifNoneMatch: req.headers.get('if-none-match') });
   return new Response(res.body, { status: res.status, headers: res.headers });
