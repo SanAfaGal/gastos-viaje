@@ -500,3 +500,9 @@ export async function restoreBackup(data, dry) {
   if (!dry) await refresh();
   return out;
 }
+// Espacios (solo el administrador; sin APP_PASSCODE el servidor responde 404). No refrescan el estado: no cambian lo que
+// ve el administrador. El código en claro solo viene al crear y al regenerar: quien llama no debe guardarlo.
+export const listSpaces = () => request('GET', '/api/spaces');
+export const createSpace = (name) => request('POST', '/api/spaces', { name });
+export const regenerateSpace = (id) => request('POST', `/api/spaces/${encodeURIComponent(id)}/regenerate`);
+export const setSpaceActive = (id, active) => request('PUT', `/api/spaces/${encodeURIComponent(id)}`, { active });

@@ -9,6 +9,7 @@ import { homeChart, viewHome } from './view-home.js';
 import { dragSt, resetFilters, viewList } from './view-list.js';
 import { payOpen, setPayDraft, setPayOpen, viewAccounts } from './view-accounts.js';
 import { methodOpen, personOpen, setEditMethod, setEditPerson, setEditTrip, setMethodOpen, setPersonOpen, setTripOpen, tripOpen, viewSettings } from './view-settings.js';
+import { resetSpaces, ensureSpaces, setSpaceOpen, spaceOpen } from './view-spaces.js';
 import { initMap, lastMapSig, leafletMap, mapSig, setLastNonMap, setLeafletMap, setMapFocus, viewMap } from './view-map.js';
 
 function viewLogin() {
@@ -85,6 +86,7 @@ export function render() {
   $tripBtn.hidden = store.net.needsLogin;
   document.body.classList.toggle('logged-out', store.net.needsLogin);
   if (store.net.needsLogin) {
+    resetSpaces(); // un código mostrado no sobrevive a cerrar la sesión
     $title.textContent = 'Gastos de viaje';
     $view.innerHTML = viewLogin();
     return;
@@ -96,7 +98,7 @@ export function render() {
   if (dragSt?.active) return; // no se redibuja la lista mientras se arrastra un gasto
   if (r.map && leafletMap && document.querySelector('#map.leaflet-container') && mapSig() === lastMapSig) return;
   if (!isFormRoute()) setDraft(null);
-  if (r.tab !== 'ajustes') { setMethodOpen(false); setTripOpen(false); setPersonOpen(false); }
+  if (r.tab !== 'ajustes') { setMethodOpen(false); setTripOpen(false); setPersonOpen(false); resetSpaces(); }
   if (r.tab !== 'cuentas') { setPayOpen(false); setPayDraft(null); }
   $title.textContent = r.title;
   document.title = r.tab === 'home' ? 'Gastos de viaje' : `${r.title} · Gastos de viaje`;
@@ -112,12 +114,13 @@ export function render() {
   $view.innerHTML = r.view(m);
   if (keep) $view.querySelector(keep)?.focus({ preventScroll: true }); // el redibujo no le quita el foco a quien navega con teclado
   if (r.map) initMap();
-  if (r.tab === 'ajustes' && !r.map) showAppVersion();
+  if (r.tab === 'ajustes' && !r.map) { showAppVersion(); ensureSpaces(); }
   if (r.tab === 'home') homeChart();
   if (isFormRoute() && draft) { updateConv(); centerPicked(); }
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
   if (tripOpen) document.getElementById('trip-dialog')?.showModal();
   if (personOpen) document.getElementById('person-dialog')?.showModal();
+  if (spaceOpen) document.getElementById('space-dialog')?.showModal();
   if (payOpen) document.getElementById('pay-dialog')?.showModal();
 }
 // Selector de viaje (arriba, en todas las pantallas).
@@ -161,8 +164,9 @@ $view.addEventListener('close', (ev) => {
     else if (ev.target.id === 'trip-dialog') { setTripOpen(false); setEditTrip(null); }
     else if (ev.target.id === 'person-dialog') { setPersonOpen(false); setEditPerson(null); }
     else if (ev.target.id === 'pay-dialog') { setPayOpen(false); setPayDraft(null); }
+    else if (ev.target.id === 'space-dialog') setSpaceOpen(false);
   }, true);
-$view.addEventListener('click', (ev) => { if (['method-dialog', 'trip-dialog', 'person-dialog', 'pay-dialog'].includes(ev.target.id) || ev.target.matches?.('dialog.info')) ev.target.close(); });
+$view.addEventListener('click', (ev) => { if (['method-dialog', 'trip-dialog', 'person-dialog', 'space-dialog', 'pay-dialog'].includes(ev.target.id) || ev.target.matches?.('dialog.info')) ev.target.close(); });
 $tripBtn.addEventListener('click', openTripSwitch);
 $tripSwitch.addEventListener('click', (ev) => {
     const opt = ev.target.closest('[data-trip]');
@@ -171,7 +175,7 @@ $tripSwitch.addEventListener('click', (ev) => {
     else if (ev.target.closest('[data-manage]')) { $tripSwitch.close(); location.hash = '#/ajustes'; }
   });
 store.listeners.add(() => {
-    if (formActive() || methodOpen || tripOpen || personOpen) updateStatus();
+    if (formActive() || methodOpen || tripOpen || personOpen || spaceOpen) updateStatus();
     else if (document.activeElement && ['INPUT', 'SELECT'].includes(document.activeElement.tagName) && $view.contains(document.activeElement)) updateStatus();
     else render();
   });

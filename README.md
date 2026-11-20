@@ -37,7 +37,18 @@ Para abrirlo desde el celular en la misma red wifi: pon `HOST=0.0.0.0` en `.env`
 4. Botón +: registra gastos. Puedes poner el día de ayer o antier.
 5. Inicio y Cuentas: el resumen del viaje, el saldo por persona y los pagos que dejan todo en cero.
 
-En Ajustes, lo que afecta solo al viaje activo (mapa, actualizar tasas, exportar CSV) está arriba, bajo "Este viaje"; lo común a todos los viajes (viajes, personas, medios de pago, apariencia, sincronizar, respaldo, restaurar y código de acceso) está abajo, bajo "Global".
+En Ajustes, lo que afecta solo al viaje activo (mapa, actualizar tasas, exportar CSV) está arriba, bajo "Este viaje"; lo común a todos los viajes (viajes, personas, medios de pago, apariencia, espacios (solo el administrador), sincronizar, respaldo, restaurar y código de acceso) está abajo, bajo "Global".
+
+## Varios grupos (espacios)
+
+Cada grupo (una familia, unos amigos) tiene su propio código y sus propios viajes, personas, medios de pago, abonos y gastos; nadie ve los datos de otro grupo. El administrador los gestiona en Ajustes, Espacios: crear un espacio, generar un código nuevo o desactivarlo.
+
+- La sección Espacios y las rutas `/api/spaces` solo existen si el servidor tiene `APP_PASSCODE`. Sin él la app queda abierta y no hay rutas de administrador, que es el caso del desarrollo local salvo que lo pongas en `.env`.
+- `APP_PASSCODE` es el código del administrador y también la vía de recuperación si lo pierdes: cámbialo en Netlify.
+- El código de cada grupo se muestra una sola vez, al crearlo o regenerarlo; el servidor guarda solo su hash.
+- Regenerar un código hace que el anterior deje de funcionar de inmediato.
+- Desactivar un espacio impide que entre, pero conserva sus datos; se puede reactivar.
+- **Antes de desplegar esta versión haz un respaldo JSON** (Ajustes, Respaldo): la migración de la base agrega columnas y una tabla nueva.
 
 ## Desplegar en Netlify (con Turso)
 

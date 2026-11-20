@@ -396,3 +396,11 @@ main:focus-visible { outline: none; }
 .pay-effect.ok .ic { flex: none; width: 22px; height: 22px; color: var(--pos); }
 .pay-effect.warn { background: var(--warn-bg); color: var(--warn-text); font-weight: 600; }
 .pay-sheet .fsub .flab { margin-bottom: 8px; }
+/* Ajustes, Espacios (administrador): filas como las de Viajes, que pasan los botones abajo si no caben, y el código recién creado */
+.space-row { flex-wrap: wrap; }
+.space-row > span:first-child { flex: 1 1 160px; min-width: 0; overflow-wrap: anywhere; }
+.space-acts { display: flex; flex-wrap: wrap; gap: 8px; }
+.code-box { margin: 12px 0; padding: 12px 14px; border-radius: var(--radius); background: transparent; border: 1px solid color-mix(in srgb, var(--brand) 60%, var(--border)); }
+.code-box p { margin: 0 0 8px; }
+.code-value { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 1.35rem; font-weight: 700; letter-spacing: .08em; overflow-wrap: anywhere; user-select: all; }
+.code-acts { display: flex; flex-wrap: wrap; gap: 8px; }

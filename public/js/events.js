@@ -7,6 +7,7 @@ import { openDatePicker } from './datepicker.mjs';
 import { $view, busy, coolingDown, toast, working } from './ui.js';
 import { ctx } from './shared.js';
 import { downloadBackup, downloadCsv, editMethod, editPerson, editTrip, onMethodForm, paintPreview, restoreFromFile, setEditMethod, setEditPerson, setEditTrip, setMethodOpen, setPersonOpen, setTripOpen, undoDelete } from './view-settings.js';
+import { spaceAction, submitSpace } from './view-spaces.js';
 import { barRead, chartDays, homeBars, loadHistory, setChartDays } from './view-home.js';
 import { filters, filtersOpen, picked, resetFilters, setFiltersOpen } from './view-list.js';
 import { clearFieldError, draft, paintBenes, paintCards, paintCur, paintLoc, setDraft, setDraftDate, submitForm, updateConv } from './view-form.js';
@@ -161,6 +162,7 @@ Se usa la tasa que hoy da la fuente para el día de cada gasto. ¿Actualizar?`;
       await busy(t, () => guard(async () => { downloadBackup(await store.backupData()); toast('Respaldo descargado'); }), 'Preparando…');
     } else if (action === 'restore') document.getElementById('restore-file')?.click();
     else if (action === 'csv') downloadCsv();
+    else if (await spaceAction(action, id, t)) { /* sección Espacios */ }
     else if (action === 'logout') { store.setPass(''); store.net.needsLogin = true; render(); }
   });
 $view.addEventListener('toggle', (ev) => { if (ev.target.id === 'pay-hist') setPayHist(ev.target.open); }, true);
@@ -272,6 +274,8 @@ $view.addEventListener('submit', async (ev) => {
         toast('Medio de pago guardado');
         render();
       }), 'Guardando…');
+    } else if (f === 'space-form') {
+      await busy(btn, () => guardIn('s-error', () => submitSpace(document.getElementById('s-name').value)), 'Creando…');
     } else if (f === 'login') {
       await busy(btn, async () => {
         // El código nuevo no se guarda hasta comprobarlo (y confirmar si se pierden gastos sin enviar): ver trySwitchSpace.
