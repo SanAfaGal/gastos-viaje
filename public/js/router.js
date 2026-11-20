@@ -13,6 +13,7 @@ import { initMap, lastMapSig, leafletMap, mapSig, setLastNonMap, setLeafletMap, 
 
 function viewLogin() {
   return `<form id="login" class="login card"><h2>Código de acceso</h2>
+    ${store.net.lockReason ? `<p class="form-error" role="alert">${esc(store.net.lockReason)}</p>` : ''}
     <p class="muted">Esta app está protegida. Escribe el código para entrar.</p>
     <input id="code" type="password" aria-label="Código de acceso" autocomplete="current-password" placeholder="Código" required>
     <button class="btn" type="submit">Entrar</button></form>`;
@@ -83,7 +84,7 @@ export function render() {
   if (updatePending && !formActive()) { updatePending = false; location.reload(); return; }
   updateStatus();
   $tripBtn.hidden = store.net.needsLogin;
-  document.body.classList.toggle('logged-out', store.net.needsLogin);
+  document.documentElement.classList.toggle('logged-out', store.net.needsLogin);
   if (store.net.needsLogin) {
     resetSpaces(); // un código mostrado no sobrevive a cerrar la sesión
     $title.textContent = 'Gastos de viaje';

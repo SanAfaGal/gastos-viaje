@@ -22,6 +22,11 @@
         else if (t.mode === 'light') dark = false;
       } catch (e) { /* sin almacenamiento: se queda con el modo del teléfono */ }
       r.dataset.scheme = dark ? 'dark' : 'light';
+      // Sin código guardado ni marca de servidor abierto (la misma regla de startsLocked en js/store.js), la barra de
+      // pestañas no se pinta: si no, se vería hasta que cargue la app y dibuje la pantalla de acceso.
+      try {
+        if (!localStorage.getItem('bg_pass') && localStorage.getItem('bg_open') !== '1') r.classList.add('logged-out');
+      } catch (e) { r.classList.add('logged-out'); }
     })();
   </script>
   <link rel="stylesheet" href="/css/app.css">
