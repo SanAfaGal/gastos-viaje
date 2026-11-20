@@ -26,6 +26,8 @@
       // pestañas no se pinta: si no, se vería hasta que cargue la app y dibuje la pantalla de acceso.
       try {
         if (!localStorage.getItem('bg_pass') && localStorage.getItem('bg_open') !== '1') r.classList.add('logged-out');
+        // Con el código de la administración guardado tampoco: su pantalla no tiene pestañas (la misma clase del router).
+        else if (localStorage.getItem('bg_pass') && localStorage.getItem('bg_space') === 'manager') r.classList.add('manager');
       } catch (e) { r.classList.add('logged-out'); }
     })();
   </script>

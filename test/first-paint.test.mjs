@@ -42,6 +42,18 @@ test('primer pintado: sin almacenamiento se trata como sin código', () => {
   assert.ok(firstPaint({}, { throwing: true }).has('logged-out'));
 });
 
+test('primer pintado: con el código de la administración guardado la barra de pestañas no se pinta', () => {
+  const manager = firstPaint({ bg_pass: 'abc', bg_space: 'manager' });
+  assert.ok(manager.has('manager'));
+  assert.ok(!manager.has('logged-out'));
+  assert.ok(!firstPaint({ bg_pass: 'abc', bg_space: 'space-admin' }).has('manager'), 'un espacio de datos sí la ve');
+  // Tras "Cambiar código" el espacio guardado sigue siendo 'manager' pero ya no hay código: se ve el acceso.
+  const salio = firstPaint({ bg_pass: '', bg_space: 'manager' });
+  assert.ok(!salio.has('manager'));
+  assert.ok(salio.has('logged-out'));
+  assert.ok(!firstPaint({}, { throwing: true }).has('manager'));
+});
+
 test('primer pintado: el tema sigue aplicándose', () => {
   const dark = firstPaint({ bg_theme: '{"mode":"dark"}' }, { scheme: true });
   assert.equal(dark.scheme, 'dark');

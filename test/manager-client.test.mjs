@@ -200,6 +200,26 @@ test('router.js muestra viewManage para la administración en cualquier ruta y o
   assert.match(read('sw.js'), /const CACHE = 'gastos-viaje-v115'/);
 });
 
+// Bloque de código que empieza en `inicio` y termina en el primer `return;` que le sigue.
+function bloque(src, inicio) {
+  const at = src.indexOf(inicio);
+  assert.ok(at >= 0, `falta ${inicio}`);
+  return src.slice(at, src.indexOf('return;', at));
+}
+
+test('la administración, mientras espera su primer estado, muestra "Cargando…" y una salida', () => {
+  const espera = bloque(read('js/router.js'), 'if (!store.isManager()) {');
+  assert.match(espera, /Cargando…/);
+  assert.match(espera, /data-action="logout"/, 'sin red o con el servidor caído siempre se puede cambiar de código');
+  assert.ok(!espera.includes("$view.innerHTML = '';"), 'la pantalla nunca queda en blanco');
+});
+
+test('al cerrar sesión el título de la pestaña vuelve a "Gastos de viaje"', () => {
+  const acceso = bloque(read('js/router.js'), 'if (store.net.needsLogin) {');
+  assert.match(acceso, /document\.title = 'Gastos de viaje';/);
+  assert.match(acceso, /viewLogin\(\)/);
+});
+
 test('view-settings.js ya no incluye la sección Espacios', () => {
   const settings = read('js/view-settings.js');
   assert.ok(!settings.includes('viewSpaces'));

@@ -84,7 +84,7 @@ export function render() {
   if (updatePending && !formActive()) { updatePending = false; location.reload(); return; }
   updateStatus();
   // La administración no tiene datos: ni pestañas, ni selector de viaje, ni vistas de viajes, sea cual sea la ruta.
-  // Tras una recarga con su código, hasta que llega el primer estado (`awaitingManager`) la pantalla queda vacía.
+  // Tras una recarga con su código, hasta que llega el primer estado (`awaitingManager`) solo se ve "Cargando…" y la salida.
   const manager = !store.net.needsLogin && (store.isManager() || store.awaitingManager());
   $tripBtn.hidden = store.net.needsLogin || manager;
   document.documentElement.classList.toggle('logged-out', store.net.needsLogin);
@@ -92,6 +92,7 @@ export function render() {
   if (store.net.needsLogin) {
     resetSpaces(); // un código mostrado no sobrevive a cerrar la sesión
     $title.textContent = 'Gastos de viaje';
+    document.title = 'Gastos de viaje'; // no queda "Administración" ni la pantalla de antes en la pestaña
     $view.innerHTML = viewLogin();
     return;
   }
@@ -134,10 +135,12 @@ function renderManager() {
   setMethodOpen(false); setTripOpen(false); setPersonOpen(false);
   setPayOpen(false); setPayDraft(null);
   if (leafletMap) { leafletMap.remove(); setLeafletMap(null); }
-  if (!store.isManager()) { // aún no llega el primer estado: no se muestra nada
+  if (!store.isManager()) {
+    // Aún no llega el primer estado (sin red, límite de intentos o servidor caído): siempre hay una salida.
     $title.textContent = 'Gastos de viaje';
     document.title = 'Gastos de viaje';
-    $view.innerHTML = '';
+    $view.innerHTML = `<div class="card"><p class="muted">Cargando…</p>
+      <button class="btn secondary" type="button" data-action="logout">Cambiar código</button></div>`;
     return;
   }
   $title.textContent = 'Administración';
