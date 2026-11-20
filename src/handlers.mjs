@@ -296,16 +296,26 @@ async function saveExpense(db, sp, id, body) {
               amount_approx = excluded.amount_approx,
               pay_pending = excluded.pay_pending,
               currency = excluded.currency,
-              sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END`,
+              sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END
+            WHERE expenses.trip_id IN (SELECT id FROM trips WHERE space_id = ?)`,
       args: [id, body.date, cents, description, methodId, rate, rateDate, rateSource, createdAt, trip.id,
-        lat, lng, place, approx, payPending ? 1 : 0, sortOrder, currency],
+        lat, lng, place, approx, payPending ? 1 : 0, sortOrder, currency, sp],
     },
-    { sql: 'DELETE FROM expense_beneficiaries WHERE expense_id = ?', args: [id] },
+    // Las personas del gasto solo cambian si el gasto es del espacio (en un gasto nuevo, la fila de arriba ya
+    // existe dentro de esta misma transacción).
+    {
+      sql: `DELETE FROM expense_beneficiaries WHERE expense_id = ?
+              AND expense_id IN (SELECT e.id FROM expenses e JOIN trips t ON t.id = e.trip_id WHERE t.space_id = ?)`,
+      args: [id, sp],
+    },
     ...ids.map((p) => ({
-      sql: 'INSERT INTO expense_beneficiaries (expense_id, person_id) VALUES (?, ?)',
-      args: [id, p],
+      sql: `INSERT INTO expense_beneficiaries (expense_id, person_id)
+            SELECT ?, ? WHERE EXISTS (SELECT 1 FROM expenses e JOIN trips t ON t.id = e.trip_id WHERE e.id = ? AND t.space_id = ?)`,
+      args: [id, p, id, sp],
     })),
   ]);
+  // Si entre la comprobación y la escritura otro espacio ocupó el id, la escritura no hizo nada: no se confirma.
+  if (!(await owns(db, 'expenses', id, sp))) fail(404, 'No encontrado');
   return { id };
 }
 
@@ -351,7 +361,9 @@ async function savePayment(db, sp, id, body) {
   if (!body.from_person_id || !body.to_person_id) fail(400, 'Indica quién paga y a quién');
   if (body.from_person_id === body.to_person_id) fail(400, 'Quien paga y quien recibe deben ser personas distintas');
   const going = await tripPeople(db, trip.id);
-  if (![body.from_person_id, body.to_person_id].every((p) => going.has(p))) fail(400, 'Alguna persona no va en este viaje');
+  // Además de ir en el viaje, las dos deben ser del espacio (un vínculo roto en trip_people no basta).
+  const mine = await ownedIds(db, 'people', [body.from_person_id, body.to_person_id], sp);
+  if (![body.from_person_id, body.to_person_id].every((p) => going.has(p) && mine.has(String(p)))) fail(400, 'Alguna persona no va en este viaje');
 
   let rate = null;
   let rateDate = null;
@@ -367,10 +379,13 @@ async function savePayment(db, sp, id, body) {
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(id) DO UPDATE SET from_person_id = excluded.from_person_id, to_person_id = excluded.to_person_id,
        date = excluded.date, amount_cents = excluded.amount_cents, currency = excluded.currency,
-       rate = excluded.rate, rate_date = excluded.rate_date, rate_source = excluded.rate_source, note = excluded.note`,
+       rate = excluded.rate, rate_date = excluded.rate_date, rate_source = excluded.rate_source, note = excluded.note
+     WHERE payments.trip_id IN (SELECT id FROM trips WHERE space_id = ?)`,
     [id, trip.id, body.from_person_id, body.to_person_id, body.date, cents, currency, rate, rateDate, rateSource, note,
-      prev?.created_at ?? new Date().toISOString()],
+      prev?.created_at ?? new Date().toISOString(), sp],
   );
+  // Si entre la comprobación y la escritura otro espacio ocupó el id, la escritura no hizo nada: no se confirma.
+  if (!(await owns(db, 'payments', id, sp))) fail(404, 'No encontrado');
   return { id };
 }
 

@@ -134,7 +134,7 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
   for (const p of people) {
     const name = str(p.name, 80, { required: true });
     if (!name?.trim()) bad('persona', p.id);
-    stmts.people.push({ sql: 'INSERT OR IGNORE INTO people (id, name, space_id) VALUES (?, ?, ?)', args: [p.id, name.trim(), sp] });
+    stmts.people.push({ sql: 'INSERT INTO people (id, name, space_id) VALUES (?, ?, ?)', args: [p.id, name.trim(), sp] });
   }
 
   for (const t of trips) {
@@ -142,7 +142,7 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
     if (!name?.trim() || !currencyByCode(t.dest_currency) || !currencyByCode(t.home_currency) || t.dest_currency === t.home_currency) bad('viaje', t.id);
     const created = str(t.created_at, 40) || new Date().toISOString();
     stmts.trips.push({
-      sql: 'INSERT OR IGNORE INTO trips (id, name, dest_currency, home_currency, created_at, space_id) VALUES (?, ?, ?, ?, ?, ?)',
+      sql: 'INSERT INTO trips (id, name, dest_currency, home_currency, created_at, space_id) VALUES (?, ?, ?, ?, ?, ?)',
       args: [t.id, name.trim(), t.dest_currency, t.home_currency, created, sp],
     });
   }
@@ -157,7 +157,7 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
     if (m.color != null && m.color !== '' && !isHexColor(m.color)) bad('medio de pago', m.id);
     if (!known('people')(m.owner_person_id)) bad('el dueño de un medio de pago no existe', m.id);
     stmts.payment_methods.push({
-      sql: `INSERT OR IGNORE INTO payment_methods (id, kind, name, last4, card_type, owner_person_id, color, network, space_id)
+      sql: `INSERT INTO payment_methods (id, kind, name, last4, card_type, owner_person_id, color, network, space_id)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [m.id, m.kind, name.trim(), last4, m.card_type ?? null, m.owner_person_id, m.color || null, m.network ?? null, sp],
     });
@@ -191,7 +191,7 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
     if (!known('payment_methods')(e.payment_method_id)) bad('el medio de pago de un gasto no existe', e.id);
     if (!links.get(e.id)?.size) bad('un gasto sin personas', e.id);
     stmts.expenses.push({
-      sql: `INSERT OR IGNORE INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, rate_source,
+      sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, rate_source,
               created_at, trip_id, lat, lng, place, amount_approx, sort_order, pay_pending, currency)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [e.id, e.date, cents, description, e.payment_method_id, rate, rate == null ? null : (e.rate_date ?? e.date), rate == null ? null : (rateSource || null),
@@ -214,7 +214,7 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
     if (!known('trips')(p.trip_id)) bad('el viaje de un abono no existe', p.id);
     if (!known('people')(p.from_person_id) || !known('people')(p.to_person_id) || p.from_person_id === p.to_person_id) bad('las personas de un abono', p.id);
     stmts.payments.push({
-      sql: `INSERT OR IGNORE INTO payments (id, trip_id, from_person_id, to_person_id, date, amount_cents, currency, rate, rate_date, rate_source, note, created_at)
+      sql: `INSERT INTO payments (id, trip_id, from_person_id, to_person_id, date, amount_cents, currency, rate, rate_date, rate_source, note, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [p.id, p.trip_id, p.from_person_id, p.to_person_id, p.date, cents, p.currency ?? null, rate, rate == null ? null : (p.rate_date ?? p.date),
         rate == null ? null : (rateSource || null), note, str(p.created_at, 40) || new Date().toISOString()],
@@ -247,7 +247,15 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
   const add = { trips: trips.length, people: people.length, payment_methods: methods.length, expenses: expenses.length, payments: payments.length };
   if (!dry) {
     const all = [...stmts.people, ...stmts.trips, ...stmts.trip_people, ...stmts.payment_methods, ...stmts.expenses, ...stmts.expense_beneficiaries, ...stmts.payments];
-    if (all.length) await db.batch(all);
+    // Las tablas con id usan INSERT simple: si entre la validación y esta escritura otro espacio ocupó un id, la
+    // transacción entera se deshace en vez de saltarse esa fila en silencio (y dejar lo demás colgado de ella).
+    // Solo los vínculos (trip_people, expense_beneficiaries) toleran repetidos.
+    try {
+      if (all.length) await db.batch(all);
+    } catch (err) {
+      if (/constraint/i.test(err?.message ?? '')) fail(409, 'Los datos cambiaron mientras se restauraba. No se guardó nada: vuelve a intentarlo.');
+      throw err;
+    }
   }
   return { dry: Boolean(dry), add, skip };
 }
