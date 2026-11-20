@@ -1,4 +1,4 @@
-// Respaldo y restauración de toda la base (viajes, personas, medios de pago y gastos).
+// Respaldo y restauración de los datos de un espacio (viajes, personas, medios de pago, gastos y abonos).
 //
 // El respaldo es una copia cruda de las tablas (no el estado que ve la pantalla), así que conserva también
 // los gastos con medio "por definir", las tasas guardadas, el orden manual y la hora de creación.
@@ -18,21 +18,34 @@ const TABLES = ['people', 'trips', 'trip_people', 'payment_methods', 'expenses',
 // Secciones que los respaldos anteriores no traen: si faltan, se tratan como vacías.
 const OPTIONAL_TABLES = ['payments'];
 
-export async function dumpBackup(db) {
+// Exige el espacio: sin él no se arma ninguna consulta (nunca se cae a "toda la base").
+function needSpace(sp) {
+  if (typeof sp !== 'string' || !sp) throw new Error('Falta el espacio');
+}
+
+// Respaldo de un solo espacio: sus personas, viajes y medios de pago, y los gastos, abonos y vínculos de sus viajes.
+// El archivo tiene el mismo formato de siempre: no trae la tabla de espacios ni la columna space_id.
+export async function dumpBackup(db, sp) {
+  needSpace(sp);
+  const tripsOf = 'SELECT id FROM trips WHERE space_id = ?';
+  const expensesOf = `SELECT e.id FROM expenses e JOIN trips t ON t.id = e.trip_id WHERE t.space_id = ?`;
   const rows = await Promise.all([
-    db.all('SELECT * FROM people ORDER BY name COLLATE NOCASE'),
-    db.all('SELECT * FROM trips ORDER BY rowid'),
-    db.all('SELECT * FROM trip_people'),
-    db.all('SELECT * FROM payment_methods ORDER BY name COLLATE NOCASE'),
-    db.all('SELECT * FROM expenses ORDER BY date, created_at'),
-    db.all('SELECT * FROM expense_beneficiaries'),
-    db.all('SELECT * FROM payments ORDER BY date, created_at'),
+    db.all('SELECT * FROM people WHERE space_id = ? ORDER BY name COLLATE NOCASE', [sp]),
+    db.all('SELECT * FROM trips WHERE space_id = ? ORDER BY rowid', [sp]),
+    db.all(`SELECT tp.* FROM trip_people tp WHERE tp.trip_id IN (${tripsOf})
+              AND tp.person_id IN (SELECT id FROM people WHERE space_id = ?)`, [sp, sp]),
+    db.all('SELECT * FROM payment_methods WHERE space_id = ? ORDER BY name COLLATE NOCASE', [sp]),
+    db.all(`SELECT * FROM expenses WHERE trip_id IN (${tripsOf}) ORDER BY date, created_at`, [sp]),
+    db.all(`SELECT * FROM expense_beneficiaries WHERE expense_id IN (${expensesOf})`, [sp]),
+    db.all(`SELECT * FROM payments WHERE trip_id IN (${tripsOf}) ORDER BY date, created_at`, [sp]),
   ]);
+  // space_id es interno: se quita para que el archivo no cambie y se pueda restaurar en cualquier espacio.
+  const clean = (list) => list.map(({ space_id: _sp, ...r }) => r);
   return {
     app: BACKUP_APP,
     version: BACKUP_VERSION,
     exportado: new Date().toISOString(),
-    ...Object.fromEntries([...TABLES, ...OPTIONAL_TABLES].map((t, i) => [t, rows[i]])),
+    ...Object.fromEntries([...TABLES, ...OPTIONAL_TABLES].map((t, i) => [t, clean(rows[i])])),
   };
 }
 
@@ -40,8 +53,11 @@ export async function dumpBackup(db) {
 // Con dry=true solo cuenta lo que entraría; sin él, lo escribe.
 // `sp` es el espacio de quien restaura: las personas, viajes y medios de pago nuevos quedan en él (sin espacio
 // no los vería nadie).
+// Todo se mira solo dentro del espacio: lo que ya existe, las referencias y los dueños de los medios. Una fila de
+// otro espacio cuenta como inexistente, y si el archivo trae un id que ya usa otro espacio, se rechaza entero
+// (no se dice de quién es).
 export async function restoreBackup(db, data, { dry, fail, sp }) {
-  if (typeof sp !== 'string' || !sp) throw new Error('Falta el espacio');
+  needSpace(sp);
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.app !== BACKUP_APP) {
     fail(400, 'Este archivo no es un respaldo de la app');
   }
@@ -71,14 +87,25 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
   const optNum = (v, lo, hi) => (v == null ? null : (typeof v === 'number' && Number.isFinite(v) && v >= lo && v <= hi ? v : undefined));
   const flag = (v) => (v === 0 || v === 1 || v === false || v === true || v == null ? (v ? 1 : 0) : undefined);
 
-  const existing = async (table) => new Set((await db.all(`SELECT id FROM ${table}`)).map((r) => r.id));
-  const have = {
-    people: await existing('people'),
-    trips: await existing('trips'),
-    payment_methods: await existing('payment_methods'),
-    expenses: await existing('expenses'),
-    payments: await existing('payments'),
+  // Para cada tabla, de dónde sale y cuál es el espacio de la fila (gastos y abonos: el de su viaje). Un gasto o
+  // abono sin viaje no es de ningún espacio: cuenta como ajeno.
+  const SOURCES = {
+    people: ['people x', 'x.space_id'],
+    trips: ['trips x', 'x.space_id'],
+    payment_methods: ['payment_methods x', 'x.space_id'],
+    expenses: ['expenses x LEFT JOIN trips t ON t.id = x.trip_id', 't.space_id'],
+    payments: ['payments x LEFT JOIN trips t ON t.id = x.trip_id', 't.space_id'],
   };
+  const idsWhere = async (table, op) => {
+    const [from, space] = SOURCES[table];
+    return new Set((await db.all(`SELECT x.id AS id FROM ${from} WHERE ${space} ${op} ?`, [sp])).map((r) => r.id));
+  };
+  const have = {}; // ids que ya existen en este espacio
+  const foreign = {}; // ids que existen en otro espacio (o en ninguno)
+  for (const table of Object.keys(SOURCES)) {
+    have[table] = await idsWhere(table, 'IS');
+    foreign[table] = await idsWhere(table, 'IS NOT');
+  }
   const known = (table) => (id) => have[table].has(id) || newIds[table].has(id);
   const newIds = { people: new Set(), trips: new Set(), payment_methods: new Set(), expenses: new Set(), payments: new Set() };
   const skip = { people: 0, trips: 0, payment_methods: 0, expenses: 0, payments: 0 };
@@ -92,6 +119,7 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
       if (!isId(r.id)) bad(table);
       if (seen.has(r.id)) bad(`${table} repetido`, r.id);
       seen.add(r.id);
+      if (foreign[table].has(r.id)) bad(table); // sin el id: no se confirma qué existe en otro espacio
       if (have[table].has(r.id)) skip[table] += 1;
       else { out.push(r); newIds[table].add(r.id); }
     }
@@ -195,7 +223,7 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
 
   // Quién va en cada viaje: los viajes nuevos con su lista; en un viaje que ya existe solo se completan las
   // personas que hacen falta para los gastos que entran (no se vuelve a agregar a quien se quitó a propósito).
-  const owners = new Map((await db.all('SELECT id, owner_person_id FROM payment_methods')).map((m) => [m.id, m.owner_person_id]));
+  const owners = new Map((await db.all('SELECT id, owner_person_id FROM payment_methods WHERE space_id = ?', [sp])).map((m) => [m.id, m.owner_person_id]));
   for (const m of methods) owners.set(m.id, m.owner_person_id);
   const needed = new Map(); // trip_id -> Set(person_id) de los gastos que entran
   for (const e of expenses) {

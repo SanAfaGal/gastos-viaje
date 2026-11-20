@@ -587,8 +587,9 @@ export async function handle({ method, path, query = new URLSearchParams(), body
 
     if (resource === 'resolve-place' && method === 'GET') return ok(await resolvePlaceLink(query));
 
-    // Respaldo: copia cruda de todas las tablas. Restaurar solo agrega lo que falta (con ?dry=1 solo cuenta).
-    if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db));
+    // Respaldo: copia cruda de las tablas del espacio. Restaurar solo agrega lo que falta, en el espacio de quien
+    // restaura (con ?dry=1 solo cuenta).
+    if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db, sp));
     if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail, sp }));
 
     const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense], payments: [savePayment, deletePayment] };

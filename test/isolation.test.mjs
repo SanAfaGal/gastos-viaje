@@ -512,3 +512,188 @@ test('actualizar tasas en B no cambia los gastos de A', async () => {
   assert.equal((await fila('ea')).rate, 4700);
   assert.equal((await fila('eb')).rate, 6);
 });
+
+// ---------- respaldo, restauración y barrido de rutas ----------
+
+const SECCIONES = ['people', 'trips', 'trip_people', 'payment_methods', 'expenses', 'expense_beneficiaries', 'payments'];
+const INVALIDO = /^El respaldo tiene datos inválidos/;
+const conteo = (people, trips, payment_methods, expenses, payments) => ({ people, trips, payment_methods, expenses, payments });
+
+// Todas las filas de la base, de cualquier espacio (la primera columna de cada tabla es su id o su viaje).
+const toda = async (db) => Object.fromEntries(await Promise.all(['spaces', ...SECCIONES]
+  .map(async (t) => [t, await db.all(`SELECT * FROM ${t} ORDER BY 1, 2`)])));
+
+// Las filas que pertenecen al espacio `sp` (gastos, abonos y vínculos por su viaje o su persona).
+const filasCompletasDe = async (db, sp) => {
+  const viajes = 'SELECT id FROM trips WHERE space_id = ?';
+  const personas = 'SELECT id FROM people WHERE space_id = ?';
+  const gastos = 'SELECT id FROM expenses WHERE trip_id IN (SELECT id FROM trips WHERE space_id = ?)';
+  return {
+    space: await db.all('SELECT * FROM spaces WHERE id = ?', [sp]),
+    trips: await db.all('SELECT * FROM trips WHERE space_id = ? ORDER BY id', [sp]),
+    people: await db.all('SELECT * FROM people WHERE space_id = ? ORDER BY id', [sp]),
+    payment_methods: await db.all('SELECT * FROM payment_methods WHERE space_id = ? ORDER BY id', [sp]),
+    trip_people: await db.all(`SELECT * FROM trip_people WHERE trip_id IN (${viajes}) OR person_id IN (${personas}) ORDER BY 1, 2`, [sp, sp]),
+    expenses: await db.all(`SELECT * FROM expenses WHERE trip_id IN (${viajes}) ORDER BY id`, [sp]),
+    beneficiaries: await db.all(`SELECT * FROM expense_beneficiaries WHERE expense_id IN (${gastos}) OR person_id IN (${personas}) ORDER BY 1, 2`, [sp, sp]),
+    payments: await db.all(`SELECT * FROM payments WHERE trip_id IN (${viajes}) ORDER BY id`, [sp]),
+  };
+};
+
+// Un respaldo completo con ids que no existen en ningún espacio (con las monedas del viaje de B).
+const respaldoNuevo = () => ({
+  app: 'gastos-viaje', version: 1,
+  people: [{ id: 'n1', name: 'Nueva uno' }, { id: 'n2', name: 'Nueva dos' }],
+  trips: [{ id: 'tn', name: 'Viaje nuevo', dest_currency: 'USD', home_currency: 'BRL', created_at: '2026-11-01T00:00:00Z' }],
+  trip_people: [{ trip_id: 'tn', person_id: 'n1' }, { trip_id: 'tn', person_id: 'n2' }],
+  payment_methods: [{ id: 'mn', kind: 'cash', name: 'Efectivo nuevo', owner_person_id: 'n1' }],
+  expenses: [{ id: 'en', date: DIA, amount_cents: 900, description: 'nuevo', payment_method_id: 'mn', trip_id: 'tn', created_at: '2026-11-14T00:00:00Z' }],
+  expense_beneficiaries: [{ expense_id: 'en', person_id: 'n1' }, { expense_id: 'en', person_id: 'n2' }],
+  payments: [{ id: 'yn', trip_id: 'tn', from_person_id: 'n1', to_person_id: 'n2', date: DIA, amount_cents: 300, created_at: '2026-11-14T00:00:00Z' }],
+});
+
+// Una copia de respaldoNuevo() con un cambio aplicado.
+const respaldoCon = (cambiar) => { const f = respaldoNuevo(); cambiar(f); return f; };
+// Ids de cada sección con id de un respaldo (o del estado), y los que tiene A tras conGastos().
+const idsDe = (b) => Object.fromEntries(['people', 'trips', 'payment_methods', 'expenses', 'payments'].map((t) => [t, ids(b[t])]));
+const IDS_A = { people: ['a2', 'pa'], trips: ['ta'], payment_methods: ['ma'], expenses: ['ea'], payments: ['ya'] };
+
+test('el respaldo de A no trae nada de B ni la tabla spaces', async () => {
+  const { A, B, Admin } = await conGastos();
+  const { status, body: b } = await A('GET', '/api/backup');
+  assert.equal(status, 200);
+  assert.deepEqual(Object.keys(b).sort(), ['app', 'exportado', 'version', ...SECCIONES].sort());
+  assert.deepEqual([b.app, b.version], ['gastos-viaje', 1]);
+  assert.deepEqual(idsDe(b), IDS_A);
+  assert.deepEqual(b.expense_beneficiaries, [{ expense_id: 'ea', person_id: 'pa' }]);
+  assert.deepEqual(b.trip_people.map((l) => `${l.trip_id}/${l.person_id}`).sort(), ['ta/a2', 'ta/pa']);
+  const texto = JSON.stringify(b);
+  for (const prohibido of ['space_id', 'code_hash', 'spaces', 'space-a', 'space-b', 'Grupo', 'Persona b', 'Viaje b', '"tb"', '"pb"', '"mb"', '"eb"', '"yb"', 'p-admin']) {
+    assert.ok(!texto.includes(prohibido), prohibido);
+  }
+  // Las columnas de cada fila son las de siempre (sin space_id).
+  assert.deepEqual([b.people[0], b.trips[0]].map((f) => Object.keys(f).sort()), [['id', 'name'], ['created_at', 'dest_currency', 'home_currency', 'id', 'name']]);
+  // B y el administrador tampoco ven lo de A.
+  assert.deepEqual(idsDe((await B('GET', '/api/backup')).body), { people: ['b2', 'pb'], trips: ['tb'], payment_methods: ['mb'], expenses: ['eb'], payments: ['yb'] });
+  assert.deepEqual(idsDe((await Admin('GET', '/api/backup')).body), { people: ['p-admin'], trips: ['trip-1'], payment_methods: [], expenses: [], payments: [] });
+});
+
+test('restaurar en B un respaldo de A copia los datos como nuevos de B solo si los ids no existen en otros espacios', async () => {
+  const { db, A, B } = await conGastos();
+  const deA = (await A('GET', '/api/backup')).body;
+  const rechaza = async (file, query, msg) => {
+    const r = await B('POST', '/api/restore', file, query);
+    assert.equal(r.status, 400, msg);
+    assert.match(r.body.error, INVALIDO, msg);
+    assert.ok(!/space|Grupo/.test(r.body.error), r.body.error);
+    return r.body.error;
+  };
+  // (a) Los ids de A siguen en A: falla con 400 de datos inválidos, sin nombrar el id ni de quién es, y no escribe nada.
+  const antes = await toda(db);
+  for (const query of [undefined, { dry: '1' }]) assert.equal(await rechaza(deA, query), 'El respaldo tiene datos inválidos (people)');
+  // Un solo id ajeno en una sección basta, aunque el resto sea nuevo.
+  for (const [seccion, fila] of [
+    ['people', { id: 'pa', name: 'x' }], ['people', { id: 'p-admin', name: 'x' }],
+    ['trips', { id: 'ta', name: 'x', dest_currency: 'USD', home_currency: 'BRL' }],
+    ['payment_methods', { id: 'ma', kind: 'cash', name: 'x', owner_person_id: 'n1' }],
+    ['expenses', { id: 'ea', date: DIA, amount_cents: 1, payment_method_id: 'mn', trip_id: 'tn' }],
+    ['payments', { id: 'ya', trip_id: 'tn', from_person_id: 'n1', to_person_id: 'n2', date: DIA, amount_cents: 1 }],
+  ]) {
+    const file = respaldoCon((f) => f[seccion].push(fila));
+    if (seccion === 'expenses') file.expense_beneficiaries.push({ expense_id: 'ea', person_id: 'n1' });
+    assert.equal(await rechaza(file, undefined, `${seccion} ${fila.id}`), `El respaldo tiene datos inválidos (${seccion})`);
+  }
+  // Las referencias a filas de A (dueño, viaje, medio, beneficiario, personas del abono, vínculo) cuentan como inexistentes.
+  for (const cambiar of [
+    (f) => { f.payment_methods[0].owner_person_id = 'pa'; }, (f) => { f.expenses[0].trip_id = 'ta'; },
+    (f) => { f.expenses[0].payment_method_id = 'ma'; }, (f) => { f.expense_beneficiaries.push({ expense_id: 'en', person_id: 'pa' }); },
+    (f) => { f.payments[0].trip_id = 'ta'; }, (f) => { f.payments[0].to_person_id = 'a2'; },
+    (f) => { f.trip_people.push({ trip_id: 'tn', person_id: 'pa' }); },
+  ]) await rechaza(respaldoCon(cambiar), undefined, String(cambiar)); // aquí el mensaje puede repetir el id del archivo
+  // Un vínculo con un viaje de A no se agrega (el viaje no es nuevo ni de B).
+  const soloVinculo = { app: 'gastos-viaje', version: 1, ...Object.fromEntries(SECCIONES.map((s) => [s, []])), trip_people: [{ trip_id: 'ta', person_id: 'pb' }] };
+  assert.equal((await B('POST', '/api/restore', soloVinculo)).status, 200);
+  assert.deepEqual(await toda(db), antes);
+  // (b) Con ids nuevos entra completo, en el espacio de B, y aparece en su estado y no en el de A.
+  const antesA = await filasCompletasDe(db, 'space-a');
+  const r = await B('POST', '/api/restore', respaldoNuevo());
+  assert.deepEqual([r.status, r.body.add, r.body.skip], [200, conteo(2, 1, 1, 1, 1), conteo(0, 0, 0, 0, 0)]);
+  for (const t of ['people', 'trips', 'payment_methods']) {
+    assert.deepEqual(await db.all(`SELECT DISTINCT space_id FROM ${t} WHERE id IN ('n1', 'n2', 'tn', 'mn')`), [{ space_id: 'space-b' }], t);
+  }
+  const sb = (await B('GET', '/api/state')).body;
+  assert.deepEqual(idsDe(sb), { people: ['b2', 'n1', 'n2', 'pb'], trips: ['tb', 'tn'], payment_methods: ['mb', 'mn'], expenses: ['eb', 'en'], payments: ['yb', 'yn'] });
+  assert.deepEqual(sb.trips.find((t) => t.id === 'tn').people_ids.sort(), ['n1', 'n2']);
+  assert.deepEqual(idsDe((await A('GET', '/api/state')).body), IDS_A);
+  assert.deepEqual(await filasCompletasDe(db, 'space-a'), antesA);
+  // El mismo archivo otra vez en B: todo ya existe en B y se omite sin error. En A esos ids son de B: falla.
+  const otra = await B('POST', '/api/restore', respaldoNuevo());
+  assert.deepEqual([otra.status, otra.body.skip], [200, conteo(2, 1, 1, 1, 1)]);
+  assert.equal((await A('POST', '/api/restore', respaldoNuevo())).status, 400);
+  assert.deepEqual(await filasCompletasDe(db, 'space-a'), antesA);
+});
+
+test('restaurar con dry=1 no revela ni cuenta filas de otro espacio', async () => {
+  const { db, A, B } = await conGastos();
+  const antes = await toda(db);
+  // Su propio respaldo en seco: omite solo las filas de B.
+  const propio = await B('POST', '/api/restore', (await B('GET', '/api/backup')).body, { dry: '1' });
+  assert.deepEqual([propio.status, propio.body], [200, { dry: true, add: conteo(0, 0, 0, 0, 0), skip: conteo(2, 1, 1, 1, 1) }]);
+  // Ids nuevos en seco: todo entraría y nada se omite, aunque A tenga filas.
+  const nuevo = await B('POST', '/api/restore', respaldoNuevo(), { dry: '1' });
+  assert.deepEqual([nuevo.status, nuevo.body], [200, { dry: true, add: conteo(2, 1, 1, 1, 1), skip: conteo(0, 0, 0, 0, 0) }]);
+  // El respaldo de A en seco no cuenta nada: falla igual que sin dry, con el mensaje de datos inválidos.
+  const ajeno = await B('POST', '/api/restore', (await A('GET', '/api/backup')).body, { dry: '1' });
+  assert.deepEqual([ajeno.status, Object.keys(ajeno.body)], [400, ['error']]);
+  assert.match(ajeno.body.error, INVALIDO);
+  assert.deepEqual(await toda(db), antes);
+});
+
+test('ninguna ruta devuelve ni modifica datos de otro espacio', async () => {
+  _resetFailures();
+  const { db, A, B } = await conGastos();
+  const deA = (await A('GET', '/api/backup')).body;
+  const antesA = await filasCompletasDe(db, 'space-a');
+  // Lo que identifica a A: nombres y espacio como texto; los ids como cadena JSON exacta (son cortos).
+  const textosA = ['Viaje a', 'Persona a', 'Efectivo a', 'Segunda a', 'Grupo A', 'space-a'];
+  const sensibles = [...textosA, ...['ta', 'pa', 'a2', 'ma', 'ea', 'ya'].map((id) => `"${id}"`)];
+  const gastoB = gasto({ trip_id: 'tb', payment_method_id: 'mb', beneficiary_ids: ['pb'] });
+  const abonoB = { trip_id: 'tb', from_person_id: 'pb', to_person_id: 'b2', date: DIA, amount_cents: 1 };
+  // Todas las rutas de handle(), con ids de A desde B: [método, ruta, cuerpo, query].
+  const metodo = (extra) => ({ kind: 'cash', name: 'x', owner_person_id: 'pb', ...extra });
+  const rutas = [
+    ['GET', '/api/ping'], ['GET', '/api/state'], ['POST', '/api/trips', { id: 'ta', name: 'x', dest: 'USD', home: 'BRL' }],
+    ['PUT', '/api/trips/ta', { name: 'x', dest: 'USD', home: 'BRL', people_ids: ['pb'] }],
+    ['DELETE', '/api/trips/ta'], ['DELETE', '/api/trips/ta', undefined, { con_gastos: '1' }],
+    ['POST', '/api/people', { id: 'pa', name: 'x' }], ['POST', '/api/people', { id: 'pb9', name: 'x', trip_id: 'ta' }],
+    ['PUT', '/api/people/pa', { name: 'x' }], ['DELETE', '/api/people/pa'], ['POST', '/api/payment-methods', metodo({ id: 'ma' })],
+    ['POST', '/api/payment-methods', metodo({ id: 'mb9', owner_person_id: 'pa' })], ['PUT', '/api/payment-methods/ma', metodo()],
+    ['DELETE', '/api/payment-methods/ma'], ['POST', '/api/expenses', { ...gastoB, id: 'ea' }],
+    ['POST', '/api/expenses', { ...gastoB, id: 'eb9', trip_id: 'ta', payment_method_id: 'ma', beneficiary_ids: ['pa'] }],
+    ['PUT', '/api/expenses/ea', gastoB], ['DELETE', '/api/expenses/ea'], ['POST', '/api/payments', { ...abonoB, id: 'ya' }],
+    ['POST', '/api/payments', { ...abonoB, id: 'yb9', trip_id: 'ta', from_person_id: 'pa', to_person_id: 'a2' }],
+    ['PUT', '/api/payments/ya', abonoB], ['DELETE', '/api/payments/ya'], ['POST', '/api/order', { ids: ['ea', 'eb'] }],
+    ['GET', '/api/rates/history', undefined, { days: '2', trip: 'ta' }], ['GET', '/api/rates/history', undefined, { days: '2' }],
+    ['POST', '/api/rates/refresh', undefined, { trip: 'ta' }], ['POST', '/api/rates/refresh', undefined, { trip: 'ta', dry: '1' }],
+    ['POST', '/api/rates/refresh', undefined, { dry: '1' }], ['GET', '/api/rate', undefined, { date: DIA, trip: 'ta' }],
+    ['GET', '/api/rate', undefined, { date: DIA }], ['GET', '/api/resolve-place'], ['GET', '/api/backup'],
+    ['POST', '/api/restore', deA], ['POST', '/api/restore', deA, { dry: '1' }], ['GET', '/api/no-existe/ta'],
+  ];
+  // La fuente de tasas trae otra tasa para EUR-COP: si B tocara los gastos de A, cambiarían.
+  await withSource({ [DIA]: { eur: { cop: 4700 } } }, async () => {
+    for (const [method, path, body, query] of rutas) {
+      const r = await B(method, path, body, query);
+      const texto = JSON.stringify(r);
+      const ruta = `${method} ${path} ${JSON.stringify(query ?? {})}`;
+      assert.ok(r.status < 500, `${ruta}: ${texto}`);
+      for (const s of sensibles) assert.ok(!texto.includes(s), `${ruta} revela ${s}: ${texto}`);
+      assert.deepEqual(await filasCompletasDe(db, 'space-a'), antesA, ruta);
+    }
+  });
+  // Control positivo: A sigue viendo y respaldando lo suyo, y la misma ruta con sus ids le funciona.
+  assert.deepEqual(idsDe((await A('GET', '/api/state')).body), IDS_A);
+  const respaldoA = JSON.stringify((await A('GET', '/api/backup')).body);
+  for (const t of textosA.slice(0, 4)) assert.ok(respaldoA.includes(t), t);
+  const editada = await A('PUT', '/api/people/pa', { name: 'Persona a editada' });
+  assert.deepEqual([editada.status, editada.body.id], [200, 'pa']);
+});
