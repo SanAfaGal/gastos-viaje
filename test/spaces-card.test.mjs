@@ -57,3 +57,22 @@ test('mientras carga (spaces = null) muestra un texto de carga y el botón de cr
   assert.match(html, /Cargando/);
   assert.match(html, /data-action="new-space"/);
 });
+
+test('si falla recargar la lista, el código recién creado sigue visible junto al aviso de error', () => {
+  const shown = { name: 'Familia Gómez', code: 'ABCD-EFGH-JKLM' };
+  const html = spacesCardHtml({ spaces: null, shown, esc, error: 'No se pudo cargar la lista de espacios.' });
+  assert.match(html, /ABCD-EFGH-JKLM/);
+  assert.match(html, /no se volverá a mostrar/i);
+  assert.match(html, /data-action="copy-code"/);
+  assert.match(html, /data-action="share-code"/);
+  assert.match(html, /data-action="dismiss-code"/);
+  assert.match(html, /No se pudo cargar la lista de espacios/);
+  assert.doesNotMatch(html, /Cargando/);
+});
+
+test('con error y sin código solo se ve el aviso de error, sin caja de código ni lista', () => {
+  const html = spacesCardHtml({ spaces: [familia], shown: null, esc, error: 'No se pudo cargar la lista de espacios.' });
+  assert.match(html, /No se pudo cargar la lista de espacios/);
+  assert.doesNotMatch(html, /code-box|copy-code|dismiss-code/);
+  assert.doesNotMatch(html, /Familia Gómez/);
+});

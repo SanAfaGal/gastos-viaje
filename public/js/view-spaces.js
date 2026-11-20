@@ -43,9 +43,9 @@ export function ensureSpaces() {
 }
 
 export function viewSpaces() {
-  if (!isAdmin() || status === 'na') return '';
-  if (status === 'error') return '<div class="card"><h2>Espacios</h2><p class="muted">No se pudo cargar la lista de espacios. Revisa tu conexión y vuelve a entrar a Ajustes.</p></div>';
-  const card = spacesCardHtml({ spaces, shown, esc, canShare: typeof navigator.share === 'function' });
+  if (!isAdmin() || (status === 'na' && !shown)) return ''; // con un código por mostrar, la tarjeta no se oculta nunca
+  const error = status === 'error' ? 'No se pudo cargar la lista de espacios. Revisa tu conexión y vuelve a entrar a Ajustes.' : null;
+  const card = spacesCardHtml({ spaces, shown, esc, canShare: typeof navigator.share === 'function', error });
   const dialog = spaceOpen ? `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
       <form id="space-form" autocomplete="off">
         <header class="sheet-head"><h2 id="sd-title">Nuevo espacio</h2>

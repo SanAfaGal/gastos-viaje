@@ -25,7 +25,14 @@ function spaceRow(s, esc) {
         <div class="muted">Creado el ${esc(dayOf(s.created_at))}</div></span>${acts}</div>`;
 }
 
-export function spacesCardHtml({ spaces, shown, esc, canShare = true }) {
+// `error` (texto): la lista no se pudo cargar; se muestra el aviso en su lugar, pero el código recién creado nunca se oculta.
+export function spacesCardHtml({ spaces, shown, esc, canShare = true, error = null }) {
+  if (error) {
+    return `<div class="card"><h2>Espacios</h2>
+      ${shown ? codeBlock(shown, canShare, esc) : ''}
+      <p class="muted">${esc(error)}</p>
+    </div>`;
+  }
   const list = spaces === null
     ? '<div class="muted">Cargando…</div>'
     : spaces.map((s) => spaceRow(s, esc)).join('') || '<div class="empty">Aún no hay espacios.</div>';
