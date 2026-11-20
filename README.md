@@ -113,7 +113,7 @@ Todos los montos se guardan como enteros en centésimas. Las tasas vienen de fue
 
 ### Lugar del gasto
 
-En el formulario, “Elegir lugar” abre un solo diálogo con dos botones en una fila: **1)** “Abrir Google Maps” abre Google Maps (en otra pestaña o en la app de Mapas) centrado donde estás mirando; ahí buscas el lugar y copias el enlace, las coordenadas o el Plus Code; **2)** vuelves y tocas “Pegar”, que lee el portapapeles (si el navegador no lo deja, pide pegarlo a mano). También se puede tocar el mapa. La app no busca lugares por nombre: el punto lo da Google Maps, que es lo más preciso.
+En el formulario, “Elegir lugar” abre un solo diálogo con un campo para pegar y, debajo, una línea de estado que aparece al pegar y dice qué está pasando (abriendo el enlace, buscando, ubicado, o qué falló y qué hacer) y dos botones con nombre: “Google Maps” abre Google Maps (en otra pestaña o en la app de Mapas) centrado donde estás mirando, y “Visitados” abre la lista de lugares visitados del viaje (los recientes salen solo ahí). En el campo se pega el enlace de Google Maps, las coordenadas o el Plus Code; al pegar se busca solo, y también con Enter o el botón de la lupa. Si el enlace corto solo trae el nombre y la dirección (negocios y edificios), o si se escribe un nombre, se busca por texto en OpenStreetMap y se avisa que el punto puede estar corrido. También se puede tocar el mapa.
 
 Qué se acepta al pegar:
 

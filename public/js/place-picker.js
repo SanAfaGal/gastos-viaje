@@ -5,7 +5,7 @@ import { googleMapsUrl, isBareShortPlusCode, isShortMapLink, parseCoordinates, p
 import { PICK_MIN_ZOOM, TAP_ZOOM, buildList, confirmPlace, selectionSummary } from './picker.mjs';
 import { icon } from './icons.mjs';
 import { readPosition, zoomForAccuracy } from './geolocate.mjs';
-import { knownPlaces, recentPlaces, visitedPlaces } from './nearby.mjs';
+import { knownPlaces, visitedPlaces } from './nearby.mjs';
 import { esc, toast } from './ui.js';
 import { ctx, dayLabel } from './shared.js';
 import { draft, paintLoc } from './view-form.js';
@@ -21,7 +21,16 @@ const $pick = document.getElementById('map-pick');
 const $pickOk = document.getElementById('pick-ok');
 const $pickPanel = document.getElementById('pick-panel');
 const $pickSel = document.getElementById('pick-sel');
-const $pickPaste = document.getElementById('pick-paste');
+const $pickForm = document.getElementById('pick-find');
+const $pickInput = document.getElementById('pick-input');
+const $pickStatus = document.getElementById('pick-status');
+// Lo que pasa con lo pegado se dice aquí, justo debajo del campo (siempre a la vista, arriba del mapa): nunca abajo en la lista, donde hay que hacer scroll.
+// Sin texto, la línea desaparece. kind: '' (nada), 'busy' (trabajando), 'ok' (listo), 'warn' (no se pudo, con qué hacer).
+function say(kind, text = '') {
+  $pickStatus.className = `pick-status ${kind}`.trim();
+  $pickStatus.textContent = text;
+  $pickForm.setAttribute('aria-busy', String(kind === 'busy'));
+}
 const $pickGmaps = document.getElementById('pick-gmaps');
 const $pickVisited = document.getElementById('pick-visited');
 let pickMap = null;
@@ -36,10 +45,9 @@ let geoWarm = null; // lectura en segundo plano en curso (promesa)
 let geoDenied = false; // el usuario negó el permiso: no se vuelve a pedir solo
 const GEO_FRESH_MS = 60 * 1000; // una lectura de hace menos de esto se muestra de una vez al abrir el selector
 const pk = {
-  target: null, anchor: null, known: [], items: [], selKey: 'point', typed: '', note: '', touched: false,
+  target: null, anchor: null, known: [], items: [], selKey: 'point', typed: '', touched: false,
   seq: 0, ctl: null, locCtl: null, userMoved: false,
   visitedOpen: false, vq: '', visited: [], // lista de lugares ya visitados en este viaje, con su búsqueda
-  recent: [], // lugares usados hace poco (con los del mismo día primero), para elegirlos de un toque al abrir
 };
 const pickSel = () => pk.items.find((i) => i.key === pk.selKey) ?? null;
 // Una fila de la lista: número (el mismo del mapa), nombre, detalle y una marca si es la elegida.
@@ -54,15 +62,10 @@ function rowHtml(c, i, attr = 'data-i') {
     <span class="sug-txt"><b>${esc(name)}</b><span class="muted">${esc(sub)}</span></span><span class="pk-tick" aria-hidden="true">✓</span></button>`;
 }
 function idleHtml() {
-  // Con lugares recientes se muestran primero (un toque y listo).
-  const recent = pk.recent.length ? `<section class="pk-sec known"><h3 class="sug-h">Lugares recientes</h3><div class="sug-list">${pk.recent.map((r, i) => `<button type="button" class="pick-res known" data-r="${i}">
-        <span class="pk-ico" aria-hidden="true">${icon('clock')}</span>
-        <span class="sug-txt"><b>${esc(r.name || 'Sin nombre')}</b><span class="muted">${esc(`${r.today ? 'Ya hay un gasto de este día' : dayLabel(r.last)} · ${r.count} gasto${r.count === 1 ? '' : 's'}`)}</span></span><span class="pk-tick" aria-hidden="true">✓</span></button>`).join('')}</div></section>` : '';
-  return `${recent}<div class="pk-help"><p><b>Lo que puedes pegar</b></p>
+  return `<div class="pk-help"><p><b>Lo que puedes pegar</b></p>
     <ul><li><span aria-hidden="true">${icon('pin')}</span><span><b>Enlace</b> de Google Maps, corto o largo <span class="muted">(maps.app.goo.gl/…)</span></span></li>
     <li><span aria-hidden="true">${icon('crosshair')}</span><span><b>Coordenadas</b> <span class="muted">(6.1732, -75.6298)</span></span></li>
-    <li><span aria-hidden="true">${icon('pointer')}</span><span><b>Plus Code</b> con la ciudad <span class="muted">(59FC+73 Itagüí)</span></span></li></ul></div>
-    ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
+    <li><span aria-hidden="true">${icon('pointer')}</span><span><b>Plus Code</b> con la ciudad <span class="muted">(59FC+73 Itagüí)</span></span></li></ul></div>`;
 }
 function anchorHtml() {
   const [point, ...rest] = pk.items;
@@ -72,8 +75,7 @@ function anchorHtml() {
     ? `<div class="pk-name"><label for="pick-name" class="sr-only">Nombre del lugar (obligatorio)</label>
         <input id="pick-name" maxlength="120" autocomplete="off" placeholder="Nombre del lugar (obligatorio)" aria-required="true" value="${esc(pk.typed)}"></div>` : '';
   return `${rowHtml(point, 0)}${nameInput}
-    ${known.length ? `<section class="pk-sec known"><h3 class="sug-h">Lugares que ya usaste <span>${known.length}</span></h3><div class="sug-list">${known.map((c) => rowHtml(c, idx(c))).join('')}</div></section>` : ''}
-    ${pk.note ? `<div class="sug-note">${esc(pk.note)}</div>` : ''}`;
+    ${known.length ? `<section class="pk-sec known"><h3 class="sug-h">Lugares que ya usaste <span>${known.length}</span></h3><div class="sug-list">${known.map((c) => rowHtml(c, idx(c))).join('')}</div></section>` : ''}`;
 }
 // Lugares visitados en este viaje (con ubicación): una búsqueda y la lista completa, del más reciente al más antiguo. Elegir uno es un toque.
 function visitedListHtml() {
@@ -151,8 +153,10 @@ function selectPick(i) {
 function setAnchor(at, { source, name = '' } = {}) {
   Object.assign(pk, {
     anchor: { lat: at.lat, lng: at.lng, source }, typed: name, selKey: 'point', known: knownPlaces(ctx().expenses, at),
-    note: '', touched: false, visitedOpen: false,
+    touched: false, visitedOpen: false,
   });
+  // Tocar el mapa o elegir un lugar visitado anula una búsqueda en curso y limpia el estado; lo pegado (source 'coords') lo dice en choose().
+  if (source !== 'coords') { findSeq += 1; say(''); }
   pk.ctl?.abort();
   pk.ctl = new AbortController();
   const seq = (pk.seq += 1);
@@ -186,9 +190,8 @@ export async function openPicker() {
   const target = draft;
   for (const c of [pk.ctl, pk.locCtl]) c?.abort();
   Object.assign(pk, {
-    target, anchor: null, known: [], items: [], selKey: 'point', typed: '', note: '',
+    target, anchor: null, known: [], items: [], selKey: 'point', typed: '',
     touched: false, userMoved: false, locating: false, force: false, visitedOpen: false, vq: '', visited: [],
-    recent: target.lat == null ? recentPlaces(ctx().expenses, { date: target.date, limit: 5 }) : [],
   });
   pk.seq += 1;
   // El mapa de la vez anterior ya no sirve.
@@ -197,6 +200,9 @@ export async function openPicker() {
   pickMap?.remove();
   pickMap = null;
   pickPin = null;
+  findSeq += 1; // una búsqueda que quedó en curso de la vez anterior ya no cuenta
+  $pickInput.value = '';
+  say('');
   $pickVisited.disabled = !visitedPlaces(ctx().expenses).length;
   $pickVisited.title = $pickVisited.disabled ? 'Aún no hay lugares visitados en este viaje' : 'Elegir entre los lugares ya visitados';
   paintPick();
@@ -253,69 +259,77 @@ function pickSearchRef() {
   const last = ctx().expenses.find(hasLocation);
   return last ? { lat: Number(last.lat), lng: Number(last.lng) } : null;
 }
-// Lo que se pega tiene que venir de Google Maps: un enlace, coordenadas o un Plus Code. No hay búsqueda por nombre.
+// Lo que se escribe o pega en el campo: enlace de Google Maps, coordenadas, Plus Code o, si no es nada de eso, el nombre de un lugar.
+// Todo lo que pasa se dice en el estado de arriba (say): trabajando, listo o qué falló y qué hacer. Una búsqueda nueva anula la anterior.
+let findSeq = 0;
 function handlePasted(raw) {
   const text = String(raw ?? '').trim();
-  if (!text) return;
-  pk.note = '';
+  const seq = (findSeq += 1);
+  if (!text) { say('warn', 'No hay nada que buscar. Pega el enlace, las coordenadas o el Plus Code de Google Maps.'); return; }
   // Con la ciudad escrita ("59FC+73 Itagüí, Antioquia"), la ciudad es la referencia del código, no el mapa ni tu último gasto.
   const withCity = shortPlusCodeWithPlace(text);
-  if (withCity) return openShortPlusCode(withCity);
+  if (withCity) return openShortPlusCode(withCity, seq);
   // Un código corto sin ciudad se completaría con el mapa o con tu último gasto, que pueden estar en otro país: mejor pedir la ciudad.
-  if (isBareShortPlusCode(text)) {
-    pk.note = 'Ese Plus Code es corto: agrégale la ciudad (por ejemplo “59FC+73 Itagüí”) o pega el código completo.';
-    return paintPick();
-  }
+  if (isBareShortPlusCode(text)) { say('warn', 'Ese Plus Code es corto. Agrégale la ciudad (por ejemplo “59FC+73 Itagüí”) o pega el código completo.'); return; }
   const found = parseCoordinates(text);
-  if (found) return chooseCoords(found);
-  if (isShortMapLink(text)) return openShortLink(text);
-  pk.note = 'No reconozco eso. Copia de Google Maps el enlace, las coordenadas o el Plus Code (toca la “i” para ver cómo).';
-  paintPick();
+  if (found) return choose(found, found.name ? `Ubicado: ${found.name}.` : 'Ubicado por las coordenadas.');
+  if (isShortMapLink(text)) return openShortLink(text, seq);
+  if (/^https?:\/\//i.test(text)) { say('warn', 'Ese enlace no es de Google Maps con un lugar. En Google Maps toca el lugar, Compartir y copia el enlace.'); return; }
+  return searchByText(text, seq, { ref: pickSearchRef() });
+}
+// Pone el punto en el mapa y lo dice. Revisar el punto sigue siendo cosa de quien pega: por eso el aviso lo menciona.
+function choose(c, msg) {
+  chooseCoords(c);
+  say('ok', `${msg} Revisa el punto en el mapa.`);
+}
+// Nombre o dirección: se busca en Photon/Nominatim (gratis) y se toma el primer resultado. No es tan preciso como un enlace de Google, y se avisa.
+async function searchByText(text, seq, { ref = null, name = '', why = '' } = {}) {
+  say('busy', `Buscando “${text.length > 60 ? `${text.slice(0, 57)}…` : text}”…`);
+  try {
+    const { results } = await searchPlaces(text, { ref });
+    if (seq !== findSeq || !$pick.open) return;
+    const hit = results.find((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
+    if (!hit) {
+      say('warn', `${why}No encontré ese lugar. En Google Maps toca el punto y copia las coordenadas o el Plus Code, o toca el mapa donde es.`);
+      return;
+    }
+    const where = [hit.name, hit.detail].filter(Boolean).join(', ');
+    choose({ lat: hit.lat, lng: hit.lng, name: name || hit.name }, `${why}Encontré “${where.slice(0, 90)}”, puede estar corrido.`);
+  } catch (err) {
+    if (seq !== findSeq) return;
+    say('warn', 'No se pudo buscar. Revisa tu conexión e inténtalo otra vez.');
+  }
 }
 // Plus Code corto con ciudad: se ubica la ciudad (Photon y Nominatim, gratis) y con ella se completa el código.
-let plusSeq = 0;
-async function openShortPlusCode({ code, place }) {
-  const seq = (plusSeq += 1);
-  pk.note = '';
-  toast(`Ubicando “${place}” para completar el código…`);
+async function openShortPlusCode({ code, place }, seq) {
+  say('busy', `Ubicando “${place}” para completar el código…`);
   try {
     const { results } = await searchPlaces(place, { ref: null });
-    if (seq !== plusSeq || !$pick.open) return;
+    if (seq !== findSeq || !$pick.open) return;
     // La primera con coordenadas que sea una zona (ciudad, barrio) o cualquier lugar: basta con que esté cerca del código.
     const city = results.find((r) => Number.isFinite(r.lat) && Number.isFinite(r.lng));
     const found = city ? parsePlusCode(code, { ref: city }) : null;
-    if (found) {
-      chooseCoords({ lat: found.lat, lng: found.lng });
-    } else {
-      pk.note = `No pude ubicar “${place}”. Pega el código completo (empieza con 4 letras o números más, por ejemplo 67R659FC+73) o las coordenadas.`;
-      paintPick();
-    }
+    if (found) choose({ lat: found.lat, lng: found.lng }, 'Ubicado por el Plus Code.');
+    else say('warn', `No pude ubicar “${place}”. Pega el código completo (empieza con 4 letras o números más, por ejemplo 67R659FC+73) o las coordenadas.`);
   } catch (err) {
-    if (seq !== plusSeq) return;
-    pk.note = 'No se pudo ubicar la ciudad del código. Revisa tu conexión.';
-    paintPick();
+    if (seq !== findSeq) return;
+    say('warn', 'No se pudo ubicar la ciudad del código. Revisa tu conexión.');
   }
 }
-// Enlace corto de Google Maps: el servidor lo abre y devuelve las coordenadas.
-let linkSeq = 0;
-async function openShortLink(url) {
-  const seq = (linkSeq += 1);
-  pk.note = '';
-  toast('Abriendo el enlace de Google Maps…');
+// Enlace corto de Google Maps: el servidor lo abre y devuelve las coordenadas. Algunos (los de un negocio o edificio) solo traen el nombre y la
+// dirección y no las coordenadas: entonces se busca esa dirección por texto, y si tampoco aparece se explica qué copiar en su lugar.
+async function openShortLink(url, seq) {
+  say('busy', 'Abriendo el enlace de Google Maps…');
   try {
     const r = await store.resolvePlaceLink(url);
-    if (seq !== linkSeq || !$pick.open) return;
-    if (r.lat != null && r.lng != null) {
-      chooseCoords({ lat: r.lat, lng: r.lng, name: r.name });
-    } else {
-      pk.note = 'Ese enlace no trae las coordenadas. En Google Maps toca el lugar y copia el enlace desde “Compartir”, o copia las coordenadas o el Plus Code.';
-      paintPick();
-    }
+    if (seq !== findSeq || !$pick.open) return;
+    if (r.lat != null && r.lng != null) return choose({ lat: r.lat, lng: r.lng, name: r.name }, r.name ? `Ubicado: ${r.name}.` : 'Ubicado por el enlace.');
+    const text = r.address || r.name;
+    if (text) return searchByText(text, seq, { ref: pickSearchRef(), name: r.name, why: 'Ese enlace no trae el punto exacto. ' });
+    say('warn', 'Ese enlace no trae el lugar. En Google Maps toca el lugar, Compartir y copia el enlace, o copia las coordenadas o el Plus Code.');
   } catch (err) {
-    if (seq !== linkSeq) return;
-    pk.note = err.offline ? 'Necesitas internet para abrir un enlace de Google Maps.' : `No se pudo abrir el enlace: ${err.message}`;
-    paintPick();
-  } finally {
+    if (seq !== findSeq) return;
+    say('warn', err.offline ? 'Necesitas internet para abrir un enlace de Google Maps.' : `No se pudo abrir el enlace: ${err.message}`);
   }
 }
 // Se guarda toda lectura buena para tenerla lista la próxima vez.
@@ -407,7 +421,8 @@ function chooseCoords(c) {
 function pickHelpHtml() {
   const row = (ic, title, text) => `<li><span class="bd pinb" aria-hidden="true">${icon(ic)}</span><span><b>${title}</b><span class="muted">${text}</span></span></li>`;
   return `<ul class="legend">
-    ${row('pin', 'Desde Google Maps (lo más preciso)', 'Toca <b>Abrir Google Maps</b>, busca el lugar y elige una de estas formas. Luego vuelve y toca <b>Pegar</b>.')}
+    ${row('pin', 'Desde Google Maps (lo más preciso)', 'Toca <b>Google Maps</b>, busca el lugar y copia una de estas formas. Luego vuelve, pégala en el campo y toca <b>Buscar</b> (al pegar se busca solo).')}
+    ${row('search', 'Nombre o dirección', 'Si escribes un nombre o una dirección se busca en OpenStreetMap, que no tiene todos los negocios y puede quedar corrido: revisa el punto en el mapa.')}
     ${row('pin', 'Enlace', 'En el lugar toca <b>Compartir → Copiar enlace</b>. Sirve el enlace corto (<i>maps.app.goo.gl/…</i>) y el largo. Necesita internet.')}
     ${row('pin', 'Plus Code', 'Toca el lugar y mira debajo de las coordenadas (por ejemplo <i>59FC+73 Itagüí</i>). Cópialo con la ciudad, o completo (<i>67R659FC+73</i>).')}
     ${row('pin', 'Coordenadas', 'Toca el lugar en Google Maps y copia los números de arriba (<i>6.1732, -75.6298</i>). También sirven en grados (<i>6°10′23″N 75°37′47″W</i>).')}
@@ -420,18 +435,9 @@ function pickHelpHtml() {
 const $pickHelp = document.getElementById('pick-help');
 
 export function initPicker() {
-  // "Pegar": lee el portapapeles (el navegador pide permiso la primera vez) y procesa lo que haya. Si no puede leerlo, pide pegarlo a mano.
-$pickPaste.addEventListener('click', async () => {
-    let text = '';
-    try {
-      text = await navigator.clipboard.readText();
-    } catch {
-      text = window.prompt('Pega aquí el enlace, las coordenadas o el Plus Code de Google Maps:') ?? '';
-      if (!text.trim()) return;
-    }
-    if (!String(text).trim()) { pk.note = 'No hay nada copiado. En Google Maps copia el enlace, las coordenadas o el Plus Code y vuelve a tocar Pegar.'; return paintPick(); }
-    handlePasted(text);
-  });
+  // Campo para pegar: Enter o el botón Buscar procesan lo escrito. Al pegar se busca de una vez, sin tener que tocar nada más.
+  $pickForm.addEventListener('submit', (ev) => { ev.preventDefault(); handlePasted($pickInput.value); });
+  $pickInput.addEventListener('paste', () => { setTimeout(() => handlePasted($pickInput.value), 0); }); // el texto pegado llega al campo después del evento
   // "Abrir Google Maps": en otra pestaña (o en la app de Mapas del celular), centrado donde estás mirando. Ahí se busca el lugar y se copia.
 $pickGmaps.addEventListener('click', () => {
     window.open(googleMapsUrl(pickSearchRef()), '_blank', 'noopener');
@@ -447,8 +453,6 @@ $pickPanel.addEventListener('click', (ev) => {
     const t = ev.target;
     const vp = t.closest('[data-v]');
     if (vp) { pickRecent(pk.visited[Number(vp.dataset.v)]); return; } // setAnchor cierra la lista
-    const rc = t.closest('[data-r]');
-    if (rc) { pickRecent(pk.recent[Number(rc.dataset.r)]); return; }
     const r = t.closest('[data-i]');
     if (r) selectPick(Number(r.dataset.i));
   });

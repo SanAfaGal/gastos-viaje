@@ -78,29 +78,25 @@
   </nav>
   <dialog id="trip-switch" class="sheet" aria-labelledby="ts-title">
     <header class="sheet-head"><h2 id="ts-title">Elige el viaje</h2>
-      <button type="button" class="sheet-x" data-close aria-label="Cerrar">×</button></header>
+      <button type="button" class="sheet-x" data-close aria-label="Cerrar"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="17" y1="7" x2="7" y2="17"/><line x1="7" y1="7" x2="17" y2="17"/></svg></button></header>
     <div class="sheet-body" id="trip-list" role="radiogroup" aria-labelledby="ts-title"></div>
     <footer class="sheet-foot"><button type="button" class="btn secondary" data-manage>Crear o editar viajes</button></footer>
   </dialog>
   <dialog id="map-pick" class="sheet pick-sheet" aria-labelledby="mp-title">
     <header class="sheet-head"><h2 id="mp-title">Lugar del gasto</h2>
-      <span class="head-end"><button type="button" class="info-btn" id="pick-info" aria-haspopup="dialog" aria-label="Más información: formas de encontrar el lugar">i</button>
-      <button type="button" class="sheet-x" data-pick-cancel aria-label="Cerrar">×</button></span></header>
+      <span class="head-end"><button type="button" class="info-btn" id="pick-info" aria-haspopup="dialog" aria-label="Más información: formas de encontrar el lugar"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="14" cy="5.6" r="2"/><path d="M9.2 10.1 14.6 8.9 11.9 17.1c-.2.6 0 .9.5.9.7 0 1.6-.8 2.4-2.1l.9.5C14.5 18.3 12.9 20 10.9 20c-1.9 0-2.5-1.1-2-2.7l1.7-5.5c.1-.5-.1-.7-.6-.7l-.8.1z"/></svg></button>
+      <button type="button" class="sheet-x" data-pick-cancel aria-label="Cerrar"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="17" y1="7" x2="7" y2="17"/><line x1="7" y1="7" x2="17" y2="17"/></svg></button></span></header>
     <div class="pick-steps">
-      <div class="pick-actions">
-        <button type="button" class="pick-here" id="pick-gmaps" aria-label="Paso 1: abrir Google Maps">
-          <span class="pick-n" aria-hidden="true">1</span>
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.3" fill="none" stroke="currentColor" stroke-width="2"/></svg>
-          <span>Google Maps</span></button>
-        <button type="button" class="pick-here" id="pick-paste" aria-label="Paso 2: pegar lo que copiaste">
-          <span class="pick-n" aria-hidden="true">2</span>
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><rect x="8" y="3" width="8" height="4" rx="1" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>Pegar</span></button>
-        <button type="button" class="pick-here" id="pick-visited" aria-pressed="false" aria-label="Elegir entre los lugares ya visitados">
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <span>Visitados</span></button>
+      <form class="pick-find" id="pick-find" novalidate>
+        <label for="pick-input" class="sr-only">Enlace, coordenadas o Plus Code de Google Maps</label>
+        <input id="pick-input" type="text" inputmode="url" enterkeyhint="search" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Pega aquí el enlace o las coordenadas">
+        <button type="submit" class="pick-ico go" id="pick-go" aria-label="Buscar lo que pegaste" title="Buscar"><svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true" focusable="false"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="m16 16 4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg></button>
+      </form>
+      <div class="pick-bar">
+        <button type="button" class="pick-act" id="pick-gmaps" title="Abrir Google Maps para buscar y copiar el lugar"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="12" cy="10" r="2.3" fill="none" stroke="currentColor" stroke-width="2"/></svg><span>Google Maps</span></button>
+        <button type="button" class="pick-act" id="pick-visited" aria-pressed="false" title="Lugares visitados en este viaje"><svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7v5l3 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg><span>Visitados</span></button>
       </div>
-      <p class="pick-or muted">Busca el lugar en Google Maps, copia el enlace, las coordenadas o el Plus Code y pégalo. O toca el mapa, o elige uno de los lugares ya visitados.</p>
+      <p class="pick-status" id="pick-status" role="status" aria-live="polite"></p>
     </div>
     <div id="pick-map" class="map pick" role="region" aria-label="Mapa para elegir el lugar"></div>
     <div id="pick-panel" class="pick-panel"></div>
@@ -111,7 +107,7 @@
   </dialog>
   <dialog id="pick-help" class="sheet info" aria-labelledby="pick-help-t">
     <header class="sheet-head"><h2 id="pick-help-t">Formas de encontrar el lugar</h2>
-      <button type="button" class="sheet-x" data-help-close aria-label="Cerrar">×</button></header>
+      <button type="button" class="sheet-x" data-help-close aria-label="Cerrar"><svg class="ic" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><line x1="17" y1="7" x2="7" y2="17"/><line x1="7" y1="7" x2="17" y2="17"/></svg></button></header>
     <div class="sheet-body" id="pick-help-body"></div>
   </dialog>
   <div id="toast" class="toast"></div>

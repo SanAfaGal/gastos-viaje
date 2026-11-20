@@ -36,20 +36,31 @@
 .filt-chips { grid-column: 1 / -1; }
 /* Diálogo "Lugar del gasto": alto fijo; arriba búsqueda, mapa de alto fijo, lista con scroll y pie fijo. Nada salta al aparecer resultados. */
 .pick-sheet { height: min(92dvh, 760px); }
-.pick-here { flex: none; display: inline-flex; align-items: center; gap: 6px; min-height: 46px; padding: 0 12px; border: 1.5px solid var(--brand); border-radius: 12px; background: color-mix(in srgb, var(--brand) 10%, var(--surface)); color: var(--brand); font: inherit; font-size: .85rem; font-weight: 700; white-space: nowrap; cursor: pointer; }
-.pick-here.locating { animation: pulse 1s ease-in-out infinite; }
-/* Dos botones en una fila: 1) abrir Google Maps y copiar, 2) pegar. */
+/* Arriba: un campo para pegar (con su botón Buscar) y, debajo, lo que está pasando junto a dos botones de solo icono. */
 .pick-steps { display: grid; flex: none; gap: 6px; padding: 2px 16px 8px; }
-.pick-actions { display: flex; gap: 8px; }
-.pick-actions .pick-here { flex: 1; justify-content: center; min-width: 0; }
-/* Nada se corta con “…” en este diálogo: los textos pasan a una segunda línea. */
-.pick-actions .pick-here { height: auto; padding: 6px 8px; }
-.pick-actions .pick-here span:not(.pick-n) { white-space: normal; overflow-wrap: anywhere; line-height: 1.15; text-align: left; }
-.pick-here[aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); }
-.pick-here:disabled { opacity: .5; cursor: not-allowed; }
-@media (max-width: 440px) { .pick-actions .pick-here svg { display: none; } } /* en pantallas angostas el número y el texto bastan */
-.pick-n { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); font-size: .78rem; font-weight: 800; }
-.pick-or { margin: 0; font-size: .78rem; line-height: 1.3; text-align: center; }
+/* "dialog.sheet form" (más abajo) vuelve columna y alto completo a todo formulario del diálogo: aquí hay que ganarle para que la lupa quede en la misma línea. */
+dialog.sheet .pick-find { flex: none; flex-direction: row; align-items: center; gap: 8px; min-height: 0; }
+.pick-find input { flex: 1; min-width: 0; height: 46px; padding: 0 12px; }
+.pick-ico { flex: none; display: grid; place-items: center; width: 46px; height: 46px; padding: 0; border: 1.5px solid var(--brand); border-radius: 12px; background: color-mix(in srgb, var(--brand) 10%, var(--surface)); color: var(--brand); cursor: pointer; }
+.pick-ico.go { background: var(--brand); color: var(--brand-ink); }
+.pick-ico[aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); }
+.pick-ico:disabled { opacity: .5; cursor: not-allowed; }
+.pick-ico:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 45%, transparent); outline-offset: 2px; }
+.pick-bar { display: flex; gap: 8px; }
+.pick-act { flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; padding: 0 10px; border: 1.5px solid var(--brand); border-radius: 12px; background: color-mix(in srgb, var(--brand) 10%, var(--surface)); color: var(--brand); font: inherit; font-size: .92rem; font-weight: 700; cursor: pointer; }
+.pick-act[aria-pressed="true"] { background: var(--brand); color: var(--brand-ink); }
+.pick-act:disabled { opacity: .5; cursor: not-allowed; }
+.pick-act:focus-visible { outline: 3px solid color-mix(in srgb, var(--brand) 45%, transparent); outline-offset: 2px; }
+/* El estado solo ocupa lugar cuando hay algo que decir. */
+.pick-status { margin: 0; display: flex; align-items: center; gap: 8px; font-size: .84rem; line-height: 1.3; color: var(--muted); }
+.pick-status:empty { display: none; }
+.pick-status.busy { color: var(--brand); font-weight: 600; }
+.pick-status.busy::before { content: ''; flex: none; width: 14px; height: 14px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .8s linear infinite; }
+.pick-status.ok { color: var(--brand); font-weight: 600; }
+.pick-status.ok::before { content: '✓'; flex: none; }
+.pick-status.warn { color: var(--tag-danger-text); font-weight: 600; }
+.pick-status.warn::before { content: '!'; flex: none; display: grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: currentColor; color: var(--surface); font-size: .75rem; line-height: 1; }
+@media (prefers-reduced-motion: reduce) { .pick-status.busy::before { animation: none; border-right-color: currentColor; } }
 .map.pick { flex: none; height: clamp(140px, 28dvh, 320px); min-height: 0; margin: 0 16px 8px; }
 .pick-panel { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 0 16px 14px; }
 .pick-foot { flex-wrap: nowrap; align-items: center; }
@@ -96,7 +107,7 @@
 .map .locate-ctl a:focus-visible { outline: 2px solid var(--brand); outline-offset: -2px; }
 @keyframes shimmer { to { background-position: -200% 0; } }
 @keyframes pulse { 50% { opacity: .35; } }
-@media (prefers-reduced-motion: reduce) { .pick-here.locating, .map .locate-ctl.locating a { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .map .locate-ctl.locating a { animation: none; } }
 
 /* Aviso de acción: abajo, sobre la barra de pestañas; ancho, de color fuerte y con ícono. */
 .toast {
