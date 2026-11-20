@@ -447,3 +447,133 @@ test('espacio desactivado con cola en el celular: el servidor responde 403 y la 
     dbDelCelular = null;
   }
 }));
+
+// ---------- renombrar espacios ----------
+
+const nombreDe = async (db, id) => (await db.all('SELECT name FROM spaces WHERE id = ?', [id]))[0]?.name;
+
+test('renombrar: cambia el nombre, lo recorta y la lista lo muestra', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+  const db = await conDatos();
+  const r = await llamar(db, ADMIN, 'PUT', '/api/spaces/space-b', { name: '  Familia Pérez  ' });
+  assert.deepEqual(r, { status: 200, body: { id: 'space-b', name: 'Familia Pérez' } });
+  assert.equal(await nombreDe(db, 'space-b'), 'Familia Pérez');
+  const lista = await llamar(db, ADMIN, 'GET', '/api/spaces');
+  assert.equal(lista.body.find((s) => s.id === 'space-b').name, 'Familia Pérez');
+  assert.equal((await ping(db, CODE_B)).body.space.name, 'Familia Pérez');
+  assert.ok(!JSON.stringify(r).match(/hash/i));
+  // 40 caracteres justos sí entran.
+  assert.equal((await llamar(db, ADMIN, 'PUT', '/api/spaces/space-b', { name: 'x'.repeat(40) })).status, 200);
+}));
+
+test('renombrar: Principal se puede renombrar', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+  const db = await conDatos();
+  const r = await llamar(db, ADMIN, 'PUT', '/api/spaces/space-admin', { name: 'Casa' });
+  assert.deepEqual(r, { status: 200, body: { id: 'space-admin', name: 'Casa' } });
+  const e = await estado(db, APP);
+  assert.deepEqual(e.body.space, { id: 'space-admin', name: 'Casa', is_principal: true, is_manager: false });
+}));
+
+test('renombrar: nombre vacío, solo espacios, de 41 caracteres o que no es texto (123, {}, null) dan 400', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+  const db = await conDatos();
+  const antes = await fotoDeTablas(db);
+  for (const name of ['', '   ', '\n\t', 'x'.repeat(41), `  ${'x'.repeat(41)}  `, 123, 0, true, {}, [], ['Hola'], null]) {
+    const r = await llamar(db, ADMIN, 'PUT', '/api/spaces/space-b', { name });
+    assert.equal(r.status, 400, JSON.stringify(name));
+    assert.equal(typeof r.body.error, 'string');
+  }
+  assert.deepEqual(await fotoDeTablas(db), antes);
+}));
+
+test('renombrar: un cuerpo con name y active a la vez, o sin ninguna de las dos, da 400', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+  const db = await conDatos();
+  const antes = await fotoDeTablas(db);
+  const ERROR = { status: 400, body: { error: 'Indica solo name o active' } };
+  for (const body of [{ name: 'Nuevo', active: false }, { name: 'Nuevo', active: true }, { name: null, active: false }, {}, { otro: 1 }, undefined, null]) {
+    assert.deepEqual(await llamar(db, ADMIN, 'PUT', '/api/spaces/space-b', body), ERROR, JSON.stringify(body));
+  }
+  assert.deepEqual(await fotoDeTablas(db), antes);
+  // active sigue siendo un booleano de verdad.
+  assert.equal((await llamar(db, ADMIN, 'PUT', '/api/spaces/space-b', { active: 'no' })).status, 400);
+  assert.deepEqual(await fotoDeTablas(db), antes);
+}));
+
+test('renombrar: id inexistente da 404 No encontrado', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+  const db = await conDatos();
+  const antes = await fotoDeTablas(db);
+  assert.deepEqual(await llamar(db, ADMIN, 'PUT', '/api/spaces/no-existe', { name: 'Nuevo' }), { status: 404, body: { error: 'No encontrado' } });
+  assert.deepEqual(await fotoDeTablas(db), antes);
+}));
+
+test('renombrar: no cambia el código ni el estado activo del espacio', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+  const db = await conDatos();
+  await crearEspacio(db, 'space-off', 'Apagado', 'OOOO-FFFF-OOOO', 0);
+  await ping(db, APP); // siembra el código de Principal
+  const filas = async () => db.all('SELECT id, code_hash, active, is_admin, created_at FROM spaces ORDER BY id');
+  const antes = await filas();
+  for (const id of ['space-b', 'space-off', 'space-admin']) {
+    assert.equal((await llamar(db, ADMIN, 'PUT', `/api/spaces/${id}`, { name: `Renombrado ${id}` })).status, 200);
+  }
+  assert.deepEqual(await filas(), antes);
+  assert.equal((await ping(db, CODE_B)).body.space.name, 'Renombrado space-b');
+  assert.equal((await ping(db, APP)).body.space.name, 'Renombrado space-admin');
+  assert.deepEqual(await ping(db, 'OOOO-FFFF-OOOO'), DESACTIVADO);
+  // Los datos no se tocan.
+  assert.deepEqual((await estado(db, CODE_B)).body.people.map((p) => p.id).sort(), ['pb', 'qb']);
+}));
+
+test('renombrar: un espacio de datos y quien no es administración reciben 404', async () => {
+  const db = await conDatos();
+  const antes = await fotoDeTablas(db);
+  await conEntorno({ admin: ADMIN, app: APP }, async () => {
+    for (const codigo of [CODE_B, APP]) {
+      assert.deepEqual(await llamar(db, codigo, 'PUT', '/api/spaces/space-b', { name: 'Mío' }), NO_RUTA, codigo);
+      assert.deepEqual(await llamar(db, codigo, 'PUT', '/api/spaces/space-b', { name: 123 }), NO_RUTA, codigo);
+      assert.deepEqual(await llamar(db, codigo, 'PUT', '/api/spaces/no-existe', { name: 'Mío' }), NO_RUTA, codigo);
+    }
+  });
+  await conEntorno({ admin: undefined, app: undefined }, async () => {
+    assert.deepEqual(await llamar(db, undefined, 'PUT', '/api/spaces/space-b', { name: 'Mío' }), NO_RUTA);
+    assert.deepEqual(await llamar(db, ADMIN, 'PUT', '/api/spaces/space-b', { name: 'Mío' }), NO_RUTA);
+  });
+  const despues = await fotoDeTablas(db);
+  despues.spaces = despues.spaces.map((s) => (s.id === 'space-admin' ? { ...s, code_hash: null } : s)); // la siembra es lo único
+  assert.deepEqual(despues, antes);
+});
+
+test('text() con un nombre que no es cadena da 400: al crear un espacio', () => conEntorno({ admin: ADMIN, app: APP }, async () => {
+  const db = await conDatos();
+  const antes = await fotoDeTablas(db);
+  for (const name of [123, 0, true, {}, [], ['Hola'], null, undefined]) {
+    assert.equal((await llamar(db, ADMIN, 'POST', '/api/spaces', { name })).status, 400, `crear ${JSON.stringify(name)}`);
+  }
+  assert.equal((await llamar(db, ADMIN, 'POST', '/api/spaces', undefined)).status, 400);
+  assert.deepEqual(await fotoDeTablas(db), antes);
+  const ok = await llamar(db, ADMIN, 'POST', '/api/spaces', { name: '  Nuevo  ' });
+  assert.equal(ok.status, 201);
+  assert.equal(ok.body.name, 'Nuevo');
+}));
+
+test('ADMIN_PASSCODE igual a APP_PASSCODE: abre la administración, nunca los datos de Principal', () => conEntorno({ admin: APP, app: APP }, async () => {
+  const db = await conDatos();
+  const antes = await fotoDeTablas(db);
+  const respuestas = [await estado(db, APP), await ping(db, APP), await llamar(db, APP, 'GET', '/api/backup'), await llamar(db, APP, 'GET', '/api/trips')];
+  const [e, p, respaldo, viajes] = respuestas;
+  assert.equal(e.status, 200);
+  assert.equal(e.body.space.is_manager, true);
+  for (const k of ['trips', 'people', 'payment_methods', 'expenses', 'payments']) assert.deepEqual(e.body[k], [], k);
+  assert.equal(p.body.space.is_manager, true);
+  assert.deepEqual(respaldo, NO_RUTA);
+  assert.deepEqual(viajes, NO_RUTA);
+  assert.equal((await llamar(db, APP, 'GET', '/api/spaces')).status, 200);
+  for (const r of respuestas) assert.ok(!JSON.stringify(r).match(/Persona|Taxi|Efectivo|trip-1/), JSON.stringify(r));
+  assert.deepEqual(await fotoDeTablas(db), antes, 'ni siquiera se siembra Principal con ese código');
+  assert.equal(await codigoDePrincipal(db), null);
+
+  // Principal queda sin entrada hasta que la administración le regenere el código.
+  const nuevo = await llamar(db, APP, 'POST', '/api/spaces/space-admin/regenerate');
+  assert.equal(nuevo.status, 200);
+  const dentro = await estado(db, nuevo.body.code);
+  assert.equal(dentro.body.space.id, 'space-admin');
+  assert.deepEqual(dentro.body.people.map((x) => x.id).sort(), ['pa', 'qa']);
+  assert.equal((await estado(db, APP)).body.space.is_manager, true, 'APP_PASSCODE sigue siendo la administración');
+}));

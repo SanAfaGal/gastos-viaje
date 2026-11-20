@@ -9,7 +9,7 @@ import { dumpBackup, restoreBackup } from './backup.mjs';
 import { MapLinkError, resolveMapLink } from './maplink.mjs';
 import { HttpError, fail, text } from './errors.mjs';
 import { checkAuth } from './auth.mjs';
-import { createSpace, listSpaces, regenerateSpace, setSpaceActive } from './spaces.mjs';
+import { createSpace, listSpaces, regenerateSpace, renameSpace, setSpaceActive } from './spaces.mjs';
 import { assertNotForeign, owns, ownedIds } from './scope.mjs';
 
 // Topes para que un dato absurdo no desborde los cálculos (cents * rate debe quedar bajo 2^53).
@@ -623,7 +623,12 @@ export async function handle({ method, path, query = new URLSearchParams(), body
       if (method === 'GET' && !id) return ok(await listSpaces(db));
       if (method === 'POST' && !id) return ok(await createSpace(db, body), 201);
       if (method === 'POST' && id && action === 'regenerate' && parts.length === 3) return ok(await regenerateSpace(db, id));
-      if (method === 'PUT' && id && parts.length === 2) return ok(await setSpaceActive(db, id, body));
+      if (method === 'PUT' && id && parts.length === 2) {
+        // Exactamente una de las dos: renombrar (name) o activar/desactivar (active).
+        const tiene = (k) => Object.hasOwn(Object(body), k);
+        if (tiene('name') === tiene('active')) fail(400, 'Indica solo name o active');
+        return ok(await (tiene('name') ? renameSpace : setSpaceActive)(db, id, body));
+      }
     }
 
     const writers = { people: [savePerson, deletePerson], 'payment-methods': [saveMethod, deleteMethod], expenses: [saveExpense, deleteExpense], payments: [savePayment, deletePayment] };

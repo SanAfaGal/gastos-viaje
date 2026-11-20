@@ -564,4 +564,5 @@ export async function restoreBackup(data, dry) {
 export const listSpaces = () => request('GET', '/api/spaces');
 export const createSpace = (name) => request('POST', '/api/spaces', { name });
 export const regenerateSpace = (id) => request('POST', `/api/spaces/${encodeURIComponent(id)}/regenerate`);
+export const renameSpace = (id, name) => request('PUT', `/api/spaces/${encodeURIComponent(id)}`, { name });
 export const setSpaceActive = (id, active) => request('PUT', `/api/spaces/${encodeURIComponent(id)}`, { active });

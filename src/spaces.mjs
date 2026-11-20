@@ -97,9 +97,15 @@ export async function listSpaces(db) {
   return rows.map((r) => ({ id: r.id, name: r.name, created_at: r.created_at, active: Number(r.active) === 1 }));
 }
 
+// El nombre de un espacio: texto de verdad (text() convertiría 123 en "123"), recortado, de 1 a 40 caracteres.
+function nombreDeEspacio(value) {
+  if (typeof value !== 'string') fail(400, 'El nombre debe ser texto');
+  return text(value, 'El nombre', { max: 40 });
+}
+
 // Crea el espacio y su viaje inicial en una sola transacción: no puede quedar un espacio a medias.
 export async function createSpace(db, body) {
-  const name = text(body?.name, 'El nombre', { max: 40 });
+  const name = nombreDeEspacio(body?.name);
   const id = randomUUID();
   const now = new Date().toISOString();
   const code = await conCodigoNuevo((hash) => db.batch([
@@ -131,4 +137,12 @@ export async function setSpaceActive(db, id, body) {
   await spaceEditable(db, id);
   await db.run('UPDATE spaces SET active = ? WHERE id = ?', [body.active ? 1 : 0, id]);
   return { id, active: body.active };
+}
+
+// Solo cambia el nombre: el código, el estado y los datos del espacio quedan como estaban.
+export async function renameSpace(db, id, body) {
+  const name = nombreDeEspacio(body?.name);
+  await spaceEditable(db, id);
+  await db.run('UPDATE spaces SET name = ? WHERE id = ?', [name, id]);
+  return { id, name };
 }
