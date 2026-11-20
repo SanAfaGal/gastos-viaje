@@ -49,18 +49,54 @@ function setOpenMark(on) {
   }
 }
 
-export const net = { online: true, syncing: false, needsLogin: startsLocked(), lastSync: 0 };
+// lockReason: por qué se pide el código cuando no es solo "no lo has puesto" (hoy: el espacio está desactivado).
+export const net = { online: true, syncing: false, needsLogin: startsLocked(), lastSync: 0, lockReason: '' };
 
 export function setPass(p) {
   localStorage.setItem(K.pass, p);
   if (p === '') setOpenMark(false);
   net.needsLogin = false;
+  net.lockReason = '';
 }
 
 const NOT_MODIFIED = Symbol('not-modified');
 let stateEtag = null; // versión del estado que ya tenemos: el servidor responde 304 si no cambió
 
+// Con un código guardado que aún no se comprobó en esta carga, solo sale UNA petición; las demás esperan su resultado.
+// Cada intento con código cuenta para el límite del servidor (10 por red cada 15 minutos) y una recarga lanza varias
+// peticiones a la vez: con el código ya muerto (se cambió APP_PASSCODE, se regeneró o se desactivó el espacio) eso
+// bloqueaba a la persona sin que hubiera escrito nada. Si la primera recibe 401, las demás ni salen.
+let checkedPass = null; // último código que el servidor aceptó en esta carga
+let checking = null; // { pass, done }: la petición que está comprobando el código guardado
+
 async function request(method, path, body, extraHeaders = {}) {
+  const pass = getPass();
+  if (!pass || pass === checkedPass) return send(method, path, body, extraHeaders);
+  if (checking?.pass === pass) {
+    await checking.done.catch(() => {});
+    if (getPass() !== pass) { // la primera recibió 401 y el código se olvidó: no hace falta preguntar de nuevo
+      const err = new Error('Código incorrecto');
+      err.status = 401;
+      throw err;
+    }
+    return send(method, path, body, extraHeaders);
+  }
+  const done = send(method, path, body, extraHeaders);
+  checking = { pass, done };
+  try {
+    const out = await done;
+    checkedPass = pass;
+    return out;
+  } catch (err) {
+    // Un error del servidor que no sea de acceso (400, 404, 409...) también significa que el código vale.
+    if (err.status && err.status < 500 && ![401, 403, 429].includes(err.status)) checkedPass = pass;
+    throw err;
+  } finally {
+    if (checking?.done === done) checking = null;
+  }
+}
+
+async function send(method, path, body, extraHeaders = {}) {
   let res;
   const pass = getPass();
   try {
@@ -86,9 +122,16 @@ async function request(method, path, body, extraHeaders = {}) {
   }
   // Si el código cambió mientras tanto, esta respuesta es del espacio anterior: su versión no se guarda.
   if (path === '/api/state' && res.ok && getPass() === pass) stateEtag = res.headers?.get?.('etag') ?? null;
-  if (res.status === 401) {
-    // Solo si el código no cambió mientras tanto: un 401 tardío del código anterior no cierra la sesión nueva.
+  if (res.status === 401 || res.status === 403) {
+    // 401: el código no sirve. 403: es el de un espacio que el administrador desactivó (el servidor dice por qué).
+    // Solo si el código no cambió mientras tanto: una respuesta tardía del código anterior no cierra la sesión nueva.
     if (getPass() === pass) {
+      net.lockReason = res.status === 403 ? (data?.error ?? '') : '';
+      // El servidor ya no acepta este código: se olvida. Así la próxima recarga abre directo en el acceso, sin
+      // mandar peticiones con un código muerto que gasten intentos.
+      if (pass) {
+        try { localStorage.removeItem(K.pass); } catch { /* sin almacenamiento */ }
+      }
       setOpenMark(false);
       net.needsLogin = true;
       notify();
@@ -280,7 +323,7 @@ export async function fetchHistory(days = 30) {
     write(K.hist, { ...read(K.hist, {}), [key]: points });
     return points;
   } catch (err) {
-    if (err.status === 401) throw err;
+    if (err.status === 401 || err.status === 403) throw err;
     return read(K.hist, {})[key] ?? [];
   }
 }
@@ -408,7 +451,7 @@ export async function flush() {
         sent += 1;
       } catch (err) {
         // Sin red, sin acceso, límite de intentos o falla del servidor: el gasto no es inválido, se reintenta luego.
-        if (err.offline || err.status === 401 || err.status === 429 || err.status >= 500) break;
+        if (err.offline || err.status === 401 || err.status === 403 || err.status === 429 || err.status >= 500) break;
         errors.push(err.message);
         queue = queue.filter((o) => o !== op); // dato inválido: no reintentar para siempre
       }

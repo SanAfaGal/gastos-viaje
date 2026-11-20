@@ -23,11 +23,13 @@ let puts = []; // envíos de gastos que el servidor aceptó
 let retener = null; // (ruta, código) => promesa | null: la respuesta de esa petición llega cuando la promesa se cumple
 let fallar = null; // (ruta, código) => true: el servidor responde 500
 let pedidos = 0; // peticiones que salieron del celular
+let pedidosConCodigo = 0; // las que llevaban un código (las únicas que el servidor cuenta como intento)
 globalThis.fetch = async (url, opts = {}) => {
   pedidos += 1;
   if (!online) throw new TypeError('network down');
   const u = new URL(url, 'http://x');
   const code = opts.headers?.['x-passcode'];
+  if (code) pedidosConCodigo += 1;
   if (fallar?.(u.pathname, code)) return { ok: false, status: 500, headers: new Map(), json: async () => ({ error: 'Error interno' }) };
   const out = await handle({
     method: opts.method ?? 'GET',
@@ -431,18 +433,18 @@ test('un refresh con el código anterior que llega después del cambio no deshac
 
 // ---------- código muerto: no gasta intentos ni cierra una sesión nueva ----------
 
-test('con la sesión cerrada por un código que ya no sirve, sincronizar no hace ninguna petición', () => conProceso(async () => {
+test('con la sesión cerrada por un código que ya no sirve, el código se olvida y sincronizar no gasta intentos', () => conProceso(async () => {
   const store = await arrancar(19);
   await prepararA(store);
   await db.run("UPDATE spaces SET code_hash = ? WHERE id = 'a'", [hashCode('CCCC-CCCC-CCCC')]); // el administrador lo regeneró
   await store.flush();
   assert.equal(store.net.needsLogin, true);
-  assert.equal(mem.get('bg_pass'), CODE_A, 'el código viejo sigue guardado');
+  assert.equal(mem.get('bg_pass') ?? '', '', 'el código viejo se olvida: la próxima recarga abre directo en el acceso');
 
-  pedidos = 0;
-  await store.syncNow();
-  await store.syncNow();
-  assert.equal(pedidos, 0, 'cada petición con el código viejo contaría como un intento fallido');
+  pedidosConCodigo = 0;
+  await store.syncNow().catch(() => {});
+  await store.syncNow().catch(() => {});
+  assert.equal(pedidosConCodigo, 0, 'cada petición con el código viejo contaría como un intento fallido');
   assert.equal(store.pendingCount(), 1, 'la cola sigue intacta');
 }));
 
@@ -454,10 +456,12 @@ test('sin código guardado (primera visita), sincronizar sí pregunta al servido
   assert.equal(store.net.needsLogin, true, 'este servidor pide código');
 }));
 
-test('un 401 tardío del código anterior no cierra la sesión recién abierta con otro código', () => conProceso(async () => {
-  const store = await arrancar(21);
+// El servidor rechaza el código anterior con `estado` (401: ya no vale, 403: espacio desactivado) cuando la persona
+// ya entró con otro código: esa respuesta tardía no debe cerrar la sesión nueva.
+const tardio = (caso, estado, rechazarCodigoA) => conProceso(async () => {
+  const store = await arrancar(caso);
   await prepararA(store);
-  await db.run("UPDATE spaces SET active = 0 WHERE id = 'a'"); // la respuesta a la petición vieja será 401
+  await rechazarCodigoA();
   const soltar = retenerRespuesta((ruta, code) => ruta === '/api/ping' && code === CODE_A);
   const viejo = store.ping(); // sale con el código A
 
@@ -468,13 +472,18 @@ test('un 401 tardío del código anterior no cierra la sesión recién abierta c
   store.listeners.add(oyente);
   try {
     soltar();
-    await assert.rejects(viejo, { status: 401 });
+    await assert.rejects(viejo, { status: estado });
   } finally {
     store.listeners.delete(oyente);
   }
-  assert.equal(store.net.needsLogin, false, 'el 401 era del código anterior');
+  assert.equal(store.net.needsLogin, false, 'la respuesta era del código anterior');
   assert.equal(avisos, 0, 'no se redibuja (ni se muestra "Código incorrecto")');
   assert.equal(mem.get('bg_pass'), CODE_B);
   await store.refresh();
   assert.equal(store.getState().trip.id, 'trip-b');
-}));
+});
+
+test('un 401 tardío del código anterior no cierra la sesión recién abierta con otro código', () => tardio(21, 401, () => db.run("UPDATE spaces SET code_hash = ? WHERE id = 'a'", [hashCode('DDDD-DDDD-DDDD')])));
+
+test('un 403 tardío (espacio desactivado) del código anterior tampoco cierra la sesión recién abierta', () => tardio(22, 403, () => db.run("UPDATE spaces SET active = 0 WHERE id = 'a'")));
+

@@ -1,7 +1,7 @@
 // Control de acceso: el código que llega en cada petición se convierte en un espacio.
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { fail } from './errors.mjs';
-import { findSpaceByCode, getAdminSpace } from './spaces.mjs';
+import { findSpaceByCode, getAdminSpace, isInactiveSpaceCode } from './spaces.mjs';
 
 const MAX_FAILS = 10;
 const MAX_GLOBAL = 300;
@@ -67,6 +67,13 @@ export async function checkAuth(db, passcode, ip) {
     else await db.run('UPDATE auth_failures SET fails = MAX(fails - 1, 0) WHERE ip = ?', [key]);
     await db.run('UPDATE auth_failures SET fails = MAX(fails - 1, 0) WHERE ip = ?', ['global']);
     return space;
+  }
+  if (await isInactiveSpaceCode(db, passcode)) {
+    // Quien lo manda tiene el código completo de un espacio que el administrador desactivó: se le dice el motivo y
+    // este intento no cuenta, para que un celular que sigue con ese código no se bloquee solo recargando.
+    await db.run('UPDATE auth_failures SET fails = MAX(fails - 1, 0) WHERE ip = ?', [key]);
+    await db.run('UPDATE auth_failures SET fails = MAX(fails - 1, 0) WHERE ip = ?', ['global']);
+    fail(403, 'Este espacio está desactivado. Habla con quien te dio el código.');
   }
   await db.run('DELETE FROM auth_failures WHERE since < ? AND ip != ?', [now - LOCK_MS, 'global']); // limpieza
   fail(401, 'Código incorrecto');

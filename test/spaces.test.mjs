@@ -133,15 +133,40 @@ test('un código de espacio activo entra a su espacio, escrito de cualquier form
   });
 });
 
-test('espacio desactivado y código inexistente dan la misma respuesta', async () => {
+test('un código inexistente dice "Código incorrecto" y el de un espacio desactivado dice que está desactivado', async () => {
   const db = await openMemoryDb();
   await crearEspacio(db, { active: 0 });
   await conPasscode('secreto', async () => {
     const apagado = await ping(db, CODIGO_DE_PRUEBA, '1.1.1.1');
     const inexistente = await ping(db, 'AAAA-BBBB-CCCC', '2.2.2.2');
-    assert.equal(apagado.status, 401);
-    assert.equal(apagado.body.error, 'Código incorrecto');
-    assert.deepEqual(inexistente, apagado);
+    assert.equal(inexistente.status, 401);
+    assert.equal(inexistente.body.error, 'Código incorrecto');
+    assert.equal(apagado.status, 403);
+    assert.equal(apagado.body.error, 'Este espacio está desactivado. Habla con quien te dio el código.');
+    // Escrito de otra forma (minúsculas, sin guiones) sigue siendo el mismo código.
+    assert.equal((await ping(db, CODIGO_DE_PRUEBA.toLowerCase().replaceAll('-', ''), '3.3.3.3')).status, 403);
+  });
+});
+
+test('solo quien tiene el código completo de un espacio desactivado lo sabe: un código parecido sigue siendo "incorrecto"', async () => {
+  const db = await openMemoryDb();
+  await crearEspacio(db, { active: 0 });
+  await conPasscode('secreto', async () => {
+    const casi = CODIGO_DE_PRUEBA.slice(0, -1) + (CODIGO_DE_PRUEBA.endsWith('A') ? 'B' : 'A');
+    const r = await ping(db, casi, '1.1.1.1');
+    assert.equal(r.status, 401);
+    assert.equal(r.body.error, 'Código incorrecto');
+  });
+});
+
+test('el código de un espacio desactivado no gasta intentos: un celular con ese código no se bloquea solo', async () => {
+  const db = await openMemoryDb();
+  await crearEspacio(db, { active: 0 });
+  await conPasscode('secreto', async () => {
+    for (let i = 0; i < 25; i += 1) assert.equal((await ping(db, CODIGO_DE_PRUEBA, '1.1.1.1')).status, 403);
+    // Siguen quedando todos los intentos para acertar con otro código desde esa misma red.
+    for (let i = 0; i < 10; i += 1) assert.equal((await ping(db, 'mal', '1.1.1.1')).status, 401);
+    assert.equal((await ping(db, 'mal', '1.1.1.1')).status, 429);
   });
 });
 
@@ -317,7 +342,7 @@ test('desactivar: el espacio no entra, sus datos siguen; al reactivar vuelve tod
 
     const off = await admin(db, 'PUT', `/api/spaces/${id}`, { active: false });
     assert.deepEqual(off, { status: 200, body: { id, active: false } });
-    assert.equal((await llamar(db, code, 'GET', '/api/ping', undefined, '2.2.2.2')).status, 401);
+    assert.equal((await llamar(db, code, 'GET', '/api/ping', undefined, '2.2.2.2')).status, 403);
     assert.equal((await db.all('SELECT id FROM people WHERE id = ?', ['p1'])).length, 1); // los datos siguen
     const lista = await admin(db, 'GET', '/api/spaces');
     assert.equal(lista.body.find((e) => e.id === id).active, false);

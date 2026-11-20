@@ -33,6 +33,14 @@ export async function findSpaceByCode(db, raw) {
   return rows.length ? toSpace(rows[0]) : null;
 }
 
+// ¿Es el código EXACTO de un espacio desactivado? Solo lo sabe quien ya tiene el código completo (12 caracteres al
+// azar), así que decírselo no le revela nada: le explica por qué no entra, en vez de un "código incorrecto".
+export async function isInactiveSpaceCode(db, raw) {
+  if (!normalizeCode(raw)) return false;
+  const rows = await db.all('SELECT 1 AS x FROM spaces WHERE code_hash = ? AND active = 0 AND is_admin = 0', [hashCode(raw)]);
+  return rows.length > 0;
+}
+
 // El espacio administrador: existe siempre (lo crea la migración) y no cambia al cambiar APP_PASSCODE.
 export async function getAdminSpace(db) {
   const rows = await db.all('SELECT id, name, is_admin FROM spaces WHERE id = ?', [ADMIN_SPACE_ID]);
