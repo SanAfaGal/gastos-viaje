@@ -593,10 +593,11 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db, sp));
     if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail, sp }));
 
-    // Administración de espacios: solo el administrador. Para los demás la ruta no existe (se decide antes de leer
-    // el cuerpo o tocar la base) y no pueden saber si existe.
+    // Administración de espacios: solo el administrador y solo con APP_PASSCODE definido. Sin él la app está abierta
+    // (cualquiera entra como administrador) y estas rutas no existen. Para los demás tampoco existen: se decide antes
+    // de leer el cuerpo o tocar la base, y no pueden saber si existen.
     if (resource === 'spaces') {
-      if (!space.is_admin) fail(404, 'Ruta no encontrada');
+      if (!space.is_admin || !process.env.APP_PASSCODE) fail(404, 'Ruta no encontrada');
       const action = parts[2];
       if (method === 'GET' && !id) return ok(await listSpaces(db));
       if (method === 'POST' && !id) return ok(await createSpace(db, body), 201);

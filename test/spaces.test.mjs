@@ -448,3 +448,40 @@ test('un error de base que no es colisión no se reintenta: 500 sin detalles', a
     console.error = consola;
   }
 });
+
+test('sin APP_PASSCODE (modo abierto) las rutas de espacios no existen para nadie, ni con el espacio administrador', async () => {
+  const db = await openMemoryDb();
+  await crearEspacio(db);
+  const rutas = [
+    ['GET', '/api/spaces', undefined],
+    ['POST', '/api/spaces', { name: 'Intruso' }],
+    ['POST', '/api/spaces/space-prueba/regenerate', undefined],
+    ['PUT', '/api/spaces/space-prueba', { active: false }],
+    ['POST', '/api/spaces', {}], // cuerpo inválido: tampoco se revela
+  ];
+  const antes = await db.all('SELECT * FROM spaces ORDER BY id');
+  const tripsAntes = await db.all('SELECT id FROM trips ORDER BY id');
+  // Sin APP_PASSCODE (variable ausente) y con ella vacía: los dos son modo abierto.
+  for (const valor of [undefined, '']) {
+    await conPasscode(valor, async () => {
+      const desconocida = await llamar(db, undefined, 'GET', '/api/no-existe');
+      assert.deepEqual(desconocida, { status: 404, body: { error: 'Ruta no encontrada' } });
+      // Sin código y con un código desconocido entran al espacio administrador; con el de un espacio activo, a ese espacio.
+      for (const passcode of [undefined, 'cualquier cosa', CODIGO_DE_PRUEBA]) {
+        for (const [method, path, body] of rutas) {
+          assert.deepEqual(await llamar(db, passcode, method, path, body), desconocida, `${valor} ${passcode} ${method} ${path}`);
+        }
+      }
+    });
+  }
+  assert.deepEqual(await db.all('SELECT * FROM spaces ORDER BY id'), antes);
+  assert.deepEqual(await db.all('SELECT id FROM trips ORDER BY id'), tripsAntes);
+
+  // Control positivo: con APP_PASSCODE definido y el código del administrador, las mismas rutas funcionan.
+  await conPasscode(ADMIN, async () => {
+    assert.equal((await admin(db, 'GET', '/api/spaces')).status, 200);
+    assert.equal((await admin(db, 'POST', '/api/spaces', { name: 'Nuevo' })).status, 201);
+    assert.equal((await admin(db, 'POST', '/api/spaces/space-prueba/regenerate')).status, 200);
+    assert.equal((await admin(db, 'PUT', '/api/spaces/space-prueba', { active: false })).status, 200);
+  });
+});
