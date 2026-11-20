@@ -7,7 +7,7 @@ import { openDatePicker } from './datepicker.mjs';
 import { $view, busy, coolingDown, toast, working } from './ui.js';
 import { ctx } from './shared.js';
 import { downloadBackup, downloadCsv, editMethod, editPerson, editTrip, onMethodForm, paintPreview, restoreFromFile, setEditMethod, setEditPerson, setEditTrip, setMethodOpen, setPersonOpen, setTripOpen, undoDelete } from './view-settings.js';
-import { spaceAction, submitSpace } from './view-spaces.js';
+import { spaceAction, submitRename, submitSpace } from './view-spaces.js';
 import { barRead, chartDays, homeBars, loadHistory, setChartDays } from './view-home.js';
 import { filters, filtersOpen, picked, resetFilters, setFiltersOpen } from './view-list.js';
 import { clearFieldError, draft, paintBenes, paintCards, paintCur, paintLoc, setDraft, setDraftDate, submitForm, updateConv } from './view-form.js';
@@ -276,6 +276,8 @@ $view.addEventListener('submit', async (ev) => {
       }), 'Guardando…');
     } else if (f === 'space-form') {
       await busy(btn, () => guardIn('s-error', () => submitSpace(document.getElementById('s-name').value)), 'Creando…');
+    } else if (f === 'space-rename-form') {
+      await busy(btn, () => guardIn('s-error', () => submitRename(document.getElementById('space-rename-form').dataset.id, document.getElementById('s-rename').value)), 'Guardando…');
     } else if (f === 'login') {
       await busy(btn, async () => {
         // El código nuevo no se guarda hasta comprobarlo (y confirmar si se pierden gastos sin enviar): ver trySwitchSpace.

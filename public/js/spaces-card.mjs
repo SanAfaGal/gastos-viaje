@@ -1,4 +1,4 @@
-// Tarjeta "Espacios" de Ajustes (solo la ve el administrador). HTML puro: no toca `document`, así que se prueba en Node.
+// Tarjeta "Espacios" (solo la ve el administrador de los datos). HTML puro: no toca `document`, así que se prueba en Node.
 // `esc` lo pasa quien llama (ui.js necesita el navegador). `spaces` es null mientras carga; `shown` es el código recién
 // creado o regenerado ({ name, code }), que se muestra una sola vez.
 const dayOf = (iso) => String(iso ?? '').slice(0, 10);
@@ -21,12 +21,29 @@ function codeBlock(shown, canShare, esc) {
 }
 
 function spaceRow(s, esc) {
-  const state = s.is_admin ? '<span class="tag">Administrador</span>' : s.active ? '<span class="tag info">Activo</span>' : '<span class="tag warn">Desactivado</span>';
-  const acts = s.is_admin ? '' : `<span class="space-acts">
-        <button type="button" class="btn secondary small" data-action="regen-space" data-id="${esc(s.id)}">Nuevo código</button>
-        <button type="button" class="btn ${s.active ? 'danger' : 'secondary'} small" data-action="toggle-space" data-id="${esc(s.id)}">${s.active ? 'Desactivar' : 'Reactivar'}</button></span>`;
+  const state = s.active ? '<span class="tag info">Activo</span>' : '<span class="tag warn">Desactivado</span>';
+  const id = esc(s.id);
   return `<div class="pay row space-row"><span><b>${esc(s.name)}</b> ${state}
-        <div class="muted">Creado el ${esc(dayOf(s.created_at))}</div></span>${acts}</div>`;
+        <div class="muted">Creado el ${esc(dayOf(s.created_at))}</div></span><span class="space-acts">
+        <button type="button" class="btn secondary small" data-action="rename-space" data-id="${id}" aria-label="Renombrar ${esc(s.name)}">Renombrar</button>
+        <button type="button" class="btn secondary small" data-action="regen-space" data-id="${id}">Nuevo código</button>
+        <button type="button" class="btn ${s.active ? 'danger' : 'secondary'} small" data-action="toggle-space" data-id="${id}">${s.active ? 'Desactivar' : 'Reactivar'}</button></span></div>`;
+}
+
+// Diálogo de renombrar un espacio: mismo patrón que el de crear, con el nombre actual ya escrito.
+export function renameDialogHtml({ space, esc }) {
+  return `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
+      <form id="space-rename-form" data-id="${esc(space.id)}" autocomplete="off">
+        <header class="sheet-head"><h2 id="sd-title">Renombrar espacio</h2>
+          <button type="button" class="sheet-x" data-action="cancel-rename" aria-label="Cerrar">×</button></header>
+        <div class="sheet-body">
+          <label for="s-rename">Nombre del grupo</label>
+          <input id="s-rename" maxlength="40" value="${esc(space.name)}" required>
+        </div>
+        <footer class="sheet-foot"><p id="s-error" class="form-error" role="alert" hidden></p>
+          <button class="btn secondary" type="button" data-action="cancel-rename">Cancelar</button>
+          <button class="btn" type="submit">Guardar</button></footer>
+      </form></dialog>`;
 }
 
 // `error` (texto): la lista no se pudo cargar; se muestra el aviso en su lugar, pero el código recién creado nunca se oculta.

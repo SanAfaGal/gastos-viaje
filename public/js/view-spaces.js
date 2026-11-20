@@ -3,16 +3,19 @@ import * as store from './store.js';
 import { busy, esc, toast } from './ui.js';
 import { ctx } from './shared.js';
 import { render } from './router.js';
-import { spaceName, spacesCardHtml } from './spaces-card.mjs';
+import { renameDialogHtml, spaceName, spacesCardHtml } from './spaces-card.mjs';
 
 let spaces = null; // null = cargando; arreglo = lista
 let status = 'idle'; // idle | loading | ready | na (el servidor no ofrece la administración) | error
 let shown = null; // { name, code } recién creado o regenerado: solo vive aquí y en la pantalla, nunca se guarda
 let epoch = 0; // sube al salir de Ajustes: una carga que termina después ya no vale
 export let spaceOpen = false; // diálogo de nuevo espacio abierto
-export function setSpaceOpen(value) { spaceOpen = value; return value; }
+let renaming = null; // id del espacio que se renombra (diálogo de renombrar abierto) o null
+// El router llama a esto al cerrarse el diálogo (Cancelar, X, Escape, fuera): ninguno de los dos debe reabrirse solo.
+export function setSpaceOpen(value) { spaceOpen = value; if (!value) renaming = null; return value; }
 
-const isAdmin = () => Boolean(ctx().state.space?.is_admin);
+// De momento la tarjeta la ve quien administra los datos (la tarea siguiente la mueve a su propia pantalla).
+const isAdmin = () => Boolean(ctx().state.space?.is_manager);
 
 // Al salir de Ajustes se olvida todo, incluido el código mostrado.
 export function resetSpaces() {
@@ -21,6 +24,7 @@ export function resetSpaces() {
   status = 'idle';
   shown = null;
   spaceOpen = false;
+  renaming = null;
 }
 // Carga la lista al entrar en Ajustes y tras cada acción. 404 = este servidor no tiene administración (sin APP_PASSCODE).
 export async function loadSpaces() {
@@ -46,7 +50,9 @@ export function viewSpaces() {
   if (!isAdmin() || (status === 'na' && !shown)) return ''; // con un código por mostrar, la tarjeta no se oculta nunca
   const error = status === 'error' ? 'No se pudo cargar la lista de espacios. Revisa tu conexión y vuelve a entrar a Ajustes.' : null;
   const card = spacesCardHtml({ spaces, shown, esc, canShare: typeof navigator.share === 'function', error });
-  const dialog = spaceOpen ? `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
+  const toRename = renaming && spaces?.find((x) => x.id === renaming);
+  // Renombrando y el espacio ya no está en la lista: ningún diálogo (nunca el de crear en su lugar).
+  const dialog = renaming ? (toRename ? renameDialogHtml({ space: toRename, esc }) : '') : spaceOpen ? `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
       <form id="space-form" autocomplete="off">
         <header class="sheet-head"><h2 id="sd-title">Nuevo espacio</h2>
           <button type="button" class="sheet-x" data-action="cancel-space" aria-label="Cerrar">×</button></header>
@@ -73,6 +79,15 @@ export async function submitSpace(name) {
   render(); // cierra el diálogo y muestra el código; ensureSpaces vuelve a cargar la lista
 }
 
+// Guarda el nuevo nombre, cierra el diálogo y recarga la lista. Los errores los muestra quien llama dentro del diálogo.
+export async function submitRename(id, name) {
+  await store.renameSpace(id, name);
+  renaming = null;
+  spaceOpen = false;
+  toast('Nombre guardado');
+  await reload();
+}
+
 const nameOf = (id) => spaceName(spaces, id);
 async function guarded(fn) {
   try { await fn(); } catch (err) { toast(err.offline ? 'Necesitas internet para esto' : err.message, 'error'); }
@@ -84,8 +99,9 @@ async function reload() {
 
 // Acciones de la tarjeta. Devuelve true si la acción era de esta sección.
 export async function spaceAction(action, id, btn) {
-  if (action === 'new-space') { spaceOpen = true; render(); }
-  else if (action === 'cancel-space') document.getElementById('space-dialog')?.close();
+  if (action === 'new-space') { renaming = null; spaceOpen = true; render(); }
+  else if (action === 'rename-space') { if (spaces?.some((x) => x.id === id)) { renaming = id; spaceOpen = true; render(); } }
+  else if (action === 'cancel-space' || action === 'cancel-rename') document.getElementById('space-dialog')?.close();
   else if (action === 'dismiss-code') { shown = null; render(); }
   else if (action === 'copy-code') {
     if (!shown) return true;
