@@ -163,9 +163,9 @@ test('volver a entrar en el mismo espacio conserva todo, incluida la cola', () =
 test('discardCount: cuenta la cola solo si cambia el espacio', () => conProceso(async () => {
   const store = await arrancar(3);
   await prepararA(store);
-  assert.equal(store.discardCount({ id: 'a', name: 'A', is_admin: false }), 0);
-  assert.equal(store.discardCount({ id: 'b', name: 'B', is_admin: false }), 1);
-  assert.equal(store.discardCount({ id: 'space-admin', name: 'Principal', is_admin: true }), 1);
+  assert.equal(store.discardCount({ id: 'a', name: 'A', is_principal: false, is_manager: false }), 0);
+  assert.equal(store.discardCount({ id: 'b', name: 'B', is_principal: false, is_manager: false }), 1);
+  assert.equal(store.discardCount({ id: 'space-admin', name: 'Principal', is_principal: true, is_manager: false }), 1);
   assert.equal(store.pendingCount(), 1, 'contar no borra nada');
   assert.equal(mem.get('bg_space'), 'a');
 }));
@@ -188,16 +188,22 @@ test('copia anterior a los espacios y entrada con un espacio normal: se descarta
   assert.equal(mem.get('bg_space'), 'a');
 }));
 
-test('copia anterior a los espacios y entrada como administrador: se conserva', () => conProceso(async () => {
+// ADMIN es aquí el APP_PASSCODE de siempre: la primera entrada con él siembra el código de Principal.
+test('copia anterior a los espacios y entrada a Principal: se conserva', () => conProceso(async () => {
   const store = await arrancar(5, copiaAnterior);
   const info = await (async () => { store.setPass(ADMIN); return store.ping(); })();
-  assert.equal(info.space.is_admin, true);
+  assert.equal(info.space.is_principal, true);
   assert.equal(store.discardCount(info.space), 0);
   assert.equal(store.adoptSpace(info.space), false);
   assert.equal(store.pendingCount(), 1);
   assert.equal(store.getState().people[0].id, 'fantasma');
   assert.ok(store.localRate('2026-11-14'));
   assert.equal(mem.get('bg_space'), info.space.id);
+}));
+
+test('copia anterior a los espacios y entrada como administración: no se conserva', () => conProceso(async () => {
+  const store = await arrancar(23, copiaAnterior);
+  assert.equal(store.discardCount({ id: 'manager', name: 'Administración', is_principal: false, is_manager: true }), 1);
 }));
 
 test('primera entrada en un celular nuevo: no hay nada que descartar ni que confirmar', () => conProceso(async () => {

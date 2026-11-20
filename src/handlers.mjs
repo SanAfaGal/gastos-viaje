@@ -520,7 +520,7 @@ async function getState(db, sp, space) {
   }
   return {
     today: todayStr(),
-    space: { id: space.id, name: space.name, is_admin: Boolean(space.is_admin) },
+    space: { id: space.id, name: space.name, is_principal: Boolean(space.is_principal), is_manager: false },
     trips: trips.map((t) => ({ id: t.id, name: t.name, dest: t.dest_currency, home: t.home_currency, people_ids: byTrip.get(t.id) ?? [] })),
     people,
     payment_methods: methods,
@@ -543,6 +543,9 @@ async function getState(db, sp, space) {
     })),
   };
 }
+
+// La administración no tiene datos: su estado es fijo y no consulta ninguna tabla.
+const managerState = (space) => ({ today: todayStr(), space, trips: [], people: [], payment_methods: [], expenses: [], payments: [] });
 
 // ---------- lugares (enlaces de Google Maps) ----------
 
@@ -567,8 +570,12 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     const put = (fn) => fn(db, sp, id ?? body?.id ?? randomUUID(), body ?? {});
     const ok = (data, status = 200) => ({ status, body: data });
 
+    // La administración solo llega a ping, state y spaces. Todo lo demás "no existe", igual que una ruta desconocida:
+    // se decide antes de leer el cuerpo o tocar la base, así que nunca ve ni cambia datos de ningún espacio.
+    if (space.is_manager && !['ping', 'state', 'spaces'].includes(resource)) fail(404, 'Ruta no encontrada');
+
     if (resource === 'ping' && method === 'GET') return ok({ ok: true, space });
-    if (resource === 'state' && method === 'GET') return ok(await getState(db, sp, space));
+    if (resource === 'state' && method === 'GET') return ok(space.is_manager ? managerState(space) : await getState(db, sp, space));
 
     if (resource === 'trips') {
       if (method === 'POST' && !id) return ok(await put(saveTrip), 201);
@@ -608,11 +615,10 @@ export async function handle({ method, path, query = new URLSearchParams(), body
     if (resource === 'backup' && method === 'GET') return ok(await dumpBackup(db, sp));
     if (resource === 'restore' && method === 'POST') return ok(await restoreBackup(db, body, { dry: query.get('dry') === '1', fail, sp }));
 
-    // Administración de espacios: solo el administrador y solo con APP_PASSCODE definido. Sin él la app está abierta
-    // (cualquiera entra como administrador) y estas rutas no existen. Para los demás tampoco existen: se decide antes
-    // de leer el cuerpo o tocar la base, y no pueden saber si existen.
+    // Administración de espacios: solo la administración (ADMIN_PASSCODE). Para un espacio de datos, o con la app
+    // abierta, estas rutas no existen: se decide antes de leer el cuerpo o tocar la base, y no pueden saber si existen.
     if (resource === 'spaces') {
-      if (!space.is_admin || !process.env.APP_PASSCODE) fail(404, 'Ruta no encontrada');
+      if (!space.is_manager) fail(404, 'Ruta no encontrada');
       const action = parts[2];
       if (method === 'GET' && !id) return ok(await listSpaces(db));
       if (method === 'POST' && !id) return ok(await createSpace(db, body), 201);

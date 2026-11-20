@@ -88,14 +88,17 @@ async function crearEspacio(db, { id = 'space-prueba', name = 'Familia', code = 
 
 const ping = (db, passcode, ip = '1.1.1.1') => handle({ method: 'GET', path: '/api/ping', passcode, ip, db });
 
-// Ejecuta `fn` con APP_PASSCODE definido (o sin él si `valor` es undefined) y lo deja como estaba.
+// Ejecuta `fn` con ADMIN_PASSCODE definido (o sin él si `valor` es undefined) y sin APP_PASSCODE, y deja las dos
+// variables como estaban.
 async function conPasscode(valor, fn) {
-  if (valor === undefined) delete process.env.APP_PASSCODE;
-  else process.env.APP_PASSCODE = valor;
+  const antes = { ADMIN_PASSCODE: process.env.ADMIN_PASSCODE, APP_PASSCODE: process.env.APP_PASSCODE };
+  const poner = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  poner('ADMIN_PASSCODE', valor);
+  poner('APP_PASSCODE', undefined);
   try {
     return await fn();
   } finally {
-    delete process.env.APP_PASSCODE;
+    for (const [k, v] of Object.entries(antes)) poner(k, v);
   }
 }
 
@@ -113,12 +116,12 @@ test('normalizeCode y hashCode: minúsculas, sin guiones, espacios ni salto de l
   assert.equal(hashCode(' k7m4-x9qd h2rt\n'), hashCode('K7M4X9QDH2RT'));
 });
 
-test('el código del administrador (APP_PASSCODE) entra al espacio administrador', async () => {
+test('el código de administración (ADMIN_PASSCODE) entra como administración, no a Principal', async () => {
   const db = await openMemoryDb();
   await conPasscode('secreto', async () => {
     const r = await ping(db, 'secreto');
     assert.equal(r.status, 200);
-    assert.deepEqual(r.body, { ok: true, space: { id: 'space-admin', name: 'Principal', is_admin: true } });
+    assert.deepEqual(r.body, { ok: true, space: { id: 'manager', name: 'Administración', is_principal: false, is_manager: true } });
   });
 });
 
@@ -129,7 +132,7 @@ test('un código de espacio activo entra a su espacio, escrito de cualquier form
     const r = await ping(db, ' k7m4x9qd-h2rt\n');
     assert.equal(r.status, 200);
     assert.equal(r.body.space.id, 'space-prueba');
-    assert.equal(r.body.space.is_admin, false);
+    assert.deepEqual([r.body.space.is_principal, r.body.space.is_manager], [false, false]);
   });
 });
 
@@ -183,7 +186,7 @@ test('el límite de intentos sigue valiendo con espacios', async () => {
   });
 });
 
-test('sin APP_PASSCODE y sin código: espacio administrador', async () => {
+test('sin ADMIN_PASSCODE ni APP_PASSCODE y sin código: Principal', async () => {
   const db = await openMemoryDb();
   await conPasscode(undefined, async () => {
     assert.equal((await ping(db, undefined)).body.space.id, 'space-admin');
@@ -191,7 +194,7 @@ test('sin APP_PASSCODE y sin código: espacio administrador', async () => {
   });
 });
 
-test('sin APP_PASSCODE, un código de espacio activo entra a ese espacio', async () => {
+test('sin ADMIN_PASSCODE ni APP_PASSCODE, un código de espacio activo entra a ese espacio', async () => {
   const db = await openMemoryDb();
   await crearEspacio(db);
   await conPasscode(undefined, async () => {
@@ -199,19 +202,19 @@ test('sin APP_PASSCODE, un código de espacio activo entra a ese espacio', async
   });
 });
 
-test('cambiar APP_PASSCODE conserva el espacio administrador', async () => {
+// La siembra de Principal con APP_PASSCODE (y cambiar APP_PASSCODE después) se prueba en manager.test.mjs.
+test('cambiar ADMIN_PASSCODE no mueve ni pierde datos: el anterior deja de administrar', async () => {
   const db = await openMemoryDb();
   await crearEspacio(db);
   const post = (passcode, body) => handle({ method: 'POST', path: '/api/people', body, passcode, ip: '1.1.1.1', db });
   await conPasscode('uno', async () => {
-    assert.equal((await post('uno', { id: 'p1', name: 'Ana' })).status, 201);
-    assert.equal((await post(CODIGO_DE_PRUEBA, { id: 'p-otro', name: 'Beto' })).status, 201); // en otro espacio
+    assert.equal((await post('uno', { id: 'p1', name: 'Ana' })).status, 404); // la administración no escribe datos
+    assert.equal((await post(CODIGO_DE_PRUEBA, { id: 'p-otro', name: 'Beto' })).status, 201);
   });
   await conPasscode('dos', async () => {
-    assert.equal((await ping(db, 'dos')).body.space.id, 'space-admin');
-    const state = await handle({ method: 'GET', path: '/api/state', passcode: 'dos', ip: '1.1.1.1', db });
-    assert.equal(state.body.space.id, 'space-admin');
-    assert.deepEqual(state.body.people.map((p) => p.id), ['p1']); // la suya sí, la del otro espacio no
+    assert.equal((await ping(db, 'dos')).body.space.id, 'manager');
+    const state = await handle({ method: 'GET', path: '/api/state', passcode: CODIGO_DE_PRUEBA, ip: '1.1.1.1', db });
+    assert.deepEqual(state.body.people.map((p) => p.id), ['p-otro']); // el espacio sigue con lo suyo
     assert.equal((await ping(db, 'uno', '2.2.2.2')).status, 401); // el código anterior ya no entra
   });
 });
@@ -272,7 +275,7 @@ test('crear: devuelve el código una sola vez y el espacio entra con él', async
     const entra = await llamar(db, r.body.code.toLowerCase(), 'GET', '/api/ping');
     assert.equal(entra.status, 200);
     assert.equal(entra.body.space.id, r.body.id);
-    assert.equal(entra.body.space.is_admin, false);
+    assert.equal(entra.body.space.is_manager, false);
 
     const suyo = await estado(db, r.body.code);
     assert.equal(suyo.body.trips.length, 1);
@@ -281,7 +284,7 @@ test('crear: devuelve el código una sola vez y el espacio entra con él', async
     assert.equal(suyo.body.trips[0].home, DEFAULT_SETTINGS.home);
 
     const delAdmin = await estado(db, ADMIN);
-    assert.deepEqual(delAdmin.body.trips.map((t) => t.id), ['trip-1']); // el administrador no ve el viaje nuevo
+    assert.deepEqual(delAdmin.body.trips, []); // la administración no ve ningún viaje, ni el nuevo
 
     // Solo se guarda el hash, nunca el código.
     const fila = (await db.all('SELECT code_hash FROM spaces WHERE id = ?', [r.body.id]))[0];
@@ -305,13 +308,11 @@ test('listar: nunca incluye código ni hash, ni datos de los espacios', async ()
     assert.ok(!texto.includes(creado.body.code));
     assert.ok(!texto.includes('Persona Secreta'));
     for (const e of r.body) {
-      assert.deepEqual(Object.keys(e), ['id', 'name', 'created_at', 'active', 'is_admin']);
+      assert.deepEqual(Object.keys(e), ['id', 'name', 'created_at', 'active']);
       assert.equal(typeof e.active, 'boolean');
-      assert.equal(typeof e.is_admin, 'boolean');
     }
-    assert.equal(r.body[0].id, 'space-admin'); // el administrador primero
-    assert.equal(r.body[0].is_admin, true);
-    assert.deepEqual(r.body.slice(1).map((e) => e.id), ['space-b', creado.body.id]); // luego por creación
+    // Por fecha de creación: Principal (el más antiguo) es uno más de la lista.
+    assert.deepEqual(r.body.map((e) => e.id), ['space-admin', 'space-b', creado.body.id]);
   });
 });
 
@@ -355,15 +356,16 @@ test('desactivar: el espacio no entra, sus datos siguen; al reactivar vuelve tod
   });
 });
 
-test('el espacio administrador no se puede regenerar ni desactivar', async () => {
+test('Principal se puede regenerar y desactivar como cualquier espacio', async () => {
   const db = await openMemoryDb();
   await conPasscode(ADMIN, async () => {
     const regenerar = await admin(db, 'POST', '/api/spaces/space-admin/regenerate');
-    assert.deepEqual(regenerar, { status: 400, body: { error: 'El espacio administrador no se puede cambiar' } });
+    assert.equal(regenerar.status, 200);
+    assert.equal((await llamar(db, regenerar.body.code, 'GET', '/api/ping')).body.space.id, 'space-admin');
     const apagar = await admin(db, 'PUT', '/api/spaces/space-admin', { active: false });
-    assert.deepEqual(apagar, { status: 400, body: { error: 'El espacio administrador no se puede cambiar' } });
-    assert.equal((await ping(db, ADMIN)).status, 200);
-    assert.deepEqual(await db.all('SELECT code_hash, active FROM spaces WHERE id = ?', ['space-admin']), [{ code_hash: null, active: 1 }]);
+    assert.deepEqual(apagar, { status: 200, body: { id: 'space-admin', active: false } });
+    assert.equal((await llamar(db, regenerar.body.code, 'GET', '/api/ping', undefined, '2.2.2.2')).status, 403);
+    assert.deepEqual(await db.all('SELECT code_hash, active FROM spaces WHERE id = ?', ['space-admin']), [{ code_hash: hashCode(regenerar.body.code), active: 0 }]);
   });
 });
 
@@ -474,7 +476,7 @@ test('un error de base que no es colisión no se reintenta: 500 sin detalles', a
   }
 });
 
-test('sin APP_PASSCODE (modo abierto) las rutas de espacios no existen para nadie, ni con el espacio administrador', async () => {
+test('sin ADMIN_PASSCODE ni APP_PASSCODE (modo abierto) las rutas de espacios no existen para nadie, ni con Principal', async () => {
   const db = await openMemoryDb();
   await crearEspacio(db);
   const rutas = [
@@ -486,12 +488,12 @@ test('sin APP_PASSCODE (modo abierto) las rutas de espacios no existen para nadi
   ];
   const antes = await db.all('SELECT * FROM spaces ORDER BY id');
   const tripsAntes = await db.all('SELECT id FROM trips ORDER BY id');
-  // Sin APP_PASSCODE (variable ausente) y con ella vacía: los dos son modo abierto.
+  // Sin las variables (ausentes) y con ADMIN_PASSCODE vacía: los dos son modo abierto.
   for (const valor of [undefined, '']) {
     await conPasscode(valor, async () => {
       const desconocida = await llamar(db, undefined, 'GET', '/api/no-existe');
       assert.deepEqual(desconocida, { status: 404, body: { error: 'Ruta no encontrada' } });
-      // Sin código y con un código desconocido entran al espacio administrador; con el de un espacio activo, a ese espacio.
+      // Sin código y con un código desconocido entran a Principal; con el de un espacio activo, a ese espacio.
       for (const passcode of [undefined, 'cualquier cosa', CODIGO_DE_PRUEBA]) {
         for (const [method, path, body] of rutas) {
           assert.deepEqual(await llamar(db, passcode, method, path, body), desconocida, `${valor} ${passcode} ${method} ${path}`);
@@ -502,7 +504,7 @@ test('sin APP_PASSCODE (modo abierto) las rutas de espacios no existen para nadi
   assert.deepEqual(await db.all('SELECT * FROM spaces ORDER BY id'), antes);
   assert.deepEqual(await db.all('SELECT id FROM trips ORDER BY id'), tripsAntes);
 
-  // Control positivo: con APP_PASSCODE definido y el código del administrador, las mismas rutas funcionan.
+  // Control positivo: con ADMIN_PASSCODE definido y su código, las mismas rutas funcionan.
   await conPasscode(ADMIN, async () => {
     assert.equal((await admin(db, 'GET', '/api/spaces')).status, 200);
     assert.equal((await admin(db, 'POST', '/api/spaces', { name: 'Nuevo' })).status, 201);

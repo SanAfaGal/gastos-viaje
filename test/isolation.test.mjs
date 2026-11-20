@@ -27,7 +27,7 @@ const llamador = (db, passcode) => (method, path, body, query = {}) =>
   handle({ method, path, body, query: new URLSearchParams(query), passcode, ip: '1.1.1.1', db });
 
 // Dos espacios (A y B) con un viaje, una persona y un medio de pago cada uno, más una persona del administrador.
-// Sin APP_PASSCODE: sin código se entra al administrador y con el código de un espacio, a ese espacio.
+// Sin APP_PASSCODE ni ADMIN_PASSCODE: sin código se entra a Principal y con el código de un espacio, a ese espacio.
 async function twoSpaces() {
   const db = await openMemoryDb();
   await crearEspacio(db, 'space-a', 'Grupo A', CODE_A);
@@ -116,18 +116,18 @@ test('estado: cada espacio ve solo lo suyo, incluido el administrador', async ()
   assert.deepEqual(ids(sa.people), ['pa']);
   assert.deepEqual(ids(sa.payment_methods), ['ma']);
   assert.deepEqual(sa.trips[0].people_ids, ['pa']);
-  assert.deepEqual(sa.space, { id: 'space-a', name: 'Grupo A', is_admin: false });
+  assert.deepEqual(sa.space, { id: 'space-a', name: 'Grupo A', is_principal: false, is_manager: false });
 
   assert.deepEqual(ids(sb.trips), ['tb']);
   assert.deepEqual(ids(sb.people), ['pb']);
   assert.deepEqual(ids(sb.payment_methods), ['mb']);
-  assert.deepEqual(sb.space, { id: 'space-b', name: 'Grupo B', is_admin: false });
+  assert.deepEqual(sb.space, { id: 'space-b', name: 'Grupo B', is_principal: false, is_manager: false });
 
   assert.deepEqual(ids(sadm.trips), ['trip-1']);
   assert.deepEqual(ids(sadm.people), ['p-admin']);
   assert.deepEqual(sadm.payment_methods, []);
   assert.deepEqual(sadm.trips[0].people_ids, ['p-admin']); // la persona nueva del administrador no entra a viajes ajenos
-  assert.deepEqual(sadm.space, { id: 'space-admin', name: 'Principal', is_admin: true });
+  assert.deepEqual(sadm.space, { id: 'space-admin', name: 'Principal', is_principal: true, is_manager: false });
 });
 
 test('un espacio nuevo sin datos recibe su propio primer viaje al pedir sin id', async () => {
@@ -255,18 +255,18 @@ test('restaurar deja las personas, viajes y medios nuevos en el espacio de quien
   assert.ok(!sadm.people.some((p) => p.id === 'p-rest'));
 });
 
-test('con APP_PASSCODE definido, un espacio no ve lo del administrador', async () => {
+test('con APP_PASSCODE definido (siembra Principal), un espacio no ve lo de Principal', async () => {
   const { db } = await twoSpaces();
   await conPasscode('clave-admin', async () => {
     const A = llamador(db, CODE_A);
     const Admin = llamador(db, 'clave-admin');
     const sa = (await A('GET', '/api/state')).body;
-    assert.deepEqual(sa.space, { id: 'space-a', name: 'Grupo A', is_admin: false });
+    assert.deepEqual(sa.space, { id: 'space-a', name: 'Grupo A', is_principal: false, is_manager: false });
     assert.deepEqual(ids(sa.trips), ['ta']);
     assert.deepEqual(ids(sa.people), ['pa']);
     assert.deepEqual(ids(sa.payment_methods), ['ma']);
     const sadm = (await Admin('GET', '/api/state')).body;
-    assert.equal(sadm.space.is_admin, true);
+    assert.equal(sadm.space.is_principal, true);
     assert.deepEqual(ids(sadm.trips), ['trip-1']);
     assert.deepEqual(ids(sadm.people), ['p-admin']);
     assert.deepEqual(sadm.payment_methods, []);

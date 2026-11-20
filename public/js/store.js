@@ -215,11 +215,11 @@ const hasLocalData = () =>
   queue.length > 0 || Object.keys(rates).length > 0 ||
   ['trips', 'people', 'payment_methods', 'expenses', 'payments'].some((k) => server[k]?.length > 0);
 
-// El espacio anterior no se conoce (copia de antes de los espacios): esos datos eran del administrador, así
-// que solo se descartan al entrar con un espacio que no lo es.
+// El espacio anterior no se conoce (copia de antes de los espacios): esos datos eran de Principal, así que solo
+// se conservan al entrar a Principal (`is_principal`); con cualquier otro espacio, o la administración, se descartan.
 const changesSpace = (space) => {
   const prev = savedSpaceId();
-  return prev ? prev !== space.id : !space.is_admin && hasLocalData();
+  return prev ? prev !== space.id : !space.is_principal && hasLocalData();
 };
 
 // Gastos sin enviar que se perderían al entrar en `space`.

@@ -17,12 +17,16 @@ async function base() {
   return db;
 }
 
+// Con ADMIN_PASSCODE definido (sin APP_PASSCODE); deja las dos variables como estaban.
 async function conPasscode(fn) {
-  process.env.APP_PASSCODE = ADMIN;
+  const antes = { ADMIN_PASSCODE: process.env.ADMIN_PASSCODE, APP_PASSCODE: process.env.APP_PASSCODE };
+  const poner = (k, v) => (v === undefined ? delete process.env[k] : (process.env[k] = v));
+  poner('ADMIN_PASSCODE', ADMIN);
+  poner('APP_PASSCODE', undefined);
   try {
     await fn();
   } finally {
-    delete process.env.APP_PASSCODE;
+    for (const [k, v] of Object.entries(antes)) poner(k, v);
   }
 }
 
@@ -46,7 +50,7 @@ test('un acierto con un código de espacio no cuenta como fallo: muchos aciertos
   assert.equal(await llamar(db, 'mal'), 429);
 }));
 
-test('un acierto del administrador sí reinicia el contador de la red', () => conPasscode(async () => {
+test('un acierto de la administración (ADMIN_PASSCODE) sí reinicia el contador de la red', () => conPasscode(async () => {
   const db = await base();
   for (let i = 0; i < 9; i += 1) assert.equal(await llamar(db, 'mal'), 401);
   assert.equal(await llamar(db, ADMIN), 200);
