@@ -44,11 +44,11 @@ En Ajustes, lo que afecta solo al viaje activo (mapa, actualizar tasas, exportar
 Cada grupo (una familia, unos amigos) tiene su propio código y sus propios viajes, personas, medios de pago, abonos y gastos; nadie ve los datos de otro grupo. El administrador los gestiona en Ajustes, Espacios: crear un espacio, generar un código nuevo o desactivarlo.
 
 - La sección Espacios y las rutas `/api/spaces` solo existen si el servidor tiene `APP_PASSCODE`. Sin él la app queda abierta y no hay rutas de administrador, que es el caso del desarrollo local salvo que lo pongas en `.env`.
-- `APP_PASSCODE` es el código del administrador y también la vía de recuperación si lo pierdes: cámbialo en Netlify.
+- `APP_PASSCODE` es el código del administrador y también la vía de recuperación si lo pierdes: cámbialo en Netlify. Como da acceso a la administración y alguien podría intentar adivinarlo (a ritmo limitado: 10 intentos por red cada 15 minutos), usa uno **largo y aleatorio**, por ejemplo `openssl rand -base64 24`, no una palabra ni un número corto.
 - El código de cada grupo se muestra una sola vez, al crearlo o regenerarlo; el servidor guarda solo su hash.
 - Regenerar un código hace que el anterior deje de funcionar de inmediato.
 - Desactivar un espacio impide que entre, pero conserva sus datos; se puede reactivar.
-- **Antes de desplegar esta versión haz un respaldo JSON** (Ajustes, Respaldo): la migración de la base agrega columnas y una tabla nueva.
+- **Antes de desplegar esta versión haz un respaldo JSON** (Ajustes, Respaldo): la migración de la base agrega columnas y una tabla nueva. Haz también una copia completa en Turso, que incluye todos los espacios (el respaldo JSON trae solo el espacio de quien lo descarga): `turso db shell gastos-viaje .dump > respaldo-antes-de-espacios.sql`.
 
 ## Desplegar en Netlify (con Turso)
 
@@ -66,7 +66,7 @@ Netlify no guarda archivos, por eso en línea la base es Turso (SQLite en la nub
 3. En Netlify, Site configuration, Environment variables:
    - `TURSO_DATABASE_URL`
    - `TURSO_AUTH_TOKEN`
-   - `APP_PASSCODE`: código de acceso. La URL de Netlify es pública, así que ponlo siempre.
+   - `APP_PASSCODE`: código del administrador (y necesario para la sección Espacios). La URL de Netlify es pública, así que ponlo siempre, largo y aleatorio.
 4. Abrir la URL en el celular y “Agregar a pantalla de inicio”.
 
 Para llevar los datos que ya tengas en local a Turso: `turso db create gastos-viaje --from-file data/gastos.db`.
