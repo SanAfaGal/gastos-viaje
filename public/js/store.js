@@ -62,10 +62,11 @@ let stateEtag = null; // versión del estado que ya tenemos: el servidor respond
 
 async function request(method, path, body, extraHeaders = {}) {
   let res;
+  const pass = getPass();
   try {
     res = await fetch(path, {
       method,
-      headers: { 'content-type': 'application/json', 'x-passcode': getPass(), ...extraHeaders },
+      headers: { 'content-type': 'application/json', 'x-passcode': pass, ...extraHeaders },
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch {
@@ -83,7 +84,8 @@ async function request(method, path, body, extraHeaders = {}) {
   } catch {
     /* sin cuerpo */
   }
-  if (path === '/api/state' && res.ok) stateEtag = res.headers?.get?.('etag') ?? null;
+  // Si el código cambió mientras tanto, esta respuesta es del espacio anterior: su versión no se guarda.
+  if (path === '/api/state' && res.ok && getPass() === pass) stateEtag = res.headers?.get?.('etag') ?? null;
   if (res.status === 401) {
     setOpenMark(false);
     net.needsLogin = true;
@@ -283,8 +285,11 @@ export async function fetchHistory(days = 30) {
 // así la sincronización periódica no redibuja ni escribe en localStorage cuando no cambió nada.
 export async function refresh() {
   const wasOnline = net.online;
+  const pass = getPass();
   try {
     const fresh = await request('GET', '/api/state', undefined, stateEtag ? { 'if-none-match': stateEtag } : {});
+    // Se cambió de espacio mientras la petición viajaba: la respuesta es del espacio anterior y se ignora.
+    if (getPass() !== pass) return true;
     net.lastSync = Date.now();
     if (fresh === NOT_MODIFIED) {
       if (!wasOnline) notify();
@@ -441,6 +446,52 @@ export async function refreshRatesNow(dry) {
   return out;
 }
 export const ping = () => request('GET', '/api/ping');
+
+// Comprueba un código SIN guardarlo y sin tocar el estado de la sesión actual (ni `needsLogin`, ni la marca de
+// servidor abierto, ni el estado de red): un código equivocado o una caída de red no deben cerrar la sesión.
+async function probe(code) {
+  let res;
+  try {
+    res = await fetch('/api/ping', { method: 'GET', headers: { 'content-type': 'application/json', 'x-passcode': code } });
+  } catch {
+    const err = new Error('Sin conexión');
+    err.offline = true;
+    throw err;
+  }
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    /* sin cuerpo */
+  }
+  if (!res.ok) {
+    const err = new Error(data?.error ?? `Error ${res.status}`);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+// Cambia de código (y quizá de espacio) solo cuando el código nuevo ya se comprobó y, si hay gastos sin
+// enviar que se perderían, el usuario confirmó. Hasta entonces el código guardado no cambia, así que ninguna
+// sincronización de fondo manda la cola al espacio nuevo. `confirmFn(texto)` es síncrona (como `confirm`):
+// entre la confirmación y el cambio no corre ningún temporizador.
+// Devuelve { switched: true }, { switched: false, cancelled: true } o { switched: false, error }.
+export async function trySwitchSpace(code, confirmFn) {
+  let info;
+  try {
+    info = await probe(code);
+  } catch (error) {
+    return { switched: false, error };
+  }
+  const n = discardCount(info.space);
+  if (n > 0 && !confirmFn(`Hay ${n} gasto(s) sin enviar del espacio anterior. Si entras con este código se descartarán. ¿Continuar?`)) {
+    return { switched: false, cancelled: true };
+  }
+  setPass(code);
+  adoptSpace(info.space);
+  return { switched: true };
+}
 // Respaldo: copia fresca de todo lo que hay en el servidor (viajes, personas, medios de pago y gastos).
 export const backupData = () => request('GET', '/api/backup');
 // Restaurar un respaldo: solo agrega lo que falta. Con dry=true solo cuenta qué entraría.

@@ -274,37 +274,18 @@ $view.addEventListener('submit', async (ev) => {
       }), 'Guardando…');
     } else if (f === 'login') {
       await busy(btn, async () => {
-        const previous = store.getPass();
-        const wasLocked = store.net.needsLogin;
-        store.setPass(document.getElementById('code').value);
-        let cancelled = false;
-        await guard(async () => {
-          let info;
-          try {
-            info = await store.ping();
-          } catch (err) {
-            // Sin conexión no se sabe a qué espacio lleva el código: se vuelve al anterior para que la
-            // sincronización de fondo no cambie de espacio por su cuenta con un código sin comprobar.
-            if (err.offline) {
-              store.setPass(previous);
-              store.net.needsLogin = wasLocked;
-            }
-            throw err;
-          }
-          // Otro espacio: lo que hay en el celular es del anterior. Con gastos sin enviar se pide confirmar.
-          const n = store.discardCount(info.space);
-          if (n > 0 && !confirm(`Hay ${n} gasto(s) sin enviar del espacio anterior. Si entras con este código se descartarán. ¿Continuar?`)) {
-            store.setPass(previous);
-            store.net.needsLogin = wasLocked; // si el código anterior ya no entraba, el acceso sigue a la vista
-            cancelled = true;
-            return;
-          }
-          store.adoptSpace(info.space);
-          await store.refresh();
-          await store.flush();
-          render();
-        });
-        if (!cancelled && store.net.needsLogin) toast('Código incorrecto', 'error');
+        // El código nuevo no se guarda hasta comprobarlo (y confirmar si se pierden gastos sin enviar): ver trySwitchSpace.
+        const r = await store.trySwitchSpace(document.getElementById('code').value, (texto) => confirm(texto));
+        if (r.error) {
+          toast(r.error.status === 401 ? 'Código incorrecto' : r.error.offline ? 'Necesitas internet para esto' : r.error.message, 'error');
+        } else if (r.switched) {
+          await guard(async () => {
+            await store.refresh();
+            await store.flush();
+            render();
+          });
+          if (store.net.needsLogin) toast('Código incorrecto', 'error');
+        }
       }, 'Entrando…');
     }
   });

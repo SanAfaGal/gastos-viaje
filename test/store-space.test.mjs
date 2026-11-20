@@ -20,9 +20,13 @@ globalThis.localStorage = {
 let db;
 let online = true;
 let puts = []; // envíos de gastos que el servidor aceptó
+let retener = null; // (ruta, código) => promesa | null: la respuesta de esa petición llega cuando la promesa se cumple
+let fallar = null; // (ruta, código) => true: el servidor responde 500
 globalThis.fetch = async (url, opts = {}) => {
   if (!online) throw new TypeError('network down');
   const u = new URL(url, 'http://x');
+  const code = opts.headers?.['x-passcode'];
+  if (fallar?.(u.pathname, code)) return { ok: false, status: 500, headers: new Map(), json: async () => ({ error: 'Error interno' }) };
   const out = await handle({
     method: opts.method ?? 'GET',
     path: u.pathname,
@@ -32,6 +36,7 @@ globalThis.fetch = async (url, opts = {}) => {
     db,
   });
   if (opts.method === 'PUT' && u.pathname.startsWith('/api/expenses/') && out.status < 400) puts.push(u.pathname);
+  await retener?.(u.pathname, code); // la petición ya llegó al servidor; la respuesta tarda
   // Igual que http.mjs: el estado lleva un ETag y se responde 304 si el navegador ya tiene esa versión.
   const headers = new Map();
   if (u.pathname === '/api/state' && out.status === 200) {
@@ -62,6 +67,8 @@ async function arrancar(caso, antes = () => {}) {
   mem.clear();
   online = true;
   puts = [];
+  retener = null;
+  fallar = null;
   antes();
   return import(`../public/js/store.js?caso=${caso}`);
 }
@@ -246,4 +253,171 @@ test('código regenerado: la cola se conserva; entrar con el código nuevo del m
   assert.deepEqual(puts, ['/api/expenses/x1']);
   assert.equal(await db.all('SELECT id FROM expenses').then((x) => x.length), 1);
   assert.equal(store.getState().people.length, 1);
+}));
+
+// ---------- el código nuevo no se guarda ni se envía la cola antes de confirmar ----------
+
+const mensaje = (n) => `Hay ${n} gasto(s) sin enviar del espacio anterior. Si entras con este código se descartarán. ¿Continuar?`;
+
+// Retiene la respuesta de las peticiones que cumplan `cual` hasta llamar a `soltar()`.
+function retenerRespuesta(cual) {
+  let soltar;
+  const espera = new Promise((r) => { soltar = r; });
+  retener = (ruta, code) => (cual(ruta, code) ? espera : null);
+  return soltar;
+}
+
+const gastosDe = (espacio) => db.all('SELECT e.id FROM expenses e JOIN trips t ON t.id = e.trip_id WHERE t.space_id = ?', [espacio]).then((x) => x.length);
+
+test('trySwitchSpace: con gastos en cola pide confirmar con el texto exacto y, si cancela, no cambia nada', () => conProceso(async () => {
+  const store = await arrancar(10);
+  await prepararA(store);
+  const textos = [];
+  const r = await store.trySwitchSpace(CODE_B, (t) => { textos.push(t); return false; });
+  assert.deepEqual(textos, [mensaje(1)]);
+  assert.deepEqual(r, { switched: false, cancelled: true });
+  assert.equal(mem.get('bg_pass'), CODE_A);
+  assert.equal(mem.get('bg_space'), 'a');
+  assert.equal(store.pendingCount(), 1);
+  assert.equal(store.net.needsLogin, false);
+}));
+
+test('trySwitchSpace: si acepta, guarda el código y descarta la copia anterior', () => conProceso(async () => {
+  const store = await arrancar(11);
+  await prepararA(store);
+  const r = await store.trySwitchSpace(CODE_B, () => true);
+  assert.deepEqual(r, { switched: true });
+  assert.equal(mem.get('bg_pass'), CODE_B);
+  assert.equal(mem.get('bg_space'), 'b');
+  assert.equal(store.pendingCount(), 0);
+  await store.refresh();
+  assert.equal(store.getState().trip.id, 'trip-b');
+  assert.equal(store.getState().people.length, 0);
+}));
+
+test('trySwitchSpace: un celular sin cola cambia de espacio sin preguntar', () => conProceso(async () => {
+  const store = await arrancar(12);
+  await entrar(store, CODE_A);
+  let preguntas = 0;
+  const r = await store.trySwitchSpace(CODE_B, () => { preguntas += 1; return true; });
+  assert.deepEqual(r, { switched: true });
+  assert.equal(preguntas, 0);
+  assert.equal(mem.get('bg_space'), 'b');
+}));
+
+test('mientras el código nuevo se comprueba no se guarda: la cola solo sale con el código anterior y a su espacio', () => conProceso(async () => {
+  const store = await arrancar(13);
+  await prepararA(store);
+  const soltar = retenerRespuesta((ruta, code) => ruta === '/api/ping' && code === CODE_B);
+  const textos = [];
+  const cambio = store.trySwitchSpace(CODE_B, (t) => { textos.push(t); return true; });
+
+  assert.equal(mem.get('bg_pass'), CODE_A, 'el código nuevo no se guarda mientras se comprueba');
+  assert.equal(store.net.needsLogin, false);
+  await store.flush(); // sincronización de fondo con el código anterior: va al espacio A
+  await store.refresh();
+  assert.deepEqual(puts, ['/api/expenses/x1']);
+  assert.equal(await gastosDe('b'), 0);
+  assert.equal(await gastosDe('a'), 1);
+
+  soltar();
+  assert.deepEqual(await cambio, { switched: true });
+  assert.deepEqual(textos, [], 'el gasto ya se había enviado a su espacio: nada que descartar');
+  assert.equal(mem.get('bg_pass'), CODE_B);
+}));
+
+test('mientras el código nuevo se comprueba, sin conexión la cola queda intacta y se descarta solo al confirmar', () => conProceso(async () => {
+  const store = await arrancar(14);
+  await prepararA(store);
+  const soltar = retenerRespuesta((ruta, code) => ruta === '/api/ping' && code === CODE_B);
+  const textos = [];
+  const cambio = store.trySwitchSpace(CODE_B, (t) => { textos.push(t); return true; });
+
+  online = false; // la red se cae con la comprobación en vuelo
+  assert.deepEqual(await store.flush(), { sent: 0, errors: [] });
+  assert.equal(await store.refresh(), false);
+  online = true;
+  assert.deepEqual(puts, []);
+  assert.equal(store.pendingCount(), 1);
+  assert.equal(mem.get('bg_pass'), CODE_A);
+  assert.deepEqual(textos, []);
+
+  soltar();
+  assert.deepEqual(await cambio, { switched: true });
+  assert.deepEqual(textos, [mensaje(1)]);
+  assert.equal(store.pendingCount(), 0);
+  assert.equal(mem.get('bg_pass'), CODE_B);
+  assert.deepEqual(puts, []);
+  assert.equal(await gastosDe('b'), 0);
+}));
+
+test('comprobación del código nuevo que falla con 500 o sin conexión: ni código, ni cola, ni needsLogin cambian', () => conProceso(async () => {
+  const store = await arrancar(15);
+  await prepararA(store);
+
+  fallar = (ruta, code) => ruta === '/api/ping' && code === CODE_B;
+  const r500 = await store.trySwitchSpace(CODE_B, () => assert.fail('no debe preguntar'));
+  assert.equal(r500.switched, false);
+  assert.equal(r500.error.status, 500);
+  fallar = null;
+
+  online = false;
+  const rOff = await store.trySwitchSpace(CODE_B, () => assert.fail('no debe preguntar'));
+  online = true;
+  assert.equal(rOff.switched, false);
+  assert.equal(rOff.error.offline, true);
+
+  assert.equal(mem.get('bg_pass'), CODE_A);
+  assert.equal(mem.get('bg_space'), 'a');
+  assert.equal(store.pendingCount(), 1);
+  assert.equal(store.net.needsLogin, false);
+}));
+
+test('código equivocado (401): el código guardado y la cola no cambian y no se cierra la sesión', () => conProceso(async () => {
+  const store = await arrancar(16);
+  await prepararA(store);
+  const r = await store.trySwitchSpace('ZZZZ-ZZZZ-ZZZZ', () => assert.fail('no debe preguntar'));
+  assert.equal(r.switched, false);
+  assert.equal(r.error.status, 401);
+  assert.equal(mem.get('bg_pass'), CODE_A);
+  assert.equal(store.pendingCount(), 1);
+  assert.equal(store.net.needsLogin, false, 'quien ya tenía una sesión válida la conserva');
+  await store.flush();
+  assert.deepEqual(puts, ['/api/expenses/x1']);
+}));
+
+test('código equivocado en la pantalla de acceso: sigue en la pantalla de acceso y no se guarda nada', () => conProceso(async () => {
+  const store = await arrancar(17);
+  assert.equal(store.net.needsLogin, true);
+  const r = await store.trySwitchSpace('ZZZZ-ZZZZ-ZZZZ', () => assert.fail('no debe preguntar'));
+  assert.equal(r.error.status, 401);
+  assert.equal(store.net.needsLogin, true);
+  assert.equal(mem.has('bg_pass'), false);
+}));
+
+test('un refresh con el código anterior que llega después del cambio no deshace el cambio de espacio', () => conProceso(async () => {
+  const store = await arrancar(18);
+  await prepararA(store);
+  await db.run("INSERT INTO people (id, name, space_id) VALUES ('nuevo', 'Nuevo', 'a')"); // el estado de A cambió: la respuesta traerá datos
+  let una = true;
+  const soltar = retenerRespuesta((ruta, code) => {
+    if (ruta !== '/api/state' || code !== CODE_A || !una) return false;
+    una = false;
+    return true;
+  });
+  const viejo = store.refresh(); // sale con el código A
+
+  assert.deepEqual(await store.trySwitchSpace(CODE_B, () => true), { switched: true });
+  await store.refresh(); // ya con el código B
+  assert.equal(store.getState().trip.id, 'trip-b');
+
+  soltar(); // llega la respuesta del espacio A
+  await viejo;
+  await store.refresh();
+  const s = store.getState();
+  assert.equal(s.trip.id, 'trip-b');
+  assert.equal(s.people.length, 0);
+  assert.equal(mem.get('bg_space'), 'b');
+  assert.ok(!mem.get('bg_state2').includes('Yo'));
+  assert.ok(!mem.get('bg_state2').includes('Nuevo'));
 }));
