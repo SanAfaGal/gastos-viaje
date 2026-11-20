@@ -49,7 +49,8 @@ function setOpenMark(on) {
   }
 }
 
-// lockReason: por qué se pide el código cuando no es solo "no lo has puesto" (hoy: el espacio está desactivado).
+// lockReason: por qué se pide el código cuando no es solo "no lo has puesto" (el espacio está desactivado, o el
+// código guardado pasó a ser el de la administración).
 export const net = { online: true, syncing: false, needsLogin: startsLocked(), lastSync: 0, lockReason: '' };
 
 export function setPass(p) {
@@ -126,7 +127,8 @@ async function send(method, path, body, extraHeaders = {}) {
     // 401: el código no sirve. 403: es el de un espacio que el administrador desactivó (el servidor dice por qué).
     // Solo si el código no cambió mientras tanto: una respuesta tardía del código anterior no cierra la sesión nueva.
     if (getPass() === pass) {
-      net.lockReason = res.status === 403 ? (data?.error ?? '') : '';
+      // Un 401 sin código solo dice "falta el código": el motivo de antes (si lo había) sigue valiendo.
+      if (pass || res.status === 403) net.lockReason = res.status === 403 ? (data?.error ?? '') : '';
       // El servidor ya no acepta este código: se olvida. Así la próxima recarga abre directo en el acceso, sin
       // mandar peticiones con un código muerto que gasten intentos.
       if (pass) {
@@ -336,6 +338,14 @@ export async function fetchHistory(days = 30) {
   }
 }
 
+function lockOutForManager() {
+  try { localStorage.removeItem(K.pass); } catch { /* sin almacenamiento */ }
+  stateEtag = null; // era la versión del estado de la administración
+  net.needsLogin = true;
+  net.lockReason = 'Este código ahora es el de la administración. Escribe el código de tu espacio o el de la administración.';
+  notify();
+}
+
 // Solo se avisa a la pantalla (y se guarda la copia local) si lo recibido es distinto de lo que ya había:
 // así la sincronización periódica no redibuja ni escribe en localStorage cuando no cambió nada.
 export async function refresh() {
@@ -348,6 +358,13 @@ export async function refresh() {
     net.lastSync = Date.now();
     if (fresh === NOT_MODIFIED) {
       if (!wasOnline) notify();
+      return true;
+    }
+    // El código guardado se convirtió en el de la administración (ADMIN_PASSCODE igual a ese código) sin que nadie la
+    // eligiera en el acceso (trySwitchSpace guarda antes el espacio 'manager'). No se adopta: se perderían la cola y la
+    // copia local. Se pide el código otra vez y todo lo del espacio queda intacto hasta que se escriba uno.
+    if (fresh.space?.is_manager && savedSpaceId() !== MANAGER_ID) {
+      lockOutForManager();
       return true;
     }
     const etag = stateEtag; // adoptSpace lo borra si cambió el espacio, pero este estado ya es del espacio nuevo
@@ -466,6 +483,9 @@ export async function flush() {
       } catch (err) {
         // Sin red, sin acceso, límite de intentos o falla del servidor: el gasto no es inválido, se reintenta luego.
         if (err.offline || err.status === 401 || err.status === 403 || err.status === 429 || err.status >= 500) break;
+        // Las rutas de gastos y de orden siempre existen para un espacio de datos: 'Ruta no encontrada' solo dice que
+        // este código ya no es el de un espacio (pasó a ser el de la administración). El gasto no es inválido.
+        if (err.status === 404 && err.message === 'Ruta no encontrada') break;
         errors.push(err.message);
         queue = queue.filter((o) => o !== op); // dato inválido: no reintentar para siempre
       }
@@ -488,6 +508,7 @@ export async function syncNow() {
   if (net.needsLogin && getPass()) return;
   await flush();
   await refresh();
+  if (net.needsLogin) return; // el código dejó de servir en esta vuelta: no se pide nada más
   if (!managerSide()) fetchRate(todayStr());
 }
 
