@@ -56,9 +56,14 @@ export async function resolveMapLink(rawUrl, { fetchFn = fetch } = {}) {
   }
   // Sin coordenadas: al menos el nombre del lugar, para buscarlo por texto.
   const place = url.match(/\/place\/([^/@?]+)/);
+  // También la dirección completa ("Nombre, Calle #, Ciudad, País"): con ella el navegador puede ubicar el lugar por texto.
   let name = '';
+  let address = '';
   if (place) {
-    try { name = decodeURIComponent(place[1]).replace(/\+/g, ' ').split(',')[0].trim().slice(0, 120); } catch { /* nombre ilegible: se omite */ }
+    try {
+      address = decodeURIComponent(place[1].replace(/\+/g, ' ')).trim().slice(0, 200);
+      name = address.split(',')[0].trim().slice(0, 120);
+    } catch { /* nombre ilegible: se omite */ }
   }
-  return { url, ...(name ? { name } : {}) };
+  return { url, ...(name ? { name } : {}), ...(address && address !== name ? { address } : {}) };
 }

@@ -90,6 +90,15 @@ test('enlace corto: pasa por la página de consentimiento, y sin coordenadas dev
   assert.match(r.url, /^https:\/\/www\.google\.com\/maps\/place\//);
 });
 
+test('enlace corto sin coordenadas: devuelve también la dirección completa para buscarla por texto', async () => {
+  const long = 'https://www.google.com/maps/place/Conjunto+Residencial+Balcones+de+Normand%C3%ADa,+Ac+63+%2374a-81,+Bogot%C3%A1,+Colombia/data=!4m2!3m1!1s0x8e3f9b6e1e608f67:0x28faa0c014f53810?entry=gps';
+  const fetchFn = async (url) => (String(url).startsWith('https://maps.app.goo.gl/') ? redirect(long) : page);
+  const r = await resolveMapLink('https://maps.app.goo.gl/SKC9184HrevGtCMC7', { fetchFn });
+  assert.equal(r.lat, undefined);
+  assert.equal(r.name, 'Conjunto Residencial Balcones de Normandía');
+  assert.equal(r.address, 'Conjunto Residencial Balcones de Normandía, Ac 63 #74a-81, Bogotá, Colombia');
+});
+
 test('enlace corto: rechaza hosts ajenos, redirecciones hacia fuera, bucles y caídas', async () => {
   await assert.rejects(resolveMapLink('https://evil.com/x', { fetchFn: async () => page }), (e) => e.status === 400);
   await assert.rejects(resolveMapLink('https://maps.app.goo.gl/x', { fetchFn: async () => redirect('https://evil.com/steal') }), (e) => e.status === 502);
