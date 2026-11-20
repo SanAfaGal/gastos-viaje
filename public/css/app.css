@@ -110,6 +110,9 @@ main { padding: 4px 16px calc(110px + env(safe-area-inset-bottom)); max-width: 6
 .tabbar a.fab { flex: 0 0 auto; width: 56px; height: 56px; margin-top: -22px; border-radius: 50%; background: var(--brand); color: var(--brand-ink); justify-content: center; box-shadow: 0 6px 16px color-mix(in srgb, var(--brand) 45%, transparent); }
 .tabbar a.fab svg { width: 28px; height: 28px; stroke-width: 2.4; }
 .logged-out .tabbar { display: none; }
+/* La administración no tiene viajes: sin pestañas ni selector de viaje. */
+.manager .tabbar { display: none; }
+.manager #trip-btn { display: none; }
 
 .card { background: var(--surface); border-radius: var(--radius); padding: 16px; box-shadow: var(--shadow); border: 1px solid var(--border); margin-bottom: 12px; }
 .card h2 { margin: 0 0 8px; font-size: .8rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); font-weight: 600; }

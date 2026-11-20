@@ -8,7 +8,7 @@ import { homeChart, viewHome } from './view-home.js';
 import { dragSt, resetFilters, viewList } from './view-list.js';
 import { payOpen, setPayDraft, setPayOpen, viewAccounts } from './view-accounts.js';
 import { methodOpen, personOpen, setEditMethod, setEditPerson, setEditTrip, setMethodOpen, setPersonOpen, setTripOpen, tripOpen, viewSettings } from './view-settings.js';
-import { resetSpaces, ensureSpaces, setSpaceOpen, spaceOpen } from './view-spaces.js';
+import { resetSpaces, ensureSpaces, setSpaceOpen, spaceOpen, viewManage } from './view-spaces.js';
 import { initMap, lastMapSig, leafletMap, mapSig, setLastNonMap, setLeafletMap, setMapFocus, viewMap } from './view-map.js';
 
 function viewLogin() {
@@ -83,14 +83,20 @@ export function applyUpdate() {
 export function render() {
   if (updatePending && !formActive()) { updatePending = false; location.reload(); return; }
   updateStatus();
-  $tripBtn.hidden = store.net.needsLogin;
+  // La administración no tiene datos: ni pestañas, ni selector de viaje, ni vistas de viajes, sea cual sea la ruta.
+  // Tras una recarga con su código, hasta que llega el primer estado (`awaitingManager`) la pantalla queda vacía.
+  const manager = !store.net.needsLogin && (store.isManager() || store.awaitingManager());
+  $tripBtn.hidden = store.net.needsLogin || manager;
   document.documentElement.classList.toggle('logged-out', store.net.needsLogin);
+  document.documentElement.classList.toggle('manager', manager);
   if (store.net.needsLogin) {
     resetSpaces(); // un código mostrado no sobrevive a cerrar la sesión
     $title.textContent = 'Gastos de viaje';
     $view.innerHTML = viewLogin();
     return;
   }
+  if (manager) { renderManager(); return; }
+  resetSpaces(); // la tarjeta de espacios solo vive en la pantalla de la administración
   const trip = store.activeTrip();
   $tripBtn.innerHTML = `${icon('plane')} ${esc(trip.name)} · ${esc(trip.dest)}→${esc(trip.home)} ${icon('chevron', 'trip-ch')}`;
   const { r, m } = currentRoute();
@@ -98,7 +104,7 @@ export function render() {
   if (dragSt?.active) return; // no se redibuja la lista mientras se arrastra un gasto
   if (r.map && leafletMap && document.querySelector('#map.leaflet-container') && mapSig() === lastMapSig) return;
   if (!isFormRoute()) setDraft(null);
-  if (r.tab !== 'ajustes') { setMethodOpen(false); setTripOpen(false); setPersonOpen(false); resetSpaces(); }
+  if (r.tab !== 'ajustes') { setMethodOpen(false); setTripOpen(false); setPersonOpen(false); }
   if (r.tab !== 'cuentas') { setPayOpen(false); setPayDraft(null); }
   $title.textContent = r.title;
   document.title = r.tab === 'home' ? 'Gastos de viaje' : `${r.title} · Gastos de viaje`;
@@ -114,14 +120,34 @@ export function render() {
   $view.innerHTML = r.view(m);
   if (keep) $view.querySelector(keep)?.focus({ preventScroll: true }); // el redibujo no le quita el foco a quien navega con teclado
   if (r.map) initMap();
-  if (r.tab === 'ajustes' && !r.map) { showAppVersion(); ensureSpaces(); }
+  if (r.tab === 'ajustes' && !r.map) showAppVersion();
   if (r.tab === 'home') homeChart();
   if (isFormRoute() && draft) { updateConv(); centerPicked(); }
   if (methodOpen) document.getElementById('method-dialog')?.showModal();
   if (tripOpen) document.getElementById('trip-dialog')?.showModal();
   if (personOpen) document.getElementById('person-dialog')?.showModal();
-  if (spaceOpen) document.getElementById('space-dialog')?.showModal();
   if (payOpen) document.getElementById('pay-dialog')?.showModal();
+}
+// Pantalla de la administración. Nada de lo que dibujan las vistas de datos queda abierto (borrador, diálogos, mapa).
+function renderManager() {
+  setDraft(null);
+  setMethodOpen(false); setTripOpen(false); setPersonOpen(false);
+  setPayOpen(false); setPayDraft(null);
+  if (leafletMap) { leafletMap.remove(); setLeafletMap(null); }
+  if (!store.isManager()) { // aún no llega el primer estado: no se muestra nada
+    $title.textContent = 'Gastos de viaje';
+    document.title = 'Gastos de viaje';
+    $view.innerHTML = '';
+    return;
+  }
+  $title.textContent = 'Administración';
+  document.title = 'Administración · Gastos de viaje';
+  const keep = location.hash === lastHash ? focusKey() : null;
+  lastHash = location.hash;
+  $view.innerHTML = viewManage();
+  if (keep) $view.querySelector(keep)?.focus({ preventScroll: true });
+  ensureSpaces();
+  if (spaceOpen) document.getElementById('space-dialog')?.showModal();
 }
 // Selector de viaje (arriba, en todas las pantallas).
 function openTripSwitch() {

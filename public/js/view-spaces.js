@@ -1,23 +1,23 @@
-// Sección "Espacios" de Ajustes (administrador): estado, carga de la lista y acciones. El HTML de la tarjeta vive en spaces-card.mjs.
+// Pantalla "Administración" (código ADMIN_PASSCODE): la tarjeta de espacios, su estado, la carga de la lista y sus
+// acciones. El HTML de la tarjeta vive en spaces-card.mjs.
 import * as store from './store.js';
 import { busy, esc, toast } from './ui.js';
-import { ctx } from './shared.js';
 import { render } from './router.js';
 import { renameDialogHtml, spaceName, spacesCardHtml } from './spaces-card.mjs';
 
 let spaces = null; // null = cargando; arreglo = lista
 let status = 'idle'; // idle | loading | ready | na (el servidor no ofrece la administración) | error
 let shown = null; // { name, code } recién creado o regenerado: solo vive aquí y en la pantalla, nunca se guarda
-let epoch = 0; // sube al salir de Ajustes: una carga que termina después ya no vale
-export let spaceOpen = false; // diálogo de nuevo espacio abierto
+let epoch = 0; // sube al salir de la administración: una carga que termina después ya no vale
+export let spaceOpen = false; // hay un diálogo abierto: el de nuevo espacio o, con `renaming`, el de renombrar
 let renaming = null; // id del espacio que se renombra (diálogo de renombrar abierto) o null
 // El router llama a esto al cerrarse el diálogo (Cancelar, X, Escape, fuera): ninguno de los dos debe reabrirse solo.
 export function setSpaceOpen(value) { spaceOpen = value; if (!value) renaming = null; return value; }
 
-// De momento la tarjeta la ve quien administra los datos (la tarea siguiente la mueve a su propia pantalla).
-const isAdmin = () => Boolean(ctx().state.space?.is_manager);
+// La tarjeta solo existe con el código de la administración (el último estado recibido lo dice).
+const isAdmin = () => store.isManager();
 
-// Al salir de Ajustes se olvida todo, incluido el código mostrado.
+// Al salir de la administración (cerrar sesión o cambiar de espacio) se olvida todo, incluido el código mostrado.
 export function resetSpaces() {
   epoch += 1;
   spaces = null;
@@ -26,7 +26,7 @@ export function resetSpaces() {
   spaceOpen = false;
   renaming = null;
 }
-// Carga la lista al entrar en Ajustes y tras cada acción. 404 = este servidor no tiene administración (sin APP_PASSCODE).
+// Carga la lista al abrir la administración y tras cada acción. 404 = este servidor no tiene administración (sin APP_PASSCODE).
 export async function loadSpaces() {
   if (!isAdmin() || status === 'loading') return;
   status = 'loading';
@@ -48,11 +48,13 @@ export function ensureSpaces() {
 
 export function viewSpaces() {
   if (!isAdmin() || (status === 'na' && !shown)) return ''; // con un código por mostrar, la tarjeta no se oculta nunca
-  const error = status === 'error' ? 'No se pudo cargar la lista de espacios. Revisa tu conexión y vuelve a entrar a Ajustes.' : null;
+  const error = status === 'error' ? 'No se pudo cargar la lista de espacios. Revisa tu conexión y recarga la página.' : null;
   const card = spacesCardHtml({ spaces, shown, esc, canShare: typeof navigator.share === 'function', error });
   const toRename = renaming && spaces?.find((x) => x.id === renaming);
-  // Renombrando y el espacio ya no está en la lista: ningún diálogo (nunca el de crear en su lugar).
-  const dialog = renaming ? (toRename ? renameDialogHtml({ space: toRename, esc }) : '') : spaceOpen ? `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
+  // Renombrando y el espacio ya no está en la lista: ningún diálogo (nunca el de crear en su lugar) y se da por cerrado,
+  // para que el router vuelva a redibujar con cada cambio en vez de esperar a un diálogo que no está.
+  if (renaming && !toRename) { renaming = null; spaceOpen = false; }
+  const dialog = toRename ? renameDialogHtml({ space: toRename, esc }) : spaceOpen ? `<dialog id="space-dialog" class="sheet" aria-labelledby="sd-title">
       <form id="space-form" autocomplete="off">
         <header class="sheet-head"><h2 id="sd-title">Nuevo espacio</h2>
           <button type="button" class="sheet-x" data-action="cancel-space" aria-label="Cerrar">×</button></header>
@@ -66,6 +68,15 @@ export function viewSpaces() {
           <button class="btn" type="submit">Crear espacio</button></footer>
       </form></dialog>` : '';
   return card + dialog;
+}
+
+// Pantalla única de la administración: la lista de espacios (con sus diálogos) y la salida. Sin viajes ni datos.
+export function viewManage() {
+  return `${viewSpaces()}
+    <div class="card"><h2>Acceso</h2>
+      <p class="muted">Este código solo administra espacios: no abre viajes ni gastos de ningún grupo.</p>
+      <button class="btn secondary" type="button" data-action="logout">Cambiar código</button>
+    </div>`;
 }
 
 // Crea el espacio y muestra su código. Los errores los muestra quien llama dentro del diálogo.

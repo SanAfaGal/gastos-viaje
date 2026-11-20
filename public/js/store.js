@@ -211,6 +211,14 @@ function savedSpaceId() {
   }
 }
 
+// La administración (código ADMIN_PASSCODE) no tiene datos: su estado no se guarda en el celular, así que tras una
+// recarga solo se sabe que es ella cuando llega el primer estado. Hasta entonces `awaitingManager` dice que el espacio
+// guardado es el suyo, para no dibujar ni enviar nada de datos.
+const MANAGER_ID = 'manager';
+export const isManager = () => server.space?.is_manager === true;
+export const awaitingManager = () => !isManager() && savedSpaceId() === MANAGER_ID;
+const managerSide = () => isManager() || savedSpaceId() === MANAGER_ID;
+
 const hasLocalData = () =>
   queue.length > 0 || Object.keys(rates).length > 0 ||
   ['trips', 'people', 'payment_methods', 'expenses', 'payments'].some((k) => server[k]?.length > 0);
@@ -349,8 +357,12 @@ export async function refresh() {
       server = fresh;
       serverJson = json;
       applySettings();
-      write(K.state, server);
-      rememberRates(server.expenses);
+      // El estado vacío de la administración solo vive en memoria (para `isManager`): una copia suya no sirve de nada
+      // y no debe confundirse con datos de un espacio.
+      if (!isManager()) {
+        write(K.state, server);
+        rememberRates(server.expenses);
+      }
       notify();
     } else if (!wasOnline) notify(); // volvió la conexión: la pantalla muestra el estado de red
     return true;
@@ -435,7 +447,9 @@ export function saveOrder(ids, key) {
 }
 
 export async function flush() {
-  if (net.syncing || !queue.length) return { sent: 0, errors: [] };
+  // Con el código de la administración no se envía nada: una cola que quedara de otro espacio espera intacta a que se
+  // entre con otro código (trySwitchSpace avisa y la descarta si es de otro espacio).
+  if (net.syncing || !queue.length || managerSide()) return { sent: 0, errors: [] };
   net.syncing = true;
   notify();
   const errors = [];
@@ -469,11 +483,12 @@ export async function flush() {
 // Con la sesión cerrada y un código guardado, ese código ya no sirve: cada petición contaría como un intento
 // fallido y acabaría bloqueando el acceso de este celular (y sumando al límite global), así que no se pide nada
 // hasta que se escriba un código. Sin código guardado sí se pregunta: así se sabe si el servidor está abierto.
+// La administración solo lee el estado (para seguir sabiendo quién es): ni cola ni tasas.
 export async function syncNow() {
   if (net.needsLogin && getPass()) return;
   await flush();
   await refresh();
-  fetchRate(todayStr());
+  if (!managerSide()) fetchRate(todayStr());
 }
 
 // ---------- personas y medios de pago (requieren internet) ----------

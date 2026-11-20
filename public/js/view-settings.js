@@ -9,7 +9,6 @@ import * as store from './store.js';
 import { busy, esc, toast } from './ui.js';
 import { cardColor, cardHtml, ctx, methodLabel, personName, rateSourceLabel } from './shared.js';
 import { render } from './router.js';
-import { viewSpaces } from './view-spaces.js';
 
 // Vista previa de la tarjeta en el formulario de Ajustes, con lo que se va escribiendo.
 export function paintPreview() {
@@ -174,8 +173,6 @@ export function viewSettings() {
           <button class="btn" type="submit">${editMethod ? 'Guardar' : 'Agregar'}</button></footer>
       </form></dialog>` : ''}` : '<div class="muted">Agrega primero una persona.</div>'}
     </div>
-
-    ${viewSpaces()}
 
     <div class="card"><h2>Datos y acceso</h2>
       <div class="acts">
