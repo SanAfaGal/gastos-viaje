@@ -578,7 +578,7 @@ test('el respaldo de A no trae nada de B ni la tabla spaces', async () => {
   assert.deepEqual(idsDe((await Admin('GET', '/api/backup')).body), { people: ['p-admin'], trips: ['trip-1'], payment_methods: [], expenses: [], payments: [] });
 });
 
-test('restaurar en B un respaldo de A copia los datos como nuevos de B solo si los ids no existen en otros espacios', async () => {
+test('restaurar en B: lo nuevo entra completo en B y las referencias a filas de A que el archivo no trae siguen siendo inválidas', async () => {
   const { db, A, B } = await conGastos();
   const deA = (await A('GET', '/api/backup')).body;
   const rechaza = async (file, query, msg) => {
@@ -588,21 +588,9 @@ test('restaurar en B un respaldo de A copia los datos como nuevos de B solo si l
     assert.ok(!/space|Grupo/.test(r.body.error), r.body.error);
     return r.body.error;
   };
-  // (a) Los ids de A siguen en A: falla con 400 de datos inválidos, sin nombrar el id ni de quién es, y no escribe nada.
+  // (a) Los ids de A que trae el archivo se copian con ids nuevos (ver test/restore-copia.test.mjs); aquí solo queda
+  // lo que sigue siendo inválido: referencias a filas de A que el archivo no trae.
   const antes = await toda(db);
-  for (const query of [undefined, { dry: '1' }]) assert.equal(await rechaza(deA, query), 'El respaldo tiene datos inválidos (people)');
-  // Un solo id ajeno en una sección basta, aunque el resto sea nuevo.
-  for (const [seccion, fila] of [
-    ['people', { id: 'pa', name: 'x' }], ['people', { id: 'p-admin', name: 'x' }],
-    ['trips', { id: 'ta', name: 'x', dest_currency: 'USD', home_currency: 'BRL' }],
-    ['payment_methods', { id: 'ma', kind: 'cash', name: 'x', owner_person_id: 'n1' }],
-    ['expenses', { id: 'ea', date: DIA, amount_cents: 1, payment_method_id: 'mn', trip_id: 'tn' }],
-    ['payments', { id: 'ya', trip_id: 'tn', from_person_id: 'n1', to_person_id: 'n2', date: DIA, amount_cents: 1 }],
-  ]) {
-    const file = respaldoCon((f) => f[seccion].push(fila));
-    if (seccion === 'expenses') file.expense_beneficiaries.push({ expense_id: 'ea', person_id: 'n1' });
-    assert.equal(await rechaza(file, undefined, `${seccion} ${fila.id}`), `El respaldo tiene datos inválidos (${seccion})`);
-  }
   // Las referencias a filas de A (dueño, viaje, medio, beneficiario, personas del abono, vínculo) cuentan como inexistentes.
   for (const cambiar of [
     (f) => { f.payment_methods[0].owner_person_id = 'pa'; }, (f) => { f.expenses[0].trip_id = 'ta'; },
@@ -629,8 +617,7 @@ test('restaurar en B un respaldo de A copia los datos como nuevos de B solo si l
   // El mismo archivo otra vez en B: todo ya existe en B y se omite sin error. En A esos ids son de B: falla.
   const otra = await B('POST', '/api/restore', respaldoNuevo());
   assert.deepEqual([otra.status, otra.body.skip], [200, conteo(2, 1, 1, 1, 1)]);
-  assert.equal((await A('POST', '/api/restore', respaldoNuevo())).status, 400);
-  assert.deepEqual(await filasCompletasDe(db, 'space-a'), antesA);
+  assert.deepEqual(await filasCompletasDe(db, 'space-a'), antesA); // nada de esto tocó a A
 });
 
 test('restaurar con dry=1 no revela ni cuenta filas de otro espacio', async () => {
@@ -642,10 +629,9 @@ test('restaurar con dry=1 no revela ni cuenta filas de otro espacio', async () =
   // Ids nuevos en seco: todo entraría y nada se omite, aunque A tenga filas.
   const nuevo = await B('POST', '/api/restore', respaldoNuevo(), { dry: '1' });
   assert.deepEqual([nuevo.status, nuevo.body], [200, { dry: true, add: conteo(2, 1, 1, 1, 1), skip: conteo(0, 0, 0, 0, 0) }]);
-  // El respaldo de A en seco no cuenta nada: falla igual que sin dry, con el mensaje de datos inválidos.
+  // El respaldo de A en seco solo cuenta lo que trae el propio archivo (se copiaría con ids nuevos): no dice nada de A.
   const ajeno = await B('POST', '/api/restore', (await A('GET', '/api/backup')).body, { dry: '1' });
-  assert.deepEqual([ajeno.status, Object.keys(ajeno.body)], [400, ['error']]);
-  assert.match(ajeno.body.error, INVALIDO);
+  assert.deepEqual([ajeno.status, ajeno.body], [200, { dry: true, add: conteo(2, 1, 1, 1, 1), skip: conteo(0, 0, 0, 0, 0) }]);
   assert.deepEqual(await toda(db), antes);
 });
 

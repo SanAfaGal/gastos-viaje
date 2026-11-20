@@ -6,9 +6,16 @@
 // Restaurar es aditivo: solo agrega lo que falta (por id) y nunca borra ni pisa lo que ya existe. Así se
 // puede recuperar algo borrado, o llenar una base vacía, sin perder lo que se hizo después del respaldo.
 // Todo se valida antes de escribir y se escribe en una sola transacción: o entra todo, o no entra nada.
+import { createHash } from 'node:crypto';
 import { isValidDate } from '../public/js/money.mjs';
 import { currencyByCode } from '../public/js/currencies.mjs';
 import { NETWORKS, isHexColor } from '../public/js/cards.mjs';
+
+// Id de la copia de una fila ajena: siempre el mismo para el mismo espacio, tabla e id original, con forma de UUID.
+function derivedId(space, table, id) {
+  const h = createHash('sha256').update(`${space}\0${table}\0${id}`).digest('hex');
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 
 const BACKUP_APP = 'gastos-viaje';
 const BACKUP_VERSION = 1;
@@ -54,8 +61,8 @@ export async function dumpBackup(db, sp) {
 // `sp` es el espacio de quien restaura: las personas, viajes y medios de pago nuevos quedan en él (sin espacio
 // no los vería nadie).
 // Todo se mira solo dentro del espacio: lo que ya existe, las referencias y los dueños de los medios. Una fila de
-// otro espacio cuenta como inexistente, y si el archivo trae un id que ya usa otro espacio, se rechaza entero
-// (no se dice de quién es).
+// otro espacio cuenta como inexistente. Si el archivo trae filas cuyo id ya usa otro espacio, entran como copia con
+// un id nuevo (ver `remap`); nunca se toca ni se enlaza una fila de otro espacio.
 export async function restoreBackup(db, data, { dry, fail, sp }) {
   needSpace(sp);
   if (!data || typeof data !== 'object' || Array.isArray(data) || data.app !== BACKUP_APP) {
@@ -106,6 +113,27 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
     have[table] = await idsWhere(table, 'IS');
     foreign[table] = await idsWhere(table, 'IS NOT');
   }
+  // Un id del archivo que ya usa otro espacio no se puede reutilizar (por ejemplo, el respaldo de un espacio que se
+  // restaura en otro): esa fila entra como copia con un id nuevo, derivado del espacio y del id original. Al ser
+  // derivado, restaurar el mismo archivo otra vez cae en las filas ya copiadas y las omite en vez de duplicarlas.
+  // Las referencias del archivo a esas filas se reescriben igual. Los ids propios y los nuevos no cambian.
+  const remap = Object.fromEntries(Object.keys(SOURCES).map((t) => [t, new Map()]));
+  for (const t of Object.keys(SOURCES)) {
+    for (const r of file[t]) if (isId(r.id) && foreign[t].has(r.id)) remap[t].set(r.id, derivedId(sp, t, r.id));
+  }
+  const remapped = (rows, fields) => rows.map((r) => {
+    const out = { ...r };
+    for (const [field, table] of fields) if (typeof out[field] === 'string') out[field] = remap[table].get(out[field]) ?? out[field];
+    return out;
+  });
+  file.people = remapped(file.people, [['id', 'people']]);
+  file.trips = remapped(file.trips, [['id', 'trips']]);
+  file.payment_methods = remapped(file.payment_methods, [['id', 'payment_methods'], ['owner_person_id', 'people']]);
+  file.expenses = remapped(file.expenses, [['id', 'expenses'], ['trip_id', 'trips'], ['payment_method_id', 'payment_methods']]);
+  file.payments = remapped(file.payments, [['id', 'payments'], ['trip_id', 'trips'], ['from_person_id', 'people'], ['to_person_id', 'people']]);
+  file.expense_beneficiaries = remapped(file.expense_beneficiaries, [['expense_id', 'expenses'], ['person_id', 'people']]);
+  file.trip_people = remapped(file.trip_people, [['trip_id', 'trips'], ['person_id', 'people']]);
+
   const known = (table) => (id) => have[table].has(id) || newIds[table].has(id);
   const newIds = { people: new Set(), trips: new Set(), payment_methods: new Set(), expenses: new Set(), payments: new Set() };
   const skip = { people: 0, trips: 0, payment_methods: 0, expenses: 0, payments: 0 };
