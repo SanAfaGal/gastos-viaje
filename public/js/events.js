@@ -9,6 +9,7 @@ import { ctx } from './shared.js';
 import { downloadBackup, downloadCsv, editMethod, editPerson, editTrip, onMethodForm, paintPreview, restoreFromFile, setEditMethod, setEditPerson, setEditTrip, setMethodOpen, setPersonOpen, setTripOpen, undoDelete } from './view-settings.js';
 import { spaceAction, submitRename, submitSpace } from './view-spaces.js';
 import { barRead, chartDays, homeBars, loadHistory, setChartDays } from './view-home.js';
+import { PENDING } from './filters.mjs';
 import { filters, filtersOpen, picked, resetFilters, setFiltersOpen } from './view-list.js';
 import { clearFieldError, draft, paintBenes, paintCards, paintCur, paintLoc, paintNoAmount, setDraft, setDraftDate, submitForm, updateConv } from './view-form.js';
 import { applyQuick, centsText, newPayDraft, paintPay, payDraft, readPayDraft, setPayCurrency, setPayDate, setPayDraft, setPayHist, setPayOpen, swapPay } from './view-accounts.js';
@@ -77,6 +78,10 @@ $view.addEventListener('click', async (ev) => {
     else if (action === 'f-approx') { filters.approx = !filters.approx; render(); }
     else if (action === 'f-toggle') { setFiltersOpen(!filtersOpen); render(); }
     else if (action === 'f-noloc') { filters.noloc = !filters.noloc; render(); }
+    else if (action === 'f-nomethod') { // atajo del filtro de medio: marca o quita "Por definir" y deja las demás opciones
+      filters.method = filters.method.includes(PENDING) ? filters.method.filter((m) => m !== PENDING) : [...filters.method, PENDING];
+      render();
+    }
     else if (action === 'f-noamount') { filters.noamount = !filters.noamount; render(); }
     else if (action === 'f-rate') { filters.rate = !filters.rate; render(); }
     else if (action === 'f-clear') { resetFilters(); render(); }

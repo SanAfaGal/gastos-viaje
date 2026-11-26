@@ -6,7 +6,7 @@ Registro de gastos de viajes con amigos o familia. Por cada viaje eliges el paí
 - Tarjetas (nombre, últimos 4 dígitos, débito o crédito), transferencias y efectivo, cada uno con su dueño. Si no sabes con qué se pagó, el gasto queda "por definir" y no entra en las cuentas hasta que lo completes. Lo mismo con el monto: si sabes que hubo un gasto pero no cuánto, activa «No sé el monto»; queda con el icono «?», no suma en los totales ni en las cuentas y lo completas después editándolo.
 - Gastos solo tuyos, de otra persona o compartidos en partes iguales. Opcionales: ubicación (GPS o buscando el lugar por nombre) y marca de monto aproximado.
 - **Inicio** con el resumen del viaje: total, gasto de hoy, promedio por día, gasto mayor, gasto por día y reparto por medio de pago y por quién pagó.
-- **Gastos**: lista por día con totales en las dos monedas, filtros (día, medio, para quién, quién pagó, aproximados, sin monto, sin ubicación, tasa pendiente) y orden manual dentro de cada día (mantén presionado y arrastra).
+- **Gastos**: lista por día con totales en las dos monedas, filtros (día, medio, para quién, quién pagó, aproximados, sin medio, sin monto, sin ubicación, tasa pendiente) y orden manual dentro de cada día (mantén presionado y arrastra).
 - **Mapa** del recorrido con los lugares numerados por su primera visita.
 - **Cuentas**: lo que falta por saldar entre cada par de personas, con el avance de lo ya abonado, saldo por persona y gasto por medio de pago. **Abonos**: se registran en cualquier moneda del viaje (con la tasa del día) y el diálogo muestra cómo queda la cuenta antes de guardar.
 - Al borrar un gasto aparece **Deshacer**.

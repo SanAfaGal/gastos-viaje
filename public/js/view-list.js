@@ -26,6 +26,7 @@ export function viewList() {
   const approxCount = c.expenses.filter((e) => e.amount_approx).length;
   const nolocCount = c.expenses.filter((e) => !hasLocation(e)).length;
   const rateCount = c.expenses.filter((e) => !e.amount_pending && (e.amount_home == null || e.rate_estimated)).length;
+  const nomethodCount = c.expenses.filter((e) => e.payment_method_id == null).length;
   const noamountCount = c.expenses.filter((e) => e.amount_pending).length;
   const owners = [...new Set(c.expenses.map((e) => c.methodsById[e.payment_method_id]?.owner_person_id).filter(Boolean))];
   const filtered = isFiltered(filters);
@@ -82,6 +83,7 @@ export function viewList() {
       <div class="chips filt-chips">
         ${approxCount ? `<button type="button" class="chip ${filters.approx ? 'on' : ''}" data-action="f-approx" aria-pressed="${filters.approx}">Aproximados (${approxCount})</button>` : ''}
         ${nolocCount ? `<button type="button" class="chip ${filters.noloc ? 'on' : ''}" data-action="f-noloc" aria-pressed="${filters.noloc}">Sin ubicación (${nolocCount})</button>` : ''}
+        ${nomethodCount ? `<button type="button" class="chip ${filters.method.includes(PENDING) ? 'on' : ''}" data-action="f-nomethod" aria-pressed="${filters.method.includes(PENDING)}">Sin medio (${nomethodCount})</button>` : ''}
         ${noamountCount ? `<button type="button" class="chip ${filters.noamount ? 'on' : ''}" data-action="f-noamount" aria-pressed="${filters.noamount}">Sin monto (${noamountCount})</button>` : ''}
         ${rateCount ? `<button type="button" class="chip ${filters.rate ? 'on' : ''}" data-action="f-rate" aria-pressed="${filters.rate}">Tasa pendiente (${rateCount})</button>` : ''}
       </div>
