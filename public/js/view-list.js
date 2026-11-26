@@ -1,5 +1,5 @@
 // Pantalla de gastos: listado por día con filtros y reordenamiento arrastrando.
-import { currencies, fmtDest, fmtHome } from './money.mjs';
+import { currencies, dayRate, fmtDest, fmtHome, fmtRate } from './money.mjs';
 import { hasLocation } from './places.mjs';
 import { newestFirst, sameOrder } from './order.mjs';
 import { PENDING, activeCount as countFilters, applyFilters, filtersOff, isFiltered, keepValid } from './filters.mjs';
@@ -15,6 +15,8 @@ export const picked = (select) => [...select.selectedOptions].map((o) => o.value
 export let filtersOpen = false; // panel de filtros plegado por defecto: casi no se usa
 export function setFiltersOpen(value) { filtersOpen = value; return value; }
 const MAP_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-6.5-5.6-6.5-11a6.5 6.5 0 0 1 13 0c0 5.4-6.5 11-6.5 11Z"/><circle cx="12" cy="10" r="2.3"/></svg>';
+// Tasa del día bajo la fecha. "≈" si todavía es estimada.
+const dayRateHtml = (r) => (r ? `<span class="day-rate${r.estimated ? ' est' : ''}"${r.estimated ? ' title="Tasa estimada: puede cambiar un poco"' : ''}>${r.estimated ? '≈ ' : ''}${esc(fmtRate(r.rate))}</span>` : '');
 export function viewList() {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
@@ -83,7 +85,7 @@ export function viewList() {
       </div>
     </div>
     ${sortable && days.some((d) => d.items.length > 1) ? '<div class="muted hint">Mantén presionado un gasto y arrástralo para ordenarlo dentro de su día. Con teclado: Alt + ↑ o ↓ sobre el gasto.</div>' : ''}
-    ${days.length ? days.map((d) => `<div class="day"><span>${esc(dayLabel(d.date))}</span><span class="day-tot"><b>${fmtHome(sumHome(d.items))}</b>${sumDest(d.items) ? ` <span class="muted">${fmtDest(sumDest(d.items))}</span>` : ''}</span></div>
+    ${days.length ? days.map((d) => `<div class="day"><span class="day-l"><span>${esc(dayLabel(d.date))}</span>${dayRateHtml(dayRate(d.items, cur.dest.code))}</span><span class="day-tot"><b>${fmtHome(sumHome(d.items))}</b>${sumDest(d.items) ? ` <span class="muted">${fmtDest(sumDest(d.items))}</span>` : ''}</span></div>
       <div class="card day-card" ${sortable ? `data-day="${esc(d.date)}"` : ''} style="padding:4px 16px">${d.items.map((e) => expenseItem(c, e, orderOf.get(e.id))).join('')}</div>`).join('')
       : '<div class="empty">No hay gastos con ese filtro.</div>'}`;
 }

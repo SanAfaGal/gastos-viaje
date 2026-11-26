@@ -352,6 +352,10 @@ main:focus-visible { outline: none; }
 .sum-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .day-tot b { font-weight: 700; color: var(--text); }
 .day-tot .muted { margin-left: 6px; }
+.day-l { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; min-width: 0; }
+/* Píldora con la tasa del día, junto a la fecha; si no cabe, baja sola a una segunda línea. */
+.day-rate { display: inline-flex; align-items: center; gap: 4px; padding: 2px 9px; border-radius: 99px; background: color-mix(in srgb, var(--brand) 14%, var(--surface)); color: var(--brand); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--brand) 30%, transparent); text-transform: none; letter-spacing: 0; font-weight: 600; font-variant-numeric: tabular-nums; font-size: .72rem; white-space: nowrap; }
+.day-rate.est { background: var(--warn-bg); color: var(--warn-text); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn-text) 30%, transparent); }
 .legend { display: grid; gap: 14px; margin: 6px 0 0; padding: 0; list-style: none; }
 .legend li { display: flex; align-items: center; gap: 12px; }
 .legend b { color: var(--text); }

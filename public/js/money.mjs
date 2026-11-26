@@ -42,6 +42,16 @@ export function fmtRate(rate, code = current.dest.code) {
   return `1 ${code} = ${n} ${current.home.code}`;
 }
 
+// Tasa que se muestra en el encabezado de un día: la de sus gastos en la moneda del destino.
+// Prefiere la definitiva a la estimada y, entre varias, la de fecha más reciente. Sin tasa: null.
+export function dayRate(items, destCode) {
+  const withRate = items.filter((e) => (!e.currency || e.currency === destCode) && e.rate > 0);
+  const latest = (list) => list.reduce((best, e) => (!best || String(e.rate_date ?? '') >= String(best.rate_date ?? '') ? e : best), null);
+  const final = latest(withRate.filter((e) => !e.rate_estimated));
+  const pick = final ?? latest(withRate);
+  return pick ? { rate: pick.rate, estimated: !final } : null;
+}
+
 // "12,50", "12.50", "1.234,56", "50.000", "R$ 8" -> centésimas enteras; null si no es válido.
 export function parseAmount(text) {
   let s = String(text ?? '').replace(/[^\d.,]/g, '');
