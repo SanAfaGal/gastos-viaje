@@ -55,3 +55,15 @@ test('resumen: promedio por día corrido (cuentan los días sin gastos), hoy y e
   assert.equal(summary(list, '2026-11-14').span, 5);
   assert.equal(summary([], '2026-11-14'), null);
 });
+
+test('gasto sin monto: no suma, no es "sin convertir" y se cuenta aparte', () => {
+  const list = [
+    { id: 'a', date: '2026-11-10', amount_cents: 1000, amount_home: 5000 },
+    { id: 'p', date: '2026-11-10', amount_cents: 0, amount_home: null, amount_pending: 1 },
+    { id: 'r', date: '2026-11-10', amount_cents: 700, amount_home: null },
+  ];
+  const s = summary(list, '2026-11-10');
+  assert.equal(s.total, 5000);
+  assert.equal(s.unconverted, 1);
+  assert.equal(s.noAmount, 1);
+});

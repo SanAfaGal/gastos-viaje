@@ -53,16 +53,17 @@ function newDraft(c, date = todayStr()) {
   const method = '';
   const going = new Set(c.people.map((p) => p.id));
   const benes = lastBenes.filter((id) => going.has(id));
-  return { id: null, date, currency: currencies().dest.code, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), created_at: null, approx: false, lat: null, lng: null, place: '' };
+  return { id: null, date, currency: currencies().dest.code, amountText: '', desc: '', method, benes: new Set(benes.length ? benes : c.people.map((p) => p.id)), created_at: null, approx: false, noAmount: false, lat: null, lng: null, place: '' };
 }
 function draftFrom(c, id) {
   const e = c.expenses.find((x) => x.id === id);
   if (!e) return null;
   return {
-    id: e.id, date: e.date, currency: e.currency ?? currencies().dest.code, amountText: (e.amount_cents / 100).toFixed(2).replace('.', ','),
+    id: e.id, date: e.date, currency: e.currency ?? currencies().dest.code, amountText: e.amount_pending ? '' : (e.amount_cents / 100).toFixed(2).replace('.', ','),
     desc: e.description, method: e.payment_method_id ?? PENDING, benes: new Set(e.beneficiary_ids),
     created_at: e.created_at,
     approx: Boolean(e.amount_approx),
+    noAmount: Boolean(e.amount_pending),
     lat: hasLocation(e) ? Number(e.lat) : null, lng: hasLocation(e) ? Number(e.lng) : null, place: e.place ?? '',
   };
 }
@@ -141,11 +142,13 @@ export function viewForm(editId) {
       <section class="amount-hero" aria-label="Monto">
         <div class="hero-top">
           <label for="amount" id="amount-l">${amountLabel()}</label>
-          <span class="lab-tools"><button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx"><span class="track" aria-hidden="true"></span>Aproximado</button>
+          <span class="lab-tools"><button type="button" class="switch ${draft.approx ? 'on' : ''}" role="switch" aria-checked="${draft.approx}" data-action="approx" id="approx-sw" ${draft.noAmount ? 'disabled' : ''}><span class="track" aria-hidden="true"></span>Aproximado</button>
             ${infoBtn('approx', 'Monto aproximado')}</span>
         </div>
-        <input id="amount" class="amount" inputmode="decimal" enterkeyhint="done" placeholder="0,00" value="${esc(draft.amountText)}" aria-describedby="err-amount">
+        <input id="amount" class="amount" inputmode="decimal" enterkeyhint="done" placeholder="${draft.noAmount ? 'Por definir' : '0,00'}" value="${esc(draft.amountText)}" aria-describedby="err-amount" ${draft.noAmount ? 'disabled' : ''}>
         <p class="ferr" id="err-amount" role="alert" hidden></p>
+        <div class="lab-tools hero-unk"><button type="button" class="switch ${draft.noAmount ? 'on' : ''}" role="switch" aria-checked="${draft.noAmount}" data-action="noamount"><span class="track" aria-hidden="true"></span>No sé el monto</button>
+          ${infoBtn('noamount', 'Monto por definir')}</div>
         <div class="chips cur-chips" id="cur" role="radiogroup" aria-label="Moneda del gasto">${curHtml()}</div>
         <div class="conv-row"><div class="conv" id="conv"></div>${infoBtn('rate', 'Tasa de cambio e historial')}</div>
       </section>
@@ -189,6 +192,7 @@ export function viewForm(editId) {
       ${infoDialog('pay', 'Pagado con', 'Elige con qué se pagó. Si no lo sabes, elige «Por definir» y lo completas después; ese gasto no entra en las cuentas hasta entonces.')}
       ${infoDialog('who', '¿Para quién es?', 'El gasto se divide en partes iguales entre las personas marcadas. «Todos» marca a todas las del viaje.')}
       ${infoDialog('approx', 'Monto aproximado', 'Márcalo si el monto es redondeado y hay que ajustarlo después. El gasto queda con la etiqueta «Monto aproximado» y puedes filtrarlos.')}
+      ${infoDialog('noamount', 'Monto por definir', 'Úsalo cuando sabes que hubo un gasto pero no cuánto fue. Queda guardado con el icono «?» y puedes filtrarlos con «Sin monto». Mientras no tenga monto no suma en los totales ni en Cuentas. Cuando lo sepas, ábrelo, apaga «No sé el monto» y escribe el valor.')}
       ${infoDialog('loc', 'Ubicación', 'Opcional. Sirve para ver en el mapa dónde gastaste. Va al final del formulario para que, mientras llenas lo demás, el celular ya vaya ubicándote y al elegir el lugar tu punto aparezca de una vez.')}
     </form>`;
 }
@@ -264,6 +268,19 @@ async function loadRate() {
     updateConv(true);
   }
 }
+// «No sé el monto»: apaga «Aproximado» (no hay nada que aproximar) y bloquea el campo, sin redibujar el formulario.
+export function paintNoAmount() {
+  if (!draft) return;
+  if (draft.noAmount) { draft.approx = false; clearFieldError('amount'); }
+  const sw = document.querySelector('[data-action="noamount"]');
+  sw?.classList.toggle('on', draft.noAmount);
+  sw?.setAttribute('aria-checked', String(draft.noAmount));
+  const ap = document.getElementById('approx-sw');
+  if (ap) { ap.disabled = draft.noAmount; ap.classList.toggle('on', draft.approx); ap.setAttribute('aria-checked', String(draft.approx)); }
+  const input = document.getElementById('amount');
+  if (input) { input.disabled = draft.noAmount; input.placeholder = draft.noAmount ? 'Por definir' : '0,00'; if (!draft.noAmount) input.focus(); }
+  updateConv();
+}
 export function updateConv(loaded = false) {
   const el = document.getElementById('conv');
   if (!el || !draft) return;
@@ -272,6 +289,7 @@ export function updateConv(loaded = false) {
   const cents = parseAmount(draft.amountText);
   const r = convRate;
   const c = ctx();
+  if (draft.noAmount) { el.textContent = 'Sin monto todavía: no suma hasta que lo pongas.'; if (det) det.textContent = ''; return; }
   if (!cents) { el.textContent = 'Escribe el monto para ver la conversión.'; if (det) det.textContent = ''; return; }
   if (!r) {
     el.textContent = loaded ? 'Sin tasa por ahora. Se guardará y se convertirá cuando haya internet.' : 'Buscando la tasa…';
@@ -319,7 +337,7 @@ export async function submitForm(then) {
   const cents = parseAmount(draft.amountText);
   // Se avisan todos los que falten (no solo el primero) y el foco va al primero.
   const missing = [];
-  if (!cents) missing.push(['amount', 'Escribe un monto válido.']);
+  if (!cents && !draft.noAmount) missing.push(['amount', 'Escribe un monto válido, o activa “No sé el monto”.']);
   if (!draft.method) missing.push(['method', 'Elige con qué se pagó, o “Por definir” si no lo sabes.']);
   if (!draft.benes.size) missing.push(['benes', 'Elige para quién es el gasto.']);
   if (missing.length) {
@@ -330,12 +348,13 @@ export async function submitForm(then) {
     id: draft.id ?? store.uuid(),
     date: draft.date,
     currency: draft.currency,
-    amount_cents: cents,
+    amount_cents: draft.noAmount ? 0 : cents,
+    amount_pending: draft.noAmount,
     description: draft.desc.trim(),
     payment_method_id: draft.method === PENDING ? null : draft.method,
     beneficiary_ids: [...draft.benes],
     created_at: draft.created_at ?? undefined,
-    amount_approx: draft.approx,
+    amount_approx: draft.approx && !draft.noAmount,
     // null explícito: al editar y quitar la ubicación, el servidor la borra.
     lat: draft.lat, lng: draft.lng, place: draft.lat == null ? null : draft.place.trim(),
   };

@@ -80,6 +80,7 @@ export function summary(expenses, today, dest) {
     perDay: Math.round(inTrip / span),
     today: expenses.filter((e) => e.date === today).reduce((a, e) => a + home(e), 0),
     top,
-    unconverted: expenses.filter((e) => e.amount_home == null).length,
+    unconverted: expenses.filter((e) => e.amount_home == null && !e.amount_pending).length, // esperan la tasa
+    noAmount: expenses.filter((e) => e.amount_pending).length, // esperan el monto
   };
 }

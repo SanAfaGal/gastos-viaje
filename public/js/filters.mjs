@@ -6,10 +6,10 @@
 export const PENDING = 'pending'; // "Por definir": gasto sin medio de pago
 
 export const MULTI_KEYS = ['day', 'method', 'person', 'payer'];
-const FLAG_KEYS = ['approx', 'noloc', 'rate'];
+const FLAG_KEYS = ['approx', 'noloc', 'rate', 'noamount'];
 
 // Una función y no una constante: así cada vez salen arreglos nuevos y no se comparte una misma referencia.
-export const filtersOff = () => ({ q: '', day: [], method: [], person: [], payer: [], approx: false, noloc: false, rate: false });
+export const filtersOff = () => ({ q: '', day: [], method: [], person: [], payer: [], approx: false, noloc: false, rate: false, noamount: false });
 
 const any = (sel) => sel.length > 0;
 
@@ -24,7 +24,9 @@ export function applyFilters(expenses, f, { methodsById, hasLocation }) {
     (!any(f.day) || f.day.includes(e.date)) &&
     (!f.approx || e.amount_approx) &&
     (!f.noloc || !hasLocation(e)) &&
-    (!f.rate || e.amount_home == null || e.rate_estimated));
+    // "Tasa pendiente o estimada": un gasto sin monto no espera la tasa, espera el monto (su propio filtro).
+    (!f.rate || (!e.amount_pending && (e.amount_home == null || e.rate_estimated))) &&
+    (!f.noamount || Boolean(e.amount_pending)));
 }
 
 // ¿Hay algún filtro puesto? (incluida la búsqueda de texto)

@@ -34,8 +34,13 @@ export function computeSettlement(expenses, personIds = [], unit = 1, payments =
     settled[id] = 0;
   }
   let pending = 0;
+  let noAmount = 0;
   let pendingPayments = 0;
   for (const e of expenses) {
+    if (e.amount_pending) { // sin monto todavía: no es falta de tasa
+      noAmount += 1;
+      continue;
+    }
     if (e.amount_home == null) {
       pending += 1;
       continue;
@@ -67,6 +72,7 @@ export function computeSettlement(expenses, personIds = [], unit = 1, payments =
     balances: balances.map((b) => ({ ...b, paid: scale(b.paid), consumed: scale(b.consumed), settled: scale(b.settled), net: scale(b.net) })),
     transfers: minTransfers(balances).map((t) => ({ ...t, amount: scale(t.amount) })),
     pending,
+    noAmount,
     pendingPayments,
   };
 }

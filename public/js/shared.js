@@ -68,6 +68,7 @@ export function cardHtml(m, { owner = '', pick = false, on = false } = {}) {
 export function settlementOf(c) {
   const input = c.expenses.map((e) => ({
     amount_home: e.amount_home,
+    amount_pending: e.amount_pending,
     payer_id: c.methodsById[e.payment_method_id]?.owner_person_id,
     beneficiary_ids: e.beneficiary_ids,
   })).filter((e) => e.payer_id);
@@ -100,6 +101,7 @@ export const setupCard = () => {
 // Cada uno tiene su explicación en el ⓘ del listado (ver legendHtml).
 const STATUS = {
   nomethod: ['danger', 'cardoff', 'Sin medio de pago: no entra en Cuentas hasta que lo elijas'],
+  noamount: ['info', 'help', 'Monto por definir: no suma en los totales ni en Cuentas hasta que lo pongas'],
   rate: ['warn', 'clock', 'Esperando la tasa del día'],
   estimated: ['warn', 'clock', 'Tasa estimada: puede cambiar un poco'],
   approx: ['approx', null, 'Monto aproximado'],
@@ -108,8 +110,11 @@ const STATUS = {
 function statusOf(e) {
   const out = [];
   if (e.payment_method_id == null) out.push('nomethod');
-  if (e.amount_home == null) out.push('rate'); else if (e.rate_estimated) out.push('estimated');
-  if (e.amount_approx) out.push('approx');
+  if (e.amount_pending) out.push('noamount'); // sin monto no hay nada que convertir ni que aproximar
+  else {
+    if (e.amount_home == null) out.push('rate'); else if (e.rate_estimated) out.push('estimated');
+    if (e.amount_approx) out.push('approx');
+  }
   if (e.pending) out.push('unsent');
   return out;
 }
@@ -131,11 +136,11 @@ const METHOD_ICON = { card: 'card', pix: 'transfer', cash: 'banknote' };
 // `n`: posición del gasto dentro de su día (solo en la lista, cuando el día tiene varios gastos).
 export function expenseItem(c, e, n) {
   const m = c.methodsById[e.payment_method_id];
-  const cop = e.amount_home == null ? 'Por convertir' : fmtHome(e.amount_home);
+  const cop = e.amount_pending ? 'Sin monto' : e.amount_home == null ? 'Por convertir' : fmtHome(e.amount_home);
   const { dest, home } = currencies();
   const cur = e.currency ?? dest.code;
   // Debajo del monto va el original, en su propia moneda. Si ya es la de casa no se convierte y se dice cuál es.
-  const original = cur === home.code ? `en ${home.code}` : fmtMoney(cur, e.amount_cents);
+  const original = e.amount_pending ? 'por definir' : cur === home.code ? `en ${home.code}` : fmtMoney(cur, e.amount_cents);
   const keys = statusOf(e);
   const paint = m ? cardPaint(cardColor(m)) : null;
   const tile = m
@@ -164,7 +169,7 @@ export function expenseItem(c, e, n) {
 // Qué significa cada icono del listado (se abre con el ⓘ de arriba).
 export function legendHtml() {
   const row = (k) => { const [tone, ic, label] = STATUS[k]; const [t, rest] = label.split(': '); return `<li><span class="bd ${tone}" aria-hidden="true">${ic ? icon(ic) : '≈'}</span><span><b>${esc(t)}</b>${rest ? `<span class="muted">${esc(rest)}</span>` : ''}</span></li>`; };
-  return `<ul class="legend">${['nomethod', 'rate', 'estimated', 'approx', 'unsent'].map(row).join('')}
+  return `<ul class="legend">${['nomethod', 'noamount', 'rate', 'estimated', 'approx', 'unsent'].map(row).join('')}
     <li><span class="bd pinb" aria-hidden="true">${icon('mappin')}</span><span><b>Tiene ubicación</b><span class="muted">Tócalo para verlo en el mapa</span></span></li>
     <li><span class="avs sm" aria-hidden="true"><span class="av" style="background:var(--seg-1)">S</span><span class="av" style="background:var(--seg-2)">A</span></span><span><b>Para quién es</b><span class="muted">Un círculo con la inicial de cada persona</span></span></li></ul>`;
 }

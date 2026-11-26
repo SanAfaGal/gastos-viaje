@@ -66,6 +66,7 @@ async function upgradeTrips(db) {
     ['pay_pending', 'INTEGER NOT NULL DEFAULT 0'], // 1 = medio de pago por definir (payment_method_id es solo relleno)
     ['rate_source', 'TEXT'], // fuente de la tasa del gasto (vacío = guardada antes de registrarla)
     ['currency', 'TEXT'], // moneda del gasto (vacío = la del destino del viaje)
+    ['amount_pending', 'INTEGER NOT NULL DEFAULT 0'], // 1 = monto por definir (amount_cents es solo relleno 0)
   ];
   for (const [col, type] of extra) {
     if (!cols.includes(col)) await addColumn(db, 'expenses', col, type);

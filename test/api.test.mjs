@@ -605,3 +605,46 @@ test('medio de pago "por definir": el gasto se guarda sin medio, no cuenta en la
   await call('PUT', '/api/expenses/p1', { ...base, id: 'p1', payment_method_id: null });
   assert.equal((await byId('p1')).payment_method_id, null);
 });
+
+test('monto por definir: se guarda sin monto, no es aproximado, sale sin monto en tu moneda y se puede completar después', async () => {
+  const db = await openMemoryDb();
+  const call = (method, path, body) => handle({ method, path, body, db });
+  await db.run('INSERT INTO rates (pair, date, rate) VALUES (?, ?, ?)', ['BRL-COP', '2026-11-14', 1000]);
+  await call('POST', '/api/people', { id: 'yo', name: 'Yo' });
+  await call('POST', '/api/payment-methods', { id: 'efe', kind: 'cash', name: 'Efectivo', owner_person_id: 'yo' });
+  const base = { date: '2026-11-14', description: 'Taxi', payment_method_id: 'efe', beneficiary_ids: ['yo'] };
+  const byId = async (id) => (await call('GET', '/api/state')).body.expenses.find((e) => e.id === id);
+
+  // Sin monto y sin la marca: sigue siendo error (no se guarda un cero por descuido).
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'm0', amount_cents: 0 })).status, 400);
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'm0', amount_cents: null })).status, 400);
+
+  // Con la marca se guarda: el monto que llegue se ignora y "aproximado" se apaga.
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'm1', amount_pending: true, amount_cents: 999, amount_approx: true })).status, 201);
+  assert.equal((await call('POST', '/api/expenses', { ...base, id: 'm2', amount_pending: true })).status, 201);
+  const e = await byId('m1');
+  assert.equal(e.amount_pending, 1);
+  assert.equal(e.amount_cents, 0);
+  assert.equal(e.amount_approx, 0);
+  assert.equal(e.amount_home, null); // aunque la tasa del día exista, no hay monto que convertir
+  assert.equal(e.rate, 1000); // la tasa del día sí se guarda, para cuando se complete
+
+  // Un gasto normal lleva la marca apagada.
+  await call('POST', '/api/expenses', { ...base, id: 'n1', amount_cents: 1000 });
+  assert.equal((await byId('n1')).amount_pending, 0);
+
+  // Completar el monto apaga la marca y ya convierte; y volver a "por definir" también se puede.
+  await call('PUT', '/api/expenses/m1', { ...base, id: 'm1', amount_cents: 5000 });
+  assert.equal((await byId('m1')).amount_pending, 0);
+  assert.equal((await byId('m1')).amount_cents, 5000);
+  assert.equal((await byId('m1')).amount_home, toHome(5000, 1000, 0));
+  await call('PUT', '/api/expenses/m1', { ...base, id: 'm1', amount_pending: true });
+  assert.equal((await byId('m1')).amount_pending, 1);
+  assert.equal((await byId('m1')).amount_home, null);
+});
+
+test('monto por definir: una base creada antes recibe la columna', async () => {
+  const db = await openMemoryDb();
+  const cols = (await db.all('PRAGMA table_info(expenses)')).map((c) => c.name);
+  assert.ok(cols.includes('amount_pending'));
+});

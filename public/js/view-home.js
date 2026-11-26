@@ -30,7 +30,8 @@ export function viewHome() {
   const c = ctx();
   if (needsSetup(c)) return setupCard();
   const today = todayStr();
-  const waiting = c.expenses.filter((e) => e.amount_home == null).length;
+  const waiting = c.expenses.filter((e) => e.amount_home == null && !e.amount_pending).length;
+  const noAmount = c.expenses.filter((e) => e.amount_pending).length;
   const placed = c.expenses.filter(hasLocation).length;
   const unsent = store.pendingCount();
   const cur = currencies();
@@ -52,6 +53,7 @@ export function viewHome() {
       <div class="chart" id="chart" role="group"></div></div>`;
   return `
     ${unsent ? `<div class="banner">${unsent} gasto(s) sin enviar. Se envían solos cuando haya internet.</div>` : ''}
+    ${noAmount ? `<div class="banner">${noAmount} gasto(s) sin monto: no suman en el total hasta que les pongas monto.</div>` : ''}
     ${waiting ? `<div class="banner">${waiting} gasto(s) esperando la tasa del día.</div>` : ''}
     <div class="card hero"><h2>Total gastado</h2>
       <div class="big">${fmtHome(s?.total ?? 0)}</div>

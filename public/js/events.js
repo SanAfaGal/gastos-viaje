@@ -10,7 +10,7 @@ import { downloadBackup, downloadCsv, editMethod, editPerson, editTrip, onMethod
 import { spaceAction, submitRename, submitSpace } from './view-spaces.js';
 import { barRead, chartDays, homeBars, loadHistory, setChartDays } from './view-home.js';
 import { filters, filtersOpen, picked, resetFilters, setFiltersOpen } from './view-list.js';
-import { clearFieldError, draft, paintBenes, paintCards, paintCur, paintLoc, setDraft, setDraftDate, submitForm, updateConv } from './view-form.js';
+import { clearFieldError, draft, paintBenes, paintCards, paintCur, paintLoc, paintNoAmount, setDraft, setDraftDate, submitForm, updateConv } from './view-form.js';
 import { applyQuick, centsText, newPayDraft, paintPay, payDraft, readPayDraft, setPayCurrency, setPayDate, setPayDraft, setPayHist, setPayOpen, swapPay } from './view-accounts.js';
 import { focusStop } from './view-map.js';
 import { openPicker } from './place-picker.js';
@@ -58,6 +58,9 @@ $view.addEventListener('click', async (ev) => {
       draft.approx = !draft.approx;
       t.classList.toggle('on', draft.approx);
       t.setAttribute('aria-checked', String(draft.approx));
+    } else if (action === 'noamount') {
+      draft.noAmount = !draft.noAmount;
+      paintNoAmount();
     } else if (action === 'pick-map') openPicker();
     else if (action === 'use-recent') {
       const r = draft?.recentList?.[Number(t.dataset.i)];
@@ -74,6 +77,7 @@ $view.addEventListener('click', async (ev) => {
     else if (action === 'f-approx') { filters.approx = !filters.approx; render(); }
     else if (action === 'f-toggle') { setFiltersOpen(!filtersOpen); render(); }
     else if (action === 'f-noloc') { filters.noloc = !filters.noloc; render(); }
+    else if (action === 'f-noamount') { filters.noamount = !filters.noamount; render(); }
     else if (action === 'f-rate') { filters.rate = !filters.rate; render(); }
     else if (action === 'f-clear') { resetFilters(); render(); }
     else if (action === 'bene-all') {

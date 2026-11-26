@@ -199,6 +199,7 @@ export function viewAccounts() {
   const settled = `<div class="card acc-ok">${icon('check')}<span><b>${c.payments.length ? 'Están a mano' : 'Nadie debe nada por ahora'}</b>${c.payments.length ? '<span class="muted">Con los abonos registrados no queda nada por pagar.</span>' : ''}</span></div>`;
   return `
     ${noMethod ? `<div class="banner">${noMethod} gasto(s) con el medio de pago por definir; no entran en estas cuentas hasta que les pongas medio.</div>` : ''}
+    ${s.noAmount ? `<div class="banner">${s.noAmount} gasto(s) sin monto todavía; no entran en estas cuentas hasta que les pongas monto.</div>` : ''}
     ${s.pending ? `<div class="banner">${s.pending} gasto(s) sin tasa todavía; no entran en estas cuentas hasta convertirse.</div>` : ''}
     ${s.pendingPayments ? `<div class="banner">${s.pendingPayments} abono(s) sin tasa todavía; no se descuentan hasta convertirse.</div>` : ''}
     <div class="card acc-hero"><h2>Total del viaje</h2>

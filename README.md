@@ -3,10 +3,10 @@
 Registro de gastos de viajes con amigos o familia. Por cada viaje eliges el país donde gastas y tu moneda; cada gasto se convierte con la tasa del día de la compra, y al final la app calcula quién le paga a quién.
 
 - **Varios viajes**, cada uno con su país, su moneda de casa y las personas que van (Brasil, Argentina, México, Europa, Japón... y tu moneda). Se cambia de viaje desde el selector de arriba.
-- Tarjetas (nombre, últimos 4 dígitos, débito o crédito), transferencias y efectivo, cada uno con su dueño. Si no sabes con qué se pagó, el gasto queda "por definir" y no entra en las cuentas hasta que lo completes.
+- Tarjetas (nombre, últimos 4 dígitos, débito o crédito), transferencias y efectivo, cada uno con su dueño. Si no sabes con qué se pagó, el gasto queda "por definir" y no entra en las cuentas hasta que lo completes. Lo mismo con el monto: si sabes que hubo un gasto pero no cuánto, activa «No sé el monto»; queda con el icono «?», no suma en los totales ni en las cuentas y lo completas después editándolo.
 - Gastos solo tuyos, de otra persona o compartidos en partes iguales. Opcionales: ubicación (GPS o buscando el lugar por nombre) y marca de monto aproximado.
 - **Inicio** con el resumen del viaje: total, gasto de hoy, promedio por día, gasto mayor, gasto por día y reparto por medio de pago y por quién pagó.
-- **Gastos**: lista por día con totales en las dos monedas, filtros (día, medio, para quién, quién pagó, aproximados, sin ubicación, tasa pendiente) y orden manual dentro de cada día (mantén presionado y arrastra).
+- **Gastos**: lista por día con totales en las dos monedas, filtros (día, medio, para quién, quién pagó, aproximados, sin monto, sin ubicación, tasa pendiente) y orden manual dentro de cada día (mantén presionado y arrastra).
 - **Mapa** del recorrido con los lugares numerados por su primera visita.
 - **Cuentas**: lo que falta por saldar entre cada par de personas, con el avance de lo ya abonado, saldo por persona y gasto por medio de pago. **Abonos**: se registran en cualquier moneda del viaje (con la tasa del día) y el diálogo muestra cómo queda la cuenta antes de guardar.
 - Al borrar un gasto aparece **Deshacer**.
@@ -147,6 +147,7 @@ Solo se usan desde el navegador o el servidor para lo siguiente, y ninguno recib
 - **La tasa es parte del gasto.** Cada gasto guarda la tasa que se usó (`rate`) y el día al que pertenece (`rate_date`) y la fuente de la que salió (`rate_source`), como un recibo. No se consulta en vivo: la tasa de hoy no es definitiva, la fuente gratuita puede variar y la app tiene que mostrar lo mismo sin internet. La tabla `rates` es solo un caché de días cerrados.
 - **Lo calculable no se guarda.** El monto en tu moneda y "tasa estimada" se calculan al leer (`getState`); no son columnas.
 - **Los días cerrados se corrigen solos.** Si un gasto de un día que ya pasó tiene una tasa distinta de la guardada para ese día, se cambia por la del día cerrado (sin internet no se toca). El botón "Actualizar tasas" hace lo mismo a pedido, mostrando antes cuánto cambia.
+- **Monto por definir.** `expenses.amount_pending = 1` con `amount_cents = 0` de relleno (mismo patrón que `pay_pending` en el medio de pago: SQLite no quita `NOT NULL`, así que no se guarda un vacío). Ese gasto sale con `amount_home` vacío, no suma en totales ni en cuentas y se cuenta aparte ("sin monto"), distinto de "esperando la tasa". En el CSV la celda de monto queda vacía y la columna final "Sin monto" dice "Sí".
 - **Respaldo y restauración.** El respaldo JSON es una copia cruda de las tablas. Restaurar solo agrega lo que falta (por id), valida todo antes de escribir y lo hace en una sola transacción: nunca borra ni pisa lo existente.
 
 ## Pruebas

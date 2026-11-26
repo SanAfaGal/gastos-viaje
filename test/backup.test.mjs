@@ -253,3 +253,33 @@ test('restaurar: un archivo inválido se rechaza sin escribir nada', async () =>
   }
   assert.equal((await call('POST', '/api/restore', null)).status, 400);
 });
+
+test('respaldo: un gasto con monto por definir viaja y se restaura; un respaldo anterior sin la marca sigue valiendo', async () => {
+  const { call: from } = await seedBackupDb();
+  await from('POST', '/api/expenses', { id: 'e4', date: '2026-11-11', amount_pending: true, payment_method_id: null, beneficiary_ids: ['ana'], description: 'Taxi' });
+  const backup = (await from('GET', '/api/backup')).body;
+  assert.equal(backup.expenses.find((e) => e.id === 'e4').amount_pending, 1);
+
+  const db = await openMemoryDb();
+  const call = caller(db);
+  await db.run('DELETE FROM trip_people');
+  await db.run('DELETE FROM trips');
+  assert.equal((await call('POST', '/api/restore', backup)).status, 200);
+  const e4 = (await call('GET', '/api/state')).body.expenses.find((e) => e.id === 'e4');
+  assert.deepEqual([e4.amount_pending, e4.amount_cents, e4.amount_home], [1, 0, null]);
+
+  // Sin la marca, un monto 0 sigue siendo inválido; y con la marca, un monto distinto de 0 también.
+  const bad = (f) => { const c = structuredClone(backup); f(c.expenses.find((x) => x.id === 'e4')); return c; };
+  const empty = await openMemoryDb();
+  assert.equal((await caller(empty)('POST', '/api/restore', bad((x) => { x.amount_pending = 0; }))).status, 400);
+  assert.equal((await caller(empty)('POST', '/api/restore', bad((x) => { x.amount_cents = 500; }))).status, 400);
+
+  // Respaldo anterior: sin la columna en ningún gasto.
+  const old = structuredClone(backup);
+  old.expenses = old.expenses.filter((x) => x.id !== 'e4');
+  for (const x of old.expenses) delete x.amount_pending;
+  const db2 = await openMemoryDb();
+  await db2.run('DELETE FROM trip_people');
+  await db2.run('DELETE FROM trips');
+  assert.equal((await caller(db2)('POST', '/api/restore', old)).status, 200);
+});

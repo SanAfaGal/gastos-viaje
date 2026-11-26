@@ -77,3 +77,13 @@ test('monedas configurables: formato y repartos con unidad', () => {
   assert.ok(r.balances.every((b) => b.paid % 100 === 0 && b.consumed % 100 === 0));
   assert.equal(r.balances.reduce((s, b) => s + b.net, 0), 0);
 });
+
+test('gasto sin monto: no entra en las cuentas y no se confunde con "sin tasa"', () => {
+  const r = computeSettlement([
+    { amount_home: 1000, payer_id: 'a', beneficiary_ids: ['a', 'b'] },
+    { amount_home: null, amount_pending: 1, payer_id: 'a', beneficiary_ids: ['a', 'b'] },
+    { amount_home: null, payer_id: 'b', beneficiary_ids: ['a', 'b'] },
+  ], ['a', 'b']);
+  assert.equal(r.noAmount, 1);
+  assert.equal(r.pending, 1);
+});

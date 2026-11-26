@@ -65,3 +65,12 @@ test('keepValid descarta lo que ya no existe', () => {
   assert.deepEqual(keepValid(['a', 'z'], ['a', 'b']), ['a']);
   assert.deepEqual(keepValid([], ['a']), []);
 });
+
+test('"sin monto": el filtro los encuentra y "tasa pendiente" no los confunde', () => {
+  const list = [ex('a'), ex('n', { amount_pending: 1, amount_home: null }), ex('r', { amount_home: null })];
+  const run = (f) => applyFilters(list, { ...filtersOff(), ...f }, ctx).map((e) => e.id);
+  assert.deepEqual(run({ noamount: true }), ['n']);
+  assert.deepEqual(run({ rate: true }), ['r']);
+  assert.equal(isFiltered({ ...filtersOff(), noamount: true }), true);
+  assert.equal(activeCount({ ...filtersOff(), noamount: true }), 1);
+});

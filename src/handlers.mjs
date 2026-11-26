@@ -212,9 +212,14 @@ async function saveExpense(db, sp, id, body) {
   // Un gasto que ya es de otro espacio no se toca ni se copia: antes de leer nada, para no escribir nunca.
   await assertNotForeign(db, 'expenses', id, sp);
   if (!isValidDate(body.date)) fail(400, 'Fecha inválida');
-  const cents = Number(body.amount_cents);
-  if (!Number.isInteger(cents) || cents <= 0) fail(400, 'El monto debe ser mayor a cero');
-  if (cents > MAX_CENTS) fail(400, 'El monto es demasiado grande');
+  // Monto "por definir": se sabe que hubo el gasto pero no cuánto. La columna amount_cents no admite vacío, así que
+  // se guarda 0 de relleno y se marca amount_pending. Ese gasto no suma en ningún total ni en las cuentas.
+  const amountPending = body.amount_pending ? 1 : 0;
+  const cents = amountPending ? 0 : Number(body.amount_cents);
+  if (!amountPending) {
+    if (!Number.isInteger(cents) || cents <= 0) fail(400, 'El monto debe ser mayor a cero');
+    if (cents > MAX_CENTS) fail(400, 'El monto es demasiado grande');
+  }
   const description = text(body.description, 'La descripción', { max: 120, required: false });
 
   // Un gasto que ya existe conserva su viaje. Uno nuevo va al viaje indicado; sin viaje (colas guardadas antes
@@ -280,14 +285,14 @@ async function saveExpense(db, sp, id, body) {
       || lat < -90 || lat > 90 || lng < -180 || lng > 180) fail(400, 'La ubicación no es válida');
     place = text(body.place, 'El lugar', { max: 120, required: false }) || null;
   }
-  const approx = body.amount_approx ? 1 : 0;
+  const approx = body.amount_approx && !amountPending ? 1 : 0; // sin monto no hay nada aproximado
 
   await db.batch([
     {
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id,
               rate, rate_date, rate_source, created_at, trip_id,
-              lat, lng, place, amount_approx, pay_pending, sort_order, currency)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              lat, lng, place, amount_approx, pay_pending, sort_order, currency, amount_pending)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET date = excluded.date,
               amount_cents = excluded.amount_cents, description = excluded.description,
               payment_method_id = excluded.payment_method_id,
@@ -296,10 +301,11 @@ async function saveExpense(db, sp, id, body) {
               amount_approx = excluded.amount_approx,
               pay_pending = excluded.pay_pending,
               currency = excluded.currency,
+              amount_pending = excluded.amount_pending,
               sort_order = CASE WHEN date <> excluded.date THEN NULL ELSE sort_order END
             WHERE expenses.trip_id IN (SELECT id FROM trips WHERE space_id = ?)`,
       args: [id, body.date, cents, description, methodId, rate, rateDate, rateSource, createdAt, trip.id,
-        lat, lng, place, approx, payPending ? 1 : 0, sortOrder, currency, sp],
+        lat, lng, place, approx, payPending ? 1 : 0, sortOrder, currency, amountPending, sp],
     },
     // Las personas del gasto solo cambian si el gasto es del espacio (en un gasto nuevo, la fila de arriba ya
     // existe dentro de esta misma transacción).
@@ -530,7 +536,7 @@ async function getState(db, sp, space) {
       ...e,
       currency: e.currency ?? destOf.get(e.trip_id), // siempre la moneda efectiva del gasto
       rate_estimated: e.rate != null && e.rate_date !== e.date ? 1 : 0,
-      amount_home: e.rate == null ? null : toHome(e.amount_cents, e.rate, homeDigits.get(e.trip_id) ?? 2),
+      amount_home: e.rate == null || e.amount_pending ? null : toHome(e.amount_cents, e.rate, homeDigits.get(e.trip_id) ?? 2),
       payment_method_id: pp ? null : e.payment_method_id,
       beneficiary_ids: byExpense.get(e.id) ?? [],
     })),

@@ -421,7 +421,7 @@ export function getState() {
       pending: true,
       rate: r?.rate ?? null,
       rate_estimated: r?.estimated ? 1 : 0,
-      amount_home: r ? toHome(x.amount_cents, r.rate, currencyByCode(t.home).digits) : null,
+      amount_home: r && !x.amount_pending ? toHome(x.amount_cents, r.rate, currencyByCode(t.home).digits) : null,
     });
   }
   const counts = {};

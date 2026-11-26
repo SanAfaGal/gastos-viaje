@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS expenses (
   amount_approx INTEGER NOT NULL DEFAULT 0,
   sort_order INTEGER,
   pay_pending INTEGER NOT NULL DEFAULT 0,
-  currency TEXT
+  currency TEXT,
+  amount_pending INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS expense_beneficiaries (

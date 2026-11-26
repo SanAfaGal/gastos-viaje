@@ -197,7 +197,7 @@ test('router.js muestra viewManage para la administración en cualquier ruta y o
   assert.match(spaces, /export function viewManage\(\)/);
   assert.match(spaces, /data-action="logout"/);
   assert.match(spaces, /store\.isManager\(\)/);
-  assert.match(read('sw.js'), /const CACHE = 'gastos-viaje-v123'/);
+  assert.match(read('sw.js'), /const CACHE = 'gastos-viaje-v125'/);
 });
 
 // Bloque de código que empieza en `inicio` y termina en el primer `return;` que le sigue.

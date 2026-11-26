@@ -25,7 +25,8 @@ export function viewList() {
   const list = applyFilters(c.expenses, filters, { methodsById: c.methodsById, hasLocation });
   const approxCount = c.expenses.filter((e) => e.amount_approx).length;
   const nolocCount = c.expenses.filter((e) => !hasLocation(e)).length;
-  const rateCount = c.expenses.filter((e) => e.amount_home == null || e.rate_estimated).length;
+  const rateCount = c.expenses.filter((e) => !e.amount_pending && (e.amount_home == null || e.rate_estimated)).length;
+  const noamountCount = c.expenses.filter((e) => e.amount_pending).length;
   const owners = [...new Set(c.expenses.map((e) => c.methodsById[e.payment_method_id]?.owner_person_id).filter(Boolean))];
   const filtered = isFiltered(filters);
   const activeCount = countFilters(filters); // la búsqueda se ve aparte
@@ -38,7 +39,8 @@ export function viewList() {
   const cur = currencies();
   // Solo los gastos en la moneda del destino suman ahí: los de otra moneda (la de casa, un tercer país) ya están en el total de arriba.
   const sumDest = (items) => items.filter((e) => !e.currency || e.currency === cur.dest.code).reduce((a, e) => a + e.amount_cents, 0);
-  const unconverted = list.filter((e) => e.amount_home == null).length;
+  const unconverted = list.filter((e) => e.amount_home == null && !e.amount_pending).length;
+  const noAmount = list.filter((e) => e.amount_pending).length;
   // Número de cada gasto dentro de su día completo (no cambia al filtrar). c.expenses ya viene en el orden del día.
   const perDay = {};
   for (const e of c.expenses) perDay[e.date] = (perDay[e.date] ?? 0) + 1;
@@ -58,7 +60,7 @@ export function viewList() {
         <div><div class="big">${fmtHome(sumHome(list))}</div><div class="muted">en ${esc(cur.home.code)}</div></div>
         <div><div class="big alt">${fmtDest(sumDest(list))}</div><div class="muted">en ${esc(cur.dest.code)}, lo que se pagó</div></div>
       </div>
-      <div class="sum-foot"><span class="muted">${list.length} gasto(s)</span>${unconverted ? `<span class="bd warn wide">${icon('clock')} ${unconverted} sin convertir</span>` : ''}
+      <div class="sum-foot"><span class="muted">${list.length} gasto(s)</span>${noAmount ? `<span class="bd info wide">${icon('help')} ${noAmount} sin monto</span>` : ''}${unconverted ? `<span class="bd warn wide">${icon('clock')} ${unconverted} sin convertir</span>` : ''}
         ${filtered ? '<button type="button" class="chip small" data-action="f-clear">Quitar filtros</button>' : ''}</div>
     </div>
     ${infoDialog('legend', 'Qué significan los iconos', legendHtml())}
@@ -80,6 +82,7 @@ export function viewList() {
       <div class="chips filt-chips">
         ${approxCount ? `<button type="button" class="chip ${filters.approx ? 'on' : ''}" data-action="f-approx" aria-pressed="${filters.approx}">Aproximados (${approxCount})</button>` : ''}
         ${nolocCount ? `<button type="button" class="chip ${filters.noloc ? 'on' : ''}" data-action="f-noloc" aria-pressed="${filters.noloc}">Sin ubicación (${nolocCount})</button>` : ''}
+        ${noamountCount ? `<button type="button" class="chip ${filters.noamount ? 'on' : ''}" data-action="f-noamount" aria-pressed="${filters.noamount}">Sin monto (${noamountCount})</button>` : ''}
         ${rateCount ? `<button type="button" class="chip ${filters.rate ? 'on' : ''}" data-action="f-rate" aria-pressed="${filters.rate}">Tasa pendiente (${rateCount})</button>` : ''}
       </div>
       </div>

@@ -131,6 +131,22 @@ test('ubicación y monto aproximado viajan en la cola y se ven antes de enviar',
   assert.deepEqual({ ...row }, { lat: 4.60971, lng: -74.08175, place: 'Centro', amount_approx: 1 });
 });
 
+test('monto por definir sin internet: se ve sin monto en tu moneda y se envía con la marca', async () => {
+  store.setActiveTrip('trip-1');
+  online = false;
+  await store.saveExpense({
+    id: 'sinmonto', date: '2026-11-14', amount_cents: 0, amount_pending: true, description: 'Taxi',
+    payment_method_id: 'cash', beneficiary_ids: ['yo'],
+  });
+  const seen = store.getState().expenses.find((e) => e.id === 'sinmonto');
+  assert.deepEqual([seen.amount_pending, seen.amount_home], [true, null]);
+
+  online = true;
+  await store.flush();
+  const [row] = await db.all('SELECT amount_cents, amount_pending FROM expenses WHERE id = ?', ['sinmonto']);
+  assert.deepEqual({ ...row }, { amount_cents: 0, amount_pending: 1 });
+});
+
 test('orden manual sin internet: se ve al instante, un reordenamiento nuevo reemplaza al anterior y se envía al volver', async () => {
   store.setActiveTrip('trip-1');
   const base = { date: '2026-11-14', description: '', payment_method_id: 'cash', beneficiary_ids: ['yo'], amount_cents: 1000 };

@@ -214,7 +214,7 @@ export function undoDelete(e) {
   const placed = hasLocation(e);
   store.saveExpense({
     id: e.id, date: e.date, amount_cents: e.amount_cents, description: e.description ?? '',
-    payment_method_id: e.payment_method_id, beneficiary_ids: e.beneficiary_ids, amount_approx: Boolean(e.amount_approx),
+    payment_method_id: e.payment_method_id, beneficiary_ids: e.beneficiary_ids, amount_approx: Boolean(e.amount_approx), amount_pending: Boolean(e.amount_pending), currency: e.currency,
     lat: placed ? Number(e.lat) : null, lng: placed ? Number(e.lng) : null, place: placed ? (e.place ?? '') : null,
     created_at: e.created_at, sort_order: e.sort_order ?? undefined, trip_id: e.trip_id,
   }).then((r) => { if (r?.errors?.length) toast(r.errors[0], 'error'); });
@@ -254,13 +254,13 @@ export function downloadBackup(data) {
 export function downloadCsv() {
   const c = ctx();
   const cur = currencies();
-  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', 'Monto', 'Moneda', 'Tasa', 'Fecha de la tasa', 'Fuente de la tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar']];
+  const rows = [['Fecha', 'Descripción', 'Medio de pago', 'Pagó', 'Para', 'Monto', 'Moneda', 'Tasa', 'Fecha de la tasa', 'Fuente de la tasa', cur.home.code, 'Aproximado', 'Lat', 'Lng', 'Lugar', 'Sin monto']];
   for (const e of [...c.expenses].sort(compareChronological)) {
     const m = c.methodsById[e.payment_method_id];
     rows.push([e.date, e.description, e.payment_method_id == null ? 'Por definir' : methodLabel(m), m ? personName(c, m.owner_person_id) : '',
       e.beneficiary_ids.map((id) => personName(c, id)).join(' + '),
-      (e.amount_cents / 100).toFixed(2), e.currency ?? cur.dest.code, e.rate ?? '', e.rate == null ? '' : e.rate_date ?? e.date, e.rate == null ? '' : rateSourceLabel(e.rate_source), e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
-      e.amount_approx ? 'Sí' : '', hasLocation(e) ? e.lat : '', hasLocation(e) ? e.lng : '', e.place ?? '']);
+      e.amount_pending ? '' : (e.amount_cents / 100).toFixed(2), e.currency ?? cur.dest.code, e.rate ?? '', e.rate == null ? '' : e.rate_date ?? e.date, e.rate == null ? '' : rateSourceLabel(e.rate_source), e.amount_home == null ? '' : (e.amount_home / 100).toFixed(cur.home.digits),
+      e.amount_approx ? 'Sí' : '', hasLocation(e) ? e.lat : '', hasLocation(e) ? e.lng : '', e.place ?? '', e.amount_pending ? 'Sí' : '']);
   }
   // Un texto que empieza con = + - @ se interpretaría como fórmula en Excel; se le antepone un apóstrofo.
   const cell = (v) => {

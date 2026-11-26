@@ -208,8 +208,10 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
     const description = str(e.description, 120);
     const place = str(e.place, 120);
     const rateSource = str(e.rate_source, 40);
-    const flags = [e.amount_approx, e.pay_pending].map(flag);
-    if (!isValidDate(e.date) || !Number.isInteger(cents) || cents <= 0 || cents > MAX_CENTS) bad('gasto', e.id);
+    // amount_pending falta en respaldos anteriores: equivale a 0. Con monto por definir amount_cents es relleno 0.
+    const flags = [e.amount_approx, e.pay_pending, e.amount_pending].map(flag);
+    const pending = flags[2] === 1;
+    if (!isValidDate(e.date) || !Number.isInteger(cents) || cents > MAX_CENTS || (pending ? cents !== 0 : cents <= 0)) bad('gasto', e.id);
     if (rate === undefined || lat === undefined || lng === undefined || description === null || place === null || rateSource === null || flags.includes(undefined)) bad('gasto', e.id);
     if (e.rate_date != null && !isValidDate(e.rate_date)) bad('gasto', e.id);
     if (e.currency != null && !currencyByCode(e.currency)) bad('gasto', e.id); // vacío = moneda del destino (copias anteriores)
@@ -220,10 +222,10 @@ export async function restoreBackup(db, data, { dry, fail, sp }) {
     if (!links.get(e.id)?.size) bad('un gasto sin personas', e.id);
     stmts.expenses.push({
       sql: `INSERT INTO expenses (id, date, amount_cents, description, payment_method_id, rate, rate_date, rate_source,
-              created_at, trip_id, lat, lng, place, amount_approx, sort_order, pay_pending, currency)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              created_at, trip_id, lat, lng, place, amount_approx, sort_order, pay_pending, currency, amount_pending)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       args: [e.id, e.date, cents, description, e.payment_method_id, rate, rate == null ? null : (e.rate_date ?? e.date), rate == null ? null : (rateSource || null),
-        str(e.created_at, 40) || new Date().toISOString(), e.trip_id, lat, lng, place || null, flags[0], e.sort_order ?? null, flags[1], e.currency ?? null],
+        str(e.created_at, 40) || new Date().toISOString(), e.trip_id, lat, lng, place || null, flags[0], e.sort_order ?? null, flags[1], e.currency ?? null, flags[2]],
     });
     for (const p of links.get(e.id)) {
       stmts.expense_beneficiaries.push({ sql: 'INSERT OR IGNORE INTO expense_beneficiaries (expense_id, person_id) VALUES (?, ?)', args: [e.id, p] });
